@@ -21,13 +21,14 @@ use crate::action::Action;
 
 /// The smallest and largest the grid font may be set to, in points.
 ///
-/// Written down once so that the panel's stepper and the clamp on the size the grid is
-/// actually drawn at cannot drift apart: a panel that offers a size the renderer then
-/// refuses is a panel that lies.
-pub const MIN_SIZE: f32 = 4.0;
+/// The schema's, for the same reason as the cursor thickness below: the panel's stepper,
+/// the clamp on the size the grid is drawn at, and the range the file is checked against
+/// are one number, and a panel that offered a size the next launch warned about would be
+/// a panel that lies about what it can set.
+pub const MIN_SIZE: f32 = zet_config::MIN_FONT_SIZE;
 
 /// The largest the grid font may be set to, in points.
-pub const MAX_SIZE: f32 = 72.0;
+pub const MAX_SIZE: f32 = zet_config::MAX_FONT_SIZE;
 
 /// The cursor thicknesses the panel offers, in pixels.
 ///

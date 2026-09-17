@@ -36,8 +36,9 @@ pub mod theme;
 
 pub use config::{
     ACTIONS, Appearance, Background, Config, CursorSettings, CursorShape, Diagnostic, FontSettings,
-    Loaded, MAX_CURSOR_THICKNESS, MIN_CURSOR_THICKNESS, Severity, TabPosition, TabSettings,
-    WindowSettings, default_keymap, default_path, load, load_default, palette_for, repaired, save,
+    Loaded, MAX_CURSOR_THICKNESS, MAX_FONT_SIZE, MIN_CURSOR_THICKNESS, MIN_FONT_SIZE, Severity,
+    TabPosition, TabSettings, WindowSettings, default_keymap, default_path, load, load_default,
+    palette_for, repaired, save,
 };
 pub use palette::Palette;
 pub use rgb::Rgb;

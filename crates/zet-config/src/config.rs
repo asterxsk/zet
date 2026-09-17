@@ -293,6 +293,18 @@ pub const MIN_CURSOR_THICKNESS: u8 = 1;
 /// The thickest a cursor may be drawn, in pixels.
 pub const MAX_CURSOR_THICKNESS: u8 = 8;
 
+/// The range the grid font may be set to, in points.
+///
+/// Written down once for the same reason as the cursor's, and it was not: the schema
+/// checked a literal range and the settings panel stepped between two more, so moving one
+/// of them would have left the panel offering a size the next launch then warned about.
+/// The bottom is where a grid stops being legible and the top is where a window holds a
+/// handful of columns; both are wide enough that neither end is reachable by accident.
+pub const MIN_FONT_SIZE: f32 = 4.0;
+
+/// The largest the grid font may be set to, in points.
+pub const MAX_FONT_SIZE: f32 = 72.0;
+
 impl Default for CursorSettings {
     fn default() -> Self {
         Self {
@@ -560,9 +572,9 @@ fn check(config: &Config, diagnostics: &mut Vec<Diagnostic>) {
             theme::default_theme().slug
         )));
     }
-    if !(4.0..=72.0).contains(&config.font.size) {
+    if !(MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&config.font.size) {
         diagnostics.push(Diagnostic::error(format!(
-            "font.size = {} is outside 4 to 72; using {}",
+            "font.size = {} is outside {MIN_FONT_SIZE} to {MAX_FONT_SIZE}; using {}",
             config.font.size,
             FontSettings::default().size
         )));
@@ -654,7 +666,7 @@ pub fn repaired(config: &Config) -> Config {
     if theme::by_slug(&fixed.theme).is_none() {
         fixed.theme = defaults.theme;
     }
-    if !(4.0..=72.0).contains(&fixed.font.size) {
+    if !(MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&fixed.font.size) {
         fixed.font.size = defaults.font.size;
     }
     fixed.window.opacity = fixed.window.opacity.clamp(0.0, 1.0);
