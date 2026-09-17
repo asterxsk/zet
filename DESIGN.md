@@ -390,7 +390,7 @@ The next match scrolls into view if it was not already there, and it is scrolled
 smallest distance that puts it on screen — a match already visible does not move the
 viewport under the user. The search wraps at both ends rather than stopping.
 
-## ## Surfaces the framework gave us
+## Surfaces the framework gave us
 
 These ship with defaults that belong to no design system, and they get themed from
 the palette like everything else:

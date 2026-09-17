@@ -100,8 +100,6 @@ pub struct Config {
     pub appearance: Appearance,
     /// Key bindings.
     pub keys: BTreeMap<String, String>,
-    /// The update check.
-    pub update: UpdateSettings,
 }
 
 impl Default for Config {
@@ -114,7 +112,6 @@ impl Default for Config {
             cursor: CursorSettings::default(),
             appearance: Appearance::default(),
             keys: default_keymap(),
-            update: UpdateSettings::default(),
         }
     }
 }
@@ -349,26 +346,6 @@ impl Default for Appearance {
             text_scale: 0.0,
             follow_reduce_motion: true,
             follow_forced_colors: true,
-        }
-    }
-}
-
-/// The update check.
-#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
-pub struct UpdateSettings {
-    /// Whether zet asks GitHub whether there is a newer version when it starts.
-    ///
-    /// On by default, and the only thing zet does on its own that touches the network.
-    /// Turning it off is the entire privacy control, which is why PRIVACY.md points at
-    /// this key rather than at a settings screen.
-    pub check_on_launch: bool,
-}
-
-impl Default for UpdateSettings {
-    fn default() -> Self {
-        Self {
-            check_on_launch: true,
         }
     }
 }

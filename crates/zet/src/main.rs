@@ -57,13 +57,13 @@ comment by comment, so the two can never disagree. The directory is not a settin
 is where you were standing when you typed the command: it is what the folder right-click
 menu passes, and it applies to every tab the window opens.
 
-`--check-update` and `--update` are the only things here that touch the network, and the
-only flags that do not start a terminal. Nothing else in zet makes a request on its own:
-the launch check that `[update] check-on-launch` is written for is not wired in yet, so
-typing one of these is the only way to make zet ask. `--update` is the same check plus
-the download, the digest check, and the replacement — nothing is written until the
-download has matched the digest the release published, and the new version takes effect
-the next time zet starts rather than now. See PRIVACY.md for what the requests disclose.";
+`--check-update` and `--update` are the whole of it: they are the only things here that
+touch the network, and the only flags that do not start a terminal. zet makes no request
+on its own — not on launch, not on a timer — so typing one of these is the only way to
+make it ask. `--update` is the same check plus the download, the digest check, and the
+replacement: nothing is written until the download has matched the digest the release
+published, and the new version takes effect the next time zet starts rather than now.
+See PRIVACY.md for what the requests disclose.";
 
 fn main() -> ExitCode {
     match parse(std::env::args().skip(1)) {
@@ -139,10 +139,9 @@ fn parse(mut arguments: impl Iterator<Item = String>) -> Args {
 
 /// Ask GitHub whether a newer version has been published, and say what came back.
 ///
-/// The config file is deliberately not read. `[update] check-on-launch` is about the
-/// check zet makes *on its own*, and this is not that: a user who turned the automatic
-/// one off and then typed this asked for the request by name. Not reading the file also
-/// means this works on a machine whose config will not parse, which is exactly when
+/// The config file is deliberately not read. There is no setting for this and nothing
+/// for one to switch off — the request exists because it was typed. Not reading the file
+/// also means this works on a machine whose config will not parse, which is exactly when
 /// someone might be running it.
 ///
 /// A check that cannot be completed exits non-zero, so a script can tell "there is

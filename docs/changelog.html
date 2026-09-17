@@ -239,10 +239,13 @@
         <em>renamed</em>, which is the whole mechanism &mdash; the new version takes effect the next
         time zet starts.</li>
 
-        <li>Neither reads the config file. <code>[update] check-on-launch</code> is about the check
-        zet makes <em>on its own</em>, and a flag the user typed is not that — which also means both
-        work on a machine whose config will not parse, exactly when someone might want them. That
-        check is still not written, so the key remains one with nothing behind it.</li>
+        <li>Neither reads the config file, and there is nothing to read: zet makes no request on its
+        own, so these two flags are the only way to make one. That also means both work on a machine
+        whose config will not parse, exactly when someone might want them.</li>
+
+        <li>The <code>[update] check-on-launch</code> key that an earlier draft reserved for an
+        automatic launch check is gone, along with the section it lived in. No configuration in the
+        world contains it: a config file is written by zet, and zet has never shipped a release.</li>
       </ul>
 
       <h4>packaging/ — a per-user Windows installer and the icon it installs</h4>

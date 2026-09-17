@@ -125,10 +125,14 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     the worst case of a build that has gone wrong is a message and no file. Windows will not let a
     running image be written to or deleted but will let it be *renamed*, which is the whole
     mechanism — the new version takes effect the next time zet starts.
-  - Neither reads the config file. `[update] check-on-launch` is about the check zet makes *on its
-    own*, and a flag the user typed is not that — which also means both work on a machine whose
-    config will not parse, exactly when someone might want them. That check is still not written,
-    so the key remains one with nothing behind it.
+  - Neither reads the config file, and there is nothing to read: zet makes no request on its own,
+    so these two flags are the only way to make one. That also means both work on a machine whose
+    config will not parse, exactly when someone might want them.
+  - The `[update] check-on-launch` key that an earlier draft reserved for an automatic launch
+    check is gone, along with the section it lived in. zet has never shipped a release, so no
+    configuration in the world contains it and nothing breaks: a config file is written by zet, and
+    this one no longer has an `[update]` section to write. A terminal that opens a socket because
+    it was launched is a terminal that has to be trusted further than this one asks to be.
 - **`packaging/`** — a per-user Windows installer and the icon it installs.
   - Inno Setup, installing to `%LOCALAPPDATA%\Programs\zet` with no elevation. Optional PATH
     entry, Start Menu shortcut, and "Open zet here" context menu.

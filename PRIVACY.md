@@ -29,11 +29,6 @@ connections are theirs, not zet's. zet does not inspect, log, or forward them.
 
 ## The update check
 
-**Partly implemented.** `zet --check-update` and `zet --update` make this request today, and they
-are the only way to make it: the automatic check on launch is still to come, so
-`[update] check_on_launch` below has nothing to turn off yet. What is described here is the whole
-of the intent, published so that the request is described before it is made rather than after.
-
 **What it is.** `zet --check-update` asks GitHub whether a newer version has been published and
 prints the answer. It makes no other request, downloads nothing, and changes nothing on disk.
 
@@ -42,8 +37,10 @@ machine it fetches the archive, checks it against the digest the release publish
 where the running binary is. The new version takes effect the next time zet starts. Nothing is
 written until the download has matched its published digest.
 
-**What it will be.** The same request, made once on launch, when `[update] check-on-launch` is
-left at its default of `true`. That is the one request zet would make on its own.
+**What zet does not do.** It does not make this request on its own. There is no check on launch,
+no timer, and no background thread that talks to GitHub: the request happens when you type the
+command, and at no other time. A terminal that opens a socket because it was launched is a
+terminal that has to be trusted further than this one asks to be.
 
 **Where it goes.** `api.github.com`, operated by GitHub, Inc. (a subsidiary of Microsoft
 Corporation).
@@ -69,21 +66,13 @@ is downloaded from `github.com` / `objects.githubusercontent.com`. The same disc
 Nothing else in zet downloads anything, and nothing is ever downloaded without you typing that
 command.
 
-**Turning it off.** Once the launch check exists, it will be disabled in `config.toml`:
-
-```toml
-[update]
-check_on_launch = false
-```
-
-With that set, zet would make no request on its own, and `zet --check-update` and `zet --update`
-would remain the only ways to make one — requests you asked for by name.
-
-**That is the state today, minus the check.** The key exists and is read by nothing: no code
-path in the binary consults it, because the launch check it gates is not written. The binary
-accepts `-d`/`--directory`, `-h`/`--help`, `-V`/`--version`, `--check-update`, and `--update`,
-and refuses any other argument by name. The settings panel has no update row. So the only request
-zet can make is one you typed, and the only file it will rewrite is its own binary.
+**Turning it off.** There is nothing to turn off, and that is the design rather than an omission.
+An earlier draft reserved a `[update] check-on-launch` key in `config.toml` for an automatic
+check; the key was removed before the first release, because the automatic check is not something
+this program should do. zet has no `[update]` section, the settings panel has no update row, and
+the binary accepts `-d`/`--directory`, `-h`/`--help`, `-V`/`--version`, `--check-update`, and
+`--update`, refusing any other argument by name. So the only request zet can make is one you
+typed, and the only file it will rewrite is its own binary.
 
 ## What zet writes to your disk
 

@@ -226,10 +226,10 @@ ISCC.exe /DVersion=0.1.0 /O"dist" packaging\zet.iss</code></pre>
       the release published, and puts it where the running binary is. The new version takes effect
       the next time zet starts.</p>
 
-      <p>Both are requests you typed. The check on launch is the part that is not written, so
-      nothing here touches the network on its own. The configuration key for it exists and is read
-      by nothing, so setting it now costs nothing — see
-      <a href="configuration.html#update">the update section of Configuration</a>.</p>
+      <p>Both are requests you typed, and they are the only two commands in zet that touch the
+      network: nothing here checks on its own, at launch or at any other time, and there is no
+      setting for one to gate — see <a href="configuration.html#update">the update section of
+      Configuration</a>.</p>
     </article>
   </main>
 </div>

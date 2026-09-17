@@ -130,35 +130,22 @@ new version takes effect the next time zet starts, because Windows will not let 
 executable be written to or deleted — but it will let one be renamed, and that is the whole
 mechanism.
 
-Neither reads your configuration. `[update] check-on-launch` is about the check zet makes *on its
-own*, which is the part that is not written yet, so the current build never touches the network
-unless you ask it to. When it is, the intent is that zet checks GitHub Releases on launch and
-tells you when there is a newer version.
+Neither reads your configuration, and there is nothing to configure: zet makes no request on its
+own — not on launch, not on a timer, not in the background. Typing one of these is the only way to
+make it ask.
 
 The archive is verified against a `SHA256SUMS` digest published alongside it before anything is
 written to disk. **The archives are not Authenticode-signed**, so a checksum proves the download
 matches the release — not who published it. What that does and does not buy you is set out in
 [SECURITY.md](SECURITY.md).
 
-The configuration key for the launch check already exists and is read by nothing, so setting it
-now costs nothing:
-
-```toml
-[update]
-check_on_launch = false
-```
-
-The two flags ignore it either way: the key is about the check zet makes *on its own*, and a flag
-you typed is not that.
-
 ## Privacy
 
 zet has no telemetry, no accounts, and no server. The only requests it can make are the ones
-behind `zet --check-update` and `zet --update`, and they happen only when you type one: the check
-on launch is the only one zet is ever meant to make on its own, and it is not wired up yet. When
-it is, it will disclose your IP address to GitHub and nothing else.
-[PRIVACY.md](PRIVACY.md) says exactly what is sent, what is not, and what is written to your
-disk.
+behind `zet --check-update` and `zet --update`, and they happen only when you type one. zet makes
+no request on its own, ever; the only thing such a request would disclose is your IP address to
+GitHub. [PRIVACY.md](PRIVACY.md) says exactly what is sent, what is not, and what is written to
+your disk.
 
 ## Security
 

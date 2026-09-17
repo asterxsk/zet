@@ -152,10 +152,7 @@ scroll-page-up = "Shift+PageUp"
 scroll-to-bottom = "Ctrl+Shift+End"
 scroll-to-top = "Ctrl+Shift+Home"
 settings = "Ctrl+Shift+Comma"
-toggle-tab-position = "Ctrl+Shift+P"
-
-[update]
-check-on-launch = true</code></pre>
+toggle-tab-position = "Ctrl+Shift+P"</code></pre>
 
       <h2 id="keys">Every key</h2>
 
@@ -187,7 +184,6 @@ check-on-launch = true</code></pre>
           <tr><td class="k">appearance.follow-reduce-motion</td><td>bool</td><td class="k">true</td><td>Whether to honor the system's reduce-motion setting.</td></tr>
           <tr><td class="k">appearance.follow-forced-colors</td><td>bool</td><td class="k">true</td><td>Whether to switch to the contrast theme when Windows reports forced colours.</td></tr>
           <tr><td class="k">keys</td><td>table</td><td colspan="2">A table of action name to chord. See <a href="keybindings.html">Keybindings</a>.</td></tr>
-          <tr><td class="k">update.check-on-launch</td><td>bool</td><td class="k">true</td><td>Whether zet asks GitHub for a newer version at launch. Not read by the current build: the launch check is not written yet.</td></tr>
         </tbody>
       </table>
 
@@ -313,17 +309,14 @@ close-tab = "Ctrl+W"
 quit = "Ctrl+Shift+Q"</code></pre>
 
       <p>Only the keys you write are changed. <code>font.fallback</code>, <code>tabs.open-default-without-asking</code>,
-      <code>appearance.follow-forced-colors</code>, <code>update.check-on-launch</code>, and every
-      binding not listed above keep their defaults.</p>
+      <code>appearance.follow-forced-colors</code>, and every binding not listed above keep their
+      defaults.</p>
 
       <h2 id="update">The update check</h2>
 
-      <p><code>update.check-on-launch</code> is the entire privacy control, which is why
-      <a href="privacy.html">Privacy</a> points at this key rather than at a settings screen. It
-      defaults to <code>true</code>, which is the intent for the finished program.</p>
-
-      <p>In the current build it makes no difference either way, because the check it gates is not
-      written and nothing reads the key. What does exist is the manual half, which is two flags:</p>
+      <p>There is no setting for this, and no <code>[update]</code> section to put one in. zet makes
+      no request on its own — not on launch, not on a timer, not in the background — so the whole
+      of the feature is two flags:</p>
 
 <pre><code>zet --check-update
 zet --update</code></pre>
@@ -333,14 +326,11 @@ zet --update</code></pre>
       installs what it finds — download, digest check, replace the running binary — with the new
       version taking effect the next time zet starts.</p>
 
-      <p>Both ignore this key, because the key is about the check zet makes <em>on its own</em> and
-      a flag you typed is not that.</p>
-
-<pre><code>[update]
-check-on-launch = false</code></pre>
-
-      <p>Setting that is what will turn the automatic check off once it exists. Until then it is a
-      key with nothing behind it.</p>
+      <p>Neither reads your configuration, which also means both work on a machine whose config will
+      not parse — exactly when someone might want them. An earlier draft reserved an
+      <code>[update] check-on-launch</code> key for an automatic check on launch; it was removed
+      before the first release, so no completed version of zet has ever opened a socket because it
+      was started. <a href="privacy.html">Privacy</a> states the request in full.</p>
     </article>
   </main>
 </div>
