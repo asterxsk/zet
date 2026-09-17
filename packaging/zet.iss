@@ -150,10 +150,12 @@ begin
   if not RegQueryStringValue(HKCU, EnvironmentKey, 'Path', Existing) then
     Existing := '';
 
-  { Built by hand rather than with a "{olddata};{app}" [Registry] entry. That entry
-    expands to a leading ';' when the user has no PATH value yet, and a leading empty
-    element in PATH means the current directory — which is how a terminal ends up
+  { Built by hand rather than with a Registry entry of the form <olddata>;<app>. That
+    entry expands to a leading ';' when the user has no PATH value yet, and a leading
+    empty element in PATH means the current directory — which is how a terminal ends up
     running a program out of whatever folder it happens to be sitting in. }
+  { The angle brackets above are deliberate: this is a comment, and a brace inside one
+    closes it. The compiler then reads the rest as code and stops at it. }
   if Existing = '' then
     Existing := Dir
   else if Existing[Length(Existing)] = ';' then
