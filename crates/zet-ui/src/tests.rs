@@ -21,6 +21,7 @@ use crate::fonts::GlyphSource;
 use crate::geometry::ROW_HEIGHT;
 use crate::{
     Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, Rect, ScrollState, Scrollbar,
+    thumb_offset,
     SettingLine, SettingPart, Size, TabInfo,
 };
 
@@ -1503,6 +1504,88 @@ fn the_scrollbar_appears_only_when_there_is_something_to_scroll() {
         chrome.hit(size.width - 4.0, ROW_HEIGHT + 2.0),
         Hit::Scrollbar(Scrollbar::Above),
         "scrolled to the end, so the band above the thumb is the long one"
+    );
+}
+
+/// The scrollbar's track and thumb, or a panic saying the bar was not drawn.
+fn scrollbar(chrome: &Chrome) -> (Rect, Rect) {
+    chrome.scrollbar().expect("the bar was drawn")
+}
+
+#[test]
+fn a_thumb_dragged_to_a_place_on_its_track_is_the_offset_it_was_drawn_at() {
+    // The round trip, and the reason `thumb_offset` lives here rather than in the caller
+    // that drags: a caller would have to restate the placement to check its inverse, and
+    // a restated formula is a test of the copy rather than of the thing.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let size = window();
+    let mut chrome = chrome();
+
+    for offset in [0.0, 0.25, 0.5, 0.75, 1.0] {
+        for visible in [0.1, 0.5, 0.9] {
+            chrome.set_scroll(ScrollState { offset, visible });
+            draw(&mut chrome, &input(&palette, &tabs, size));
+            let (track, thumb) = scrollbar(&chrome);
+            let back = thumb_offset(track, thumb, thumb.y).expect("the thumb can move");
+            assert!(
+                (back - offset).abs() < 1e-3,
+                "an offset of {offset} at {visible} visible drew a thumb at {back}"
+            );
+        }
+    }
+}
+
+#[test]
+fn dragging_past_either_end_of_the_track_stops_at_the_end() {
+    let track = Rect::new(0.0, 100.0, 8.0, 600.0);
+    let thumb = Rect::new(0.0, 400.0, 8.0, 100.0);
+    assert_eq!(thumb_offset(track, thumb, -500.0), Some(0.0));
+    assert_eq!(thumb_offset(track, thumb, 100.0), Some(0.0));
+    assert_eq!(thumb_offset(track, thumb, 700.0), Some(1.0));
+    assert_eq!(thumb_offset(track, thumb, 5000.0), Some(1.0));
+    // Halfway down the distance the thumb can travel, not half the track: the track is
+    // 600 tall, the thumb 100, so the middle of the travel is at 350.
+    assert_eq!(thumb_offset(track, thumb, 350.0), Some(0.5));
+}
+
+#[test]
+fn a_thumb_that_cannot_move_has_nowhere_to_be_dragged_to() {
+    // A thumb as tall as its track is a scrollback with nothing scrolled off. There is
+    // no division to do, and a caller that did it anyway would be dividing by zero.
+    let track = Rect::new(0.0, 0.0, 8.0, 400.0);
+    assert_eq!(thumb_offset(track, track, 200.0), None);
+    assert_eq!(
+        thumb_offset(track, Rect::new(0.0, 0.0, 8.0, 401.0), 200.0),
+        None,
+        "a thumb taller than its track is the same answer, not a negative travel"
+    );
+}
+
+#[test]
+fn the_scrollbar_publishes_itself_only_when_it_is_drawn() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let size = window();
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &tabs, size));
+    assert_eq!(
+        chrome.scrollbar(),
+        None,
+        "nothing to scroll, so there is no thumb to take hold of"
+    );
+
+    chrome.set_scroll(ScrollState {
+        offset: 0.0,
+        visible: 0.5,
+    });
+    draw(&mut chrome, &input(&palette, &tabs, size));
+    let (track, thumb) = scrollbar(&chrome);
+    assert!(track.height > 0.0);
+    assert!(thumb.height > 0.0 && thumb.height < track.height);
+    assert!(
+        (thumb.y - track.y).abs() < f32::EPSILON,
+        "offset zero is the top of the track"
     );
 }
 

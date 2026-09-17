@@ -306,6 +306,29 @@ pub enum Caption {
     Close,
 }
 
+/// What a thumb dragged to `top` says the scrollback's position is.
+///
+/// The inverse of the placement the scrollbar is drawn by, and it lives next to the
+/// chrome that draws the thumb rather than next to the caller that drags it, because the
+/// two are one fact written twice and only this side can be tested against the real
+/// thing: a caller in another crate would have to restate the layout to check itself.
+///
+/// What the pointer is mapped onto is the distance the thumb can *travel* rather than the
+/// track's height. The thumb is a proportion of the track and shrinks as the scrollback
+/// grows, so a track-height divisor would put the two ends out of reach by exactly the
+/// thumb's height — and the further back the history, the further out of reach.
+///
+/// `None` when the thumb cannot move: a thumb as tall as its track is a scrollback with
+/// nothing scrolled off, and there is no division to do.
+#[must_use]
+pub fn thumb_offset(track: Rect, thumb: Rect, top: f32) -> Option<f32> {
+    let travel = track.height - thumb.height;
+    if travel <= 0.0 {
+        return None;
+    }
+    Some(((top - track.y) / travel).clamp(0.0, 1.0))
+}
+
 /// Where on the scrollbar the point fell.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scrollbar {
@@ -406,6 +429,14 @@ pub struct Chrome {
     /// snap backwards on every step.
     indicator: Option<Rect>,
     scroll: ScrollState,
+    /// The scrollbar's track and thumb as of the last layout, for the one caller that
+    /// has to turn a drag into a position.
+    ///
+    /// `Hit` answers *which* control a point landed on and deliberately not where inside
+    /// it, because every other control in the window is a rectangle you either hit or do
+    /// not. A scrollbar is the one whose answer depends on how far down it the pointer is,
+    /// so it is the one that has to publish its geometry as well as its hit region.
+    scrollbar: Option<(Rect, Rect)>,
     layout: Layout,
     regions: Vec<Region>,
     /// Two arrays the layout fills and the frame is then given, so that every rectangle
@@ -433,6 +464,7 @@ impl Chrome {
             travel: None,
             indicator: None,
             scroll: ScrollState::default(),
+            scrollbar: None,
             layout: Layout::default(),
             regions: Vec::new(),
             quads: Vec::new(),
@@ -524,6 +556,16 @@ impl Chrome {
     #[must_use]
     pub const fn last_layout(&self) -> &Layout {
         &self.layout
+    }
+
+    /// The scrollbar's track and thumb as of the most recent [`Chrome::layout`] call.
+    ///
+    /// `None` when there is nothing to scroll and no bar was drawn. The pair is what a
+    /// drag needs: a thumb dragged to a place on its track is a position, and a position
+    /// is what the track's rectangle is for.
+    #[must_use]
+    pub const fn scrollbar(&self) -> Option<(Rect, Rect)> {
+        self.scrollbar
     }
 
     /// Everything the last layout made hittable.
@@ -620,6 +662,7 @@ impl Chrome {
             }
             self.regions.push(Region::Settings(panel.rect));
         }
+        self.scrollbar = scroll;
         if let Some((track, thumb)) = scroll {
             self.regions.push(Region::Scrollbar { track, thumb });
         }

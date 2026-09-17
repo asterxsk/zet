@@ -158,6 +158,12 @@ pub struct Host {
     pressed_at: Option<zet_vt::Pos>,
     /// Whether the window has focus, which decides whether the cursor is hollow.
     focused: bool,
+    /// Where on the thumb a drag was grabbed, in logical pixels from the thumb's top.
+    ///
+    /// Kept so that the thumb does not jump under the pointer on the first move: the
+    /// grab point is the place the user took hold of, and it stays under the pointer for
+    /// the whole drag, which is what every scrollbar does.
+    scroll_grab: Option<f32>,
     /// Scrolling sub-line remainders, accumulated so a trackpad's fractions are not
     /// dropped one event at a time.
     partial: f64,
@@ -233,6 +239,7 @@ impl Host {
             cursor: CursorIcon::Default,
             pressed_at: None,
             focused: true,
+            scroll_grab: None,
             partial: 0.0,
             blink_at: now,
             origin: now,
@@ -603,6 +610,31 @@ impl Host {
         }
     }
 
+    /// Put the viewport where a thumb dragged to `top` says it goes.
+    ///
+    /// The inverse of [`Host::scroll_state`]: the bar's zero is the oldest line, so a
+    /// thumb at the top of its track is the far end of the scrollback and a thumb at the
+    /// bottom is the live screen. The thumb is a proportion of the track that shrinks as
+    /// the scrollback grows, so what the pointer is mapped onto is the distance the thumb
+    /// can *travel* rather than the track's height — otherwise the two ends would be
+    /// unreachable by exactly the thumb's height.
+    fn drag_scrollbar(&mut self, top: f32) {
+        let Some((track, thumb)) = self.chrome.scrollbar() else {
+            return;
+        };
+        let Some(offset) = zet_ui::thumb_offset(track, thumb, top) else {
+            return;
+        };
+        let Some(session) = self.app.active_mut() else {
+            return;
+        };
+        let history = session.term().grid().scrollback_len();
+        if history == 0 {
+            return;
+        }
+        session.scroll_to((history as f32 * (1.0 - offset)).round() as usize);
+    }
+
     /// The grid size the window has room for, in cells.
     fn grid_size(&self) -> (u16, u16) {
         let Some(renderer) = self.renderer.as_ref() else {
@@ -859,6 +891,16 @@ impl Host {
             return;
         };
 
+        // A drag on the thumb is the pointer's, and nothing else's: a user holding the
+        // scrollbar is not also sweeping a selection across the grid behind it.
+        if let Some(grab) = self.scroll_grab {
+            self.drag_scrollbar(y as f32 - grab);
+            if let Some(window) = self.window() {
+                window.request_redraw();
+            }
+            return;
+        }
+
         if self.pressed_at.is_some()
             && let Some(at) = self.grid_cell(x, y)
         {
@@ -916,6 +958,9 @@ impl Host {
                 }
                 _ => {}
             }
+        } else if button == WinitButton::Left && self.scroll_grab.take().is_some() {
+            // Letting go of the thumb. There is nothing to settle: the view is already
+            // where the drag put it.
         } else if button == WinitButton::Left
             && let Some(pressed) = self.pressed_at.take()
         {
@@ -966,10 +1011,16 @@ impl Host {
                 let delta = match place {
                     zet_ui::Scrollbar::Above => SCROLL_PAGE,
                     zet_ui::Scrollbar::Below => -SCROLL_PAGE,
-                    // Dragging the thumb needs the track's rectangle, which the chrome
-                    // does not publish. The wheel and the two bands are what a user
-                    // actually reaches for, so this is a gap rather than a bug.
-                    zet_ui::Scrollbar::Thumb => 0,
+                    // Taking hold of the thumb, as opposed to clicking the band beside
+                    // it, which pages. The grab point is where in the thumb the pointer
+                    // went down, so the thumb does not jump to re-centre itself under it.
+                    zet_ui::Scrollbar::Thumb => {
+                        self.scroll_grab = self
+                            .chrome
+                            .scrollbar()
+                            .map(|(_, thumb)| y as f32 - thumb.y);
+                        0
+                    }
                 };
                 if delta != 0
                     && let Some(session) = self.app.active_mut()
