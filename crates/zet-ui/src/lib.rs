@@ -29,9 +29,9 @@
 //!   be asserted seventy milliseconds into itself. A caller that never sets one gets a
 //!   bar that stays where it was, which is a bug that shows up immediately rather than a
 //!   flashing one that does not.
-//! - **No scrollback position and no find bar.** They change without the configuration
-//!   changing, so they arrive through [`Chrome::set_scroll`] and [`Chrome::set_find_open`]
-//!   rather than being carried on every frame.
+//! - **No scrollback position.** It changes without the configuration changing and
+//!   without the window changing size, so it arrives through [`Chrome::set_scroll`]
+//!   rather than being carried on every frame with everything else.
 //!
 //! # Text
 //!
@@ -119,6 +119,13 @@ pub struct ChromeInput<'a> {
     /// would have stolen them from the shell, and the terminal behind it is supposed to
     /// still be usable.
     pub settings_focus: Option<usize>,
+    /// What the find bar is showing, or `None` when it is closed.
+    ///
+    /// Whether the bar is open is this and nothing else, so there is no second flag for a
+    /// caller to keep in step with it: a bar that is drawn but does not take the grid's
+    /// height, or takes the height and is not drawn, is a bug that only exists because
+    /// two values said two things.
+    pub find: Option<FindLine<'a>>,
     /// The text in the titlebar's name slot, which the app name goes in.
     pub window_title: &'a str,
     /// The whole window's size in logical pixels.
@@ -134,6 +141,36 @@ pub struct ChromeInput<'a> {
     /// A tab's own hover is [`TabInfo::hovered`], because the caller has already asked
     /// [`Chrome::hit`] and knows the answer better than a rectangle comparison does.
     pub pointer: Option<(f32, f32)>,
+}
+
+/// What the find bar is showing.
+///
+/// Three things and no more, because those are what the row has room to say: what was
+/// typed, which match the arrows are on out of how many, and whether the search stopped
+/// counting. Where the matches *are* is not here — the caller has already painted them
+/// into the grid, and the bar is a query and a count rather than a second view of the
+/// terminal.
+pub struct FindLine<'a> {
+    /// The query, as typed.
+    pub query: &'a str,
+    /// Which match the arrows are on, counted from one, and how many there are.
+    ///
+    /// `None` when nothing has been typed or nothing matched, which are the same thing to
+    /// look at and different things to say.
+    pub position: Option<(usize, usize)>,
+    /// Whether the search stopped at its limit rather than running out.
+    pub capped: bool,
+}
+
+impl Default for FindLine<'_> {
+    /// A bar that has just opened, with nothing typed into it yet.
+    fn default() -> Self {
+        FindLine {
+            query: "",
+            position: None,
+            capped: false,
+        }
+    }
 }
 
 /// One line of the settings panel: a section heading, or a setting.
@@ -368,7 +405,6 @@ pub struct Chrome {
     /// `Ctrl+Tab` and watching one bar move, and holding it down and watching a bar
     /// snap backwards on every step.
     indicator: Option<Rect>,
-    find_open: bool,
     scroll: ScrollState,
     layout: Layout,
     regions: Vec<Region>,
@@ -396,7 +432,6 @@ impl Chrome {
             active: None,
             travel: None,
             indicator: None,
-            find_open: false,
             scroll: ScrollState::default(),
             layout: Layout::default(),
             regions: Vec::new(),
@@ -414,11 +449,6 @@ impl Chrome {
     /// `Instant` hands out.
     pub fn set_time(&mut self, now: f32) {
         self.now = now;
-    }
-
-    /// Whether the find bar is open, which is what `Layout::bottom` reports.
-    pub fn set_find_open(&mut self, open: bool) {
-        self.find_open = open;
     }
 
     /// Where the scrollback is, for the scrollbar.
@@ -517,7 +547,7 @@ impl Chrome {
         } else {
             0.0
         };
-        let bottom = if self.find_open {
+        let bottom = if input.find.is_some() {
             overlays::find_bar_height()
         } else {
             0.0

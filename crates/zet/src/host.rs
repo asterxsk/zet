@@ -94,6 +94,40 @@ const PRESS_A_KEY: &str = "Press a key";
 /// always visibly moves the list and never skips past a row the user was aiming at.
 const PANEL_WHEEL: f32 = 48.0;
 
+/// The find bar, gathered up for one frame.
+struct FindView<'a> {
+    /// The matches on screen, in the window's coordinates, oldest first.
+    marks: Vec<zet_render::Selection>,
+    /// Which of them the find bar's arrows are on.
+    active: Option<usize>,
+    /// What the row says, or `None` while the bar is closed.
+    line: Option<zet_ui::FindLine<'a>>,
+}
+
+/// Everything a frame needs from the find bar.
+///
+/// A free function over the app rather than a method on the host, because the row it
+/// returns borrows the query: as a method it would borrow the whole host for as long as
+/// the frame took to draw, and the frame wants the chrome, the renderer, and the frame
+/// itself mutably while it does. Taking only the app leaves the rest of the host free.
+///
+/// The marks are in the window's coordinates rather than the history's — a match is a
+/// position in a list that is growing underneath it, and only the session knows where
+/// the view is scrolled to — so they are owned rather than borrowed.
+fn find_view(app: &App) -> FindView<'_> {
+    let (marks, active) = app.find_marks();
+    let find = app.find();
+    FindView {
+        marks,
+        active,
+        line: find.is_open().then(|| zet_ui::FindLine {
+            query: find.query(),
+            position: find.tally(),
+            capped: find.capped(),
+        }),
+    }
+}
+
 /// The terminal, attached to a window.
 pub struct Host {
     /// The state machine. Everything the host needs to know is behind this.
@@ -353,6 +387,12 @@ impl Host {
         // Before the renderer is borrowed: `reconcile` may reload a face, and it needs
         // the whole host to do it.
         self.reconcile();
+        // The search is re-run here rather than when the query changes, because the
+        // terminal's contents move the matches too: a line scrolled off the top is a
+        // match two rows further up than it was. It is a no-op unless one of the two
+        // actually moved, which is what keeps a terminal streaming output from walking
+        // ten thousand rows sixty times a second to rediscover the same answer.
+        self.app.refresh_find();
 
         let Some(window) = self.window.clone() else {
             return;
@@ -377,6 +417,8 @@ impl Host {
         let theme = self.app.theme();
         let cursor_settings = self.app.config().cursor.clone();
         let elapsed = now.duration_since(self.origin).as_secs_f32();
+        let finding = find_view(&self.app);
+        let marks = zet_render::Marks::new(&finding.marks, finding.active);
 
         // The taskbar, Alt-Tab, and the window list are the places a user reads a title
         // without looking at the window, and six of them reading "zet" say nothing about
@@ -413,6 +455,7 @@ impl Host {
             settings: &panel,
             settings_scroll: self.settings_scroll,
             settings_focus: focused,
+            find: finding.line,
             window_title: APP_NAME,
             size: Size {
                 width: width as f32,
@@ -453,6 +496,7 @@ impl Host {
                 &metrics,
                 &cursor_settings,
                 &view,
+                marks,
                 renderer,
                 frame,
             );
@@ -665,6 +709,18 @@ impl Host {
             return;
         }
 
+        // The find bar's keys, and it has more of them than the panel does: it is a text
+        // field, so what was typed is its own rather than the shell's. That is the one
+        // place in this window where a letter does not reach the terminal, and it is the
+        // whole point of a find bar — a query you cannot type is not a query.
+        //
+        // Before the panel, because a letter belongs to whichever of the two is asking
+        // for text, and only one of them ever is.
+        if self.app.find_key(&translated) {
+            self.redraw();
+            return;
+        }
+
         // The panel's own keys, which it only has while the panel is open and only for
         // the ones it names. A letter is still a letter for the shell with the panel up,
         // which is what "it does not steal focus from the prompt" has to mean.
@@ -685,7 +741,17 @@ impl Host {
             return;
         }
 
+        // Whether this key ran an action or went to the shell. An action has nothing
+        // coming behind it: typing is answered by the program's echo, which arrives on
+        // the pump and asks for a frame of its own, but opening the find bar, resizing
+        // the font, or scrolling the view changes what is on screen and then stops
+        // talking. Without this the bar would appear only once something else happened
+        // to print.
+        let ran_an_action = self.app.bound(translated.mods, translated.key).is_some();
         let commands = self.app.key(&translated);
+        if ran_an_action && let Some(window) = self.window() {
+            window.request_redraw();
+        }
         self.carry_out(loop_, commands);
     }
 

@@ -46,6 +46,16 @@ const FIND_PAD: f32 = 8.0;
 const FIND_FIELD: f32 = 20.0;
 const FIND_FIELD_WIDTH: f32 = 240.0;
 
+/// The word before the query, so the field says what it is for even when it is empty.
+const FIND_LABEL: &str = "Find";
+
+/// The gap after the label, and after the field.
+const FIND_GAP: f32 = 8.0;
+
+/// The caret at the end of the query: a hairline standing a little inside the field.
+const CARET_WIDTH: f32 = 1.0;
+const CARET_INSET: f32 = 4.0;
+
 /// The sizes DESIGN.md's type table gives the panel.
 const HEADING_SIZE: f32 = 12.0;
 const HEADING_TRACKING: f32 = 0.08;
@@ -293,6 +303,17 @@ fn content_top(lines: &[SettingLine<'_>], index: usize) -> f32 {
 /// hairline language as everything else. It is not part of the grid and does not overlap
 /// it: `Layout::bottom` is this row's height, and the caller takes it off the grid before
 /// the grid is told how big it is.
+///
+/// Three things are on it: a labelled field holding the query, a caret, and a count. The
+/// query is the one piece of stateful text in the chrome, so it is the one place where
+/// what is drawn depends on what was typed — and a query longer than the field is shown
+/// from its end rather than its beginning, because the caret is where the next character
+/// goes and a caret off the right edge is a field that looks broken at exactly the moment
+/// the user is typing into it.
+///
+/// The caret does not blink. DESIGN.md allows one authored moment in this app and it is
+/// the tab indicator's travel; a second thing moving on screen is a second thing to look
+/// at, and the caret is already the brightest hairline in the row.
 pub(crate) fn find_bar(paint: &mut Painter<'_>, input: &ChromeInput<'_>, height: f32) -> Rect {
     let palette = *input.palette;
     let rect = Rect::new(0.0, input.size.height - height, input.size.width, height);
@@ -309,10 +330,62 @@ pub(crate) fn find_bar(paint: &mut Painter<'_>, input: &ChromeInput<'_>, height:
     // ground, so that the one thing on this row that takes typing looks like it.
     paint.fill(field, palette.ground);
     border(paint, field, palette.hairline_strong);
-    let style = TextStyle::new(HINT_SIZE, Weight::NORMAL, palette.ink_mid);
+
     let baseline = paint.baseline_in(field, HINT_SIZE);
-    paint.text("Find", field.x + FIND_PAD, baseline, style);
+    let label = TextStyle::new(HINT_SIZE, Weight::NORMAL, palette.ink_dim);
+    paint.text(FIND_LABEL, field.x + FIND_PAD, baseline, label);
+
+    let Some(find) = input.find.as_ref() else {
+        return rect;
+    };
+    let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
+    let left = field.x + FIND_PAD + paint.width(FIND_LABEL, label) + FIND_GAP;
+    let room = (field.right() - FIND_PAD - left - CARET_WIDTH).max(0.0);
+    let query = tail_that_fits(paint, find.query, style, room);
+    let typed = paint.width(query, style);
+    paint.text(query, left, baseline, style);
+    paint.fill(
+        Rect::new(
+            left + typed + CARET_WIDTH,
+            field.y + CARET_INSET,
+            CARET_WIDTH,
+            field.height - 2.0 * CARET_INSET,
+        ),
+        palette.ink,
+    );
+
+    let (count, color) = match find.position {
+        Some((at, total)) => (format!("{at} of {total}{}", plus(find.capped)), palette.ink_mid),
+        None if find.query.is_empty() => (String::new(), palette.ink_dim),
+        None => ("No results".to_owned(), palette.ink_dim),
+    };
+    if !count.is_empty() {
+        let style = TextStyle::new(HINT_SIZE, Weight::NORMAL, color);
+        paint.text(&count, field.right() + FIND_GAP * 2.0, baseline, style);
+    }
     rect
+}
+
+/// The longest tail of `query` that fits in `room`.
+///
+/// By `char` and not by byte: a query is what the user typed, and a slice in the middle
+/// of a character is a panic in a paint loop.
+fn tail_that_fits<'a>(
+    paint: &mut Painter<'_>,
+    query: &'a str,
+    style: TextStyle,
+    room: f32,
+) -> &'a str {
+    let mut start = 0;
+    while start < query.len() && paint.width(&query[start..], style) > room {
+        start += query[start..].chars().next().map_or(1, char::len_utf8);
+    }
+    &query[start..]
+}
+
+/// The mark a search that stopped counting wears.
+const fn plus(capped: bool) -> &'static str {
+    if capped { "+" } else { "" }
 }
 
 /// A one-pixel outline inside `rect`.

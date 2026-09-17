@@ -18,13 +18,14 @@ use std::time::{Duration, Instant};
 use zet_config::{
     Config, Diagnostic, Severity, Theme, by_slug, contrast_theme, default_path, load,
 };
-use zet_input::{Chord, KeyEvent, KeyKind, encode_key, encode_paste};
+use zet_input::{Chord, Key, KeyEvent, KeyKind, Modifiers, encode_key, encode_paste};
 use zet_pty::discovery::{self, Profile};
 use zet_render::Selection;
 use zet_session::{Session, SessionError, Sessions, Waker};
 use zet_vt::{Modes, Pos};
 
 use crate::action::Action;
+use crate::find::Find;
 use crate::settings;
 use crate::text::selection_text;
 
@@ -144,6 +145,8 @@ pub struct App {
     /// the family the file names: a row offering one choice is a row that says the truth
     /// about the file and nothing about the machine.
     families: Vec<String>,
+    /// The find bar: what was typed, what it found, and which find it is on.
+    find: Find,
 }
 
 impl App {
@@ -186,6 +189,7 @@ impl App {
             font_nudge: 0.0,
             start_directory: None,
             families: Vec::new(),
+            find: Find::default(),
         })
     }
 
@@ -612,10 +616,21 @@ impl App {
                 self.font_nudge = 0.0;
                 Vec::new()
             }
-            // The two overlays are drawn by the window rather than by this crate, and
-            // the state that says whether they are open is theirs too. Until they exist,
-            // the binding does nothing rather than pretending.
-            Action::Find | Action::Settings => Vec::new(),
+            Action::Find => {
+                // One chord, both ways: the key that opens the bar closes it, which is
+                // what a user who pressed it by accident will press next.
+                if self.find.is_open() {
+                    self.find.close();
+                } else {
+                    self.find.open();
+                    self.refresh_find();
+                    self.reveal_find();
+                }
+                Vec::new()
+            }
+            // The settings panel is drawn by the window rather than by this crate, and
+            // the state that says whether it is open is the window's too.
+            Action::Settings => Vec::new(),
         }
     }
 
@@ -624,6 +639,164 @@ impl App {
             session.scroll(delta);
         }
         Vec::new()
+    }
+
+    // ---------------------------------------------------------------------------
+    // Find
+    // ---------------------------------------------------------------------------
+
+    /// The find bar's state.
+    #[must_use]
+    pub const fn find(&self) -> &Find {
+        &self.find
+    }
+
+    /// Run the query again over the active terminal, if there is a reason to.
+    ///
+    /// Called once per frame while the bar is open. It is a no-op unless the query just
+    /// changed or the terminal has printed since the last look — see [`Find::search`] —
+    /// because the walk allocates a glyph per cell of the history and a terminal that
+    /// is streaming output would otherwise pay for all of it sixty times a second.
+    pub fn refresh_find(&mut self) {
+        let (sessions, find) = (&self.sessions, &mut self.find);
+        let Some(session) = sessions.active().and_then(|number| sessions.get(number)) else {
+            return;
+        };
+        let grid = session.term().grid();
+        let from = grid
+            .scrollback_len()
+            .saturating_sub(session.scroll_offset());
+        find.search(grid, from);
+    }
+
+    /// Take a key for the find bar, and say whether it took it.
+    ///
+    /// The bar owns the keys a text field owns — what you type, `Backspace`, `Escape`,
+    /// and `Enter` for the next match — and nothing else. Everything with a modifier on
+    /// it is left alone, so a chord still reaches the keymap: `Ctrl+Shift+F` closes the
+    /// bar it opened, and `Ctrl+Shift+T` opens a tab whether the bar is up or not.
+    pub fn find_key(&mut self, event: &KeyEvent) -> bool {
+        if !self.find.is_open() || event.kind == KeyKind::Release {
+            return false;
+        }
+        let typed = event.mods.is_empty() || event.mods == Modifiers::SHIFT;
+        match event.key {
+            Key::Escape if typed => {
+                self.find.close();
+                return true;
+            }
+            Key::Enter if typed => {
+                self.find_step(!event.mods.is_empty());
+                return true;
+            }
+            Key::Backspace if typed => {
+                self.find.pop();
+                self.refresh_find();
+                return true;
+            }
+            _ if typed => {}
+            _ => return false,
+        }
+        // The platform's own text, which is what an IME commits and what a layout
+        // produces. `Key::Char` would do for a US keyboard and would be wrong for the
+        // three quarters of the world that do not have one.
+        let Some(text) = event.text.as_deref() else {
+            return false;
+        };
+        let mut took = false;
+        for ch in text.chars() {
+            if !ch.is_control() {
+                self.find.push(ch);
+                took = true;
+            }
+        }
+        if took {
+            self.refresh_find();
+        }
+        took
+    }
+
+    /// Move to the next or the previous match, and bring it into view.
+    pub fn find_step(&mut self, forward: bool) {
+        if forward {
+            self.find.next_match();
+        } else {
+            self.find.previous_match();
+        }
+        self.reveal_find();
+    }
+
+    /// Scroll the active terminal so that the match the arrows are on is on screen.
+    ///
+    /// Only when it is not already there, so that walking matches that are all visible
+    /// does not move the view under the user. A match above the fold becomes the top
+    /// row; one below becomes the bottom row; and one taller than the window is shown
+    /// from its first row, because a match you can see the start of is a match you can
+    /// read.
+    fn reveal_find(&mut self) {
+        let (sessions, find) = (&mut self.sessions, &self.find);
+        let Some(found) = find.active() else {
+            return;
+        };
+        let Some(number) = sessions.active() else {
+            return;
+        };
+        let Some(session) = sessions.get_mut(number) else {
+            return;
+        };
+        let want = {
+            let grid = session.term().grid();
+            let rows = grid.rows();
+            let top = grid
+                .scrollback_len()
+                .saturating_sub(session.scroll_offset());
+            let bottom = top + rows - 1;
+            if found.start.row < top {
+                found.start.row
+            } else if found.end.row > bottom {
+                (found.end.row + 1).saturating_sub(rows)
+            } else {
+                return;
+            }
+        };
+        // The offset counts from the live screen rather than from the top of the
+        // history, so the row wanted at the top and the number of rows behind it are
+        // the same number read from opposite ends.
+        let history = session.term().grid().scrollback_len();
+        session.scroll_to(history.saturating_sub(want));
+    }
+
+    /// The find bar's matches that are on screen now, in the renderer's coordinates.
+    ///
+    /// Returns the marks to paint and which of them the arrows are on. The conversion
+    /// is a subtraction, and it is the host's because only the session knows where the
+    /// view is scrolled to — the find bar deals in positions in a history that is
+    /// growing underneath it.
+    #[must_use]
+    pub fn find_marks(&self) -> (Vec<Selection>, Option<usize>) {
+        let Some(session) = self.active().filter(|_| self.find.is_open()) else {
+            return (Vec::new(), None);
+        };
+        let grid = session.term().grid();
+        let rows = grid.rows();
+        let top = grid
+            .scrollback_len()
+            .saturating_sub(session.scroll_offset());
+        let mut marks = Vec::new();
+        let mut active = None;
+        for (index, found) in self.find.matches().iter().enumerate() {
+            if found.end.row < top || found.start.row >= top + rows {
+                continue;
+            }
+            if self.find.is_active(index) {
+                active = Some(marks.len());
+            }
+            marks.push(Selection::new(
+                Pos::new(found.start.row.saturating_sub(top), found.start.col),
+                Pos::new(found.end.row.saturating_sub(top), found.end.col),
+            ));
+        }
+        (marks, active)
     }
 
     /// The text the user has selected, if there is one.
@@ -688,6 +861,12 @@ impl App {
                 let drained = session.drain();
                 changed |= drained.damage;
             }
+        }
+        if changed {
+            // What was found in a grid that has been printing since is a list of
+            // positions that have moved, and the count in the bar would be a count of
+            // where things used to be.
+            self.find.touch();
         }
         changed
     }

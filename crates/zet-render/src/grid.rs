@@ -111,6 +111,41 @@ impl Selection {
     }
 }
 
+/// The find bar's matches, as the grid should paint them.
+///
+/// Passed beside [`View`] rather than inside it. A selection is one pair of corners and
+/// a `Copy` value that belongs in a view; this is a list, and putting it in the view
+/// would cost the view its `Copy` and make every caller of [`draw_grid`] care about
+/// the find bar whether it has one open or not.
+///
+/// `areas` is sorted, which is what lets a row find the handful of matches that touch
+/// it without walking the list once per cell.
+#[derive(Clone, Copy, Default)]
+pub struct Marks<'a> {
+    /// Every match, oldest first.
+    pub areas: &'a [Selection],
+    /// Which of them the find bar's arrows are on.
+    pub active: Option<usize>,
+}
+
+impl<'a> Marks<'a> {
+    /// The matches, and which one the arrows are on.
+    #[must_use]
+    pub const fn new(areas: &'a [Selection], active: Option<usize>) -> Self {
+        Marks { areas, active }
+    }
+
+    /// The matches that touch one row, and the index each of them has in `areas`.
+    fn over(&self, row: usize) -> (usize, &'a [Selection]) {
+        // A match that begins above this row and ends on it counts, so the first
+        // candidate is the first one whose *end* has reached this row.
+        let first = self.areas.partition_point(|area| area.bounds().1.0 < row);
+        let rest = &self.areas[first..];
+        let count = rest.partition_point(|area| area.bounds().0.0 <= row);
+        (first, &rest[..count])
+    }
+}
+
 /// How the cursor is drawn this frame.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cursor {
@@ -203,6 +238,7 @@ pub fn draw_grid(
     metrics: &Metrics,
     settings: &CursorSettings,
     view: &View,
+    marks: Marks<'_>,
     glyphs: &mut dyn GlyphSource,
     frame: &mut Frame,
 ) {
@@ -236,7 +272,8 @@ pub fn draw_grid(
         let selected_row = view
             .selection
             .is_some_and(|selection| selection.touches_row(row));
-        if line.content_len() == 0 && !cursor_row && !selected_row {
+        let (first_mark, marked_row) = marks.over(row);
+        if line.content_len() == 0 && !cursor_row && !selected_row && marked_row.is_empty() {
             continue;
         }
 
@@ -252,20 +289,43 @@ pub fn draw_grid(
             let selected = view
                 .selection
                 .is_some_and(|selection| selection.contains(row, col));
+            let found = marked_row
+                .iter()
+                .position(|area| area.contains(row, col))
+                .map(|at| first_mark + at);
 
-            if background.to_array() != theme.background.to_array() || selected {
-                let fill = if selected {
-                    theme.selection
+            let ordinary = background.to_array() != theme.background.to_array();
+            if ordinary || selected || found.is_some() {
+                let fill = if found.is_none() && selected {
+                    Some(theme.selection)
                 } else {
-                    background
+                    ordinary.then_some(background)
                 };
-                frame.push_quad(Quad::new(
-                    rect[0],
-                    rect[1],
-                    rect[2],
-                    rect[3],
-                    fill.to_linear(),
-                ));
+                if let Some(fill) = fill {
+                    frame.push_quad(Quad::new(
+                        rect[0],
+                        rect[1],
+                        rect[2],
+                        rect[3],
+                        fill.to_linear(),
+                    ));
+                }
+                // A match is laid over whatever the cell already was rather than
+                // replacing it, so a highlight on a program's own background tints it
+                // instead of painting it out. The one the arrows are on is laid on
+                // whole; the rest are half, because the grid has one "marked" colour
+                // and two weights of it is the whole of what this app knows about
+                // depth.
+                if let Some(found) = found {
+                    let alpha = if marks.active == Some(found) { 1.0 } else { 0.5 };
+                    frame.push_quad(Quad::new(
+                        rect[0],
+                        rect[1],
+                        rect[2],
+                        rect[3],
+                        faded(theme.selection, alpha),
+                    ));
+                }
             }
 
             let lit_by_cursor = cursor_row && cursor_at.col == col;
@@ -326,6 +386,17 @@ fn cell_colors(cell: &Cell, theme: &Theme, screen_reversed: bool) -> (Rgb, Rgb) 
         foreground = dim(foreground, background);
     }
     (foreground, background)
+}
+
+/// A colour at less than full opacity, in the linear premultiplied form a quad wants.
+///
+/// Premultiplied rather than straight, because that is the frame's contract: the device
+/// blends `src + dst * (1 - src.a)`, so a colour that has not been multiplied through
+/// by its own alpha comes out too bright, and the more transparent it is the brighter
+/// it looks.
+fn faded(color: Rgb, alpha: f32) -> [f32; 4] {
+    let [r, g, b, _] = color.to_linear();
+    [r * alpha, g * alpha, b * alpha, alpha]
 }
 
 /// A character with its face, or nothing when there is nothing to draw.
@@ -616,6 +687,7 @@ mod tests {
             &METRICS,
             &CursorSettings::default(),
             view,
+            Marks::default(),
             &mut FakeGlyphs::new(),
             &mut frame,
         );
@@ -630,6 +702,7 @@ mod tests {
             &METRICS,
             &CursorSettings::default(),
             view,
+            Marks::default(),
             glyphs,
             &mut frame,
         );
@@ -836,6 +909,7 @@ mod tests {
             &METRICS,
             &settings(CursorShape::Bar),
             &View::new(),
+            Marks::default(),
             &mut FakeGlyphs::new(),
             &mut frame,
         );
@@ -849,6 +923,7 @@ mod tests {
             &METRICS,
             &settings(CursorShape::Underline),
             &View::new(),
+            Marks::default(),
             &mut FakeGlyphs::new(),
             &mut frame,
         );
@@ -1014,6 +1089,7 @@ mod tests {
             &METRICS,
             &CursorSettings::default(),
             &View::new(),
+            Marks::default(),
             &mut Nothing,
             &mut frame,
         );
@@ -1043,6 +1119,7 @@ mod tests {
             &METRICS,
             &CursorSettings::default(),
             &View::new(),
+            Marks::default(),
             &mut Colour,
             &mut frame,
         );

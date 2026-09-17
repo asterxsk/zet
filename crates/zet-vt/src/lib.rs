@@ -15,6 +15,7 @@
 //! - [`term`] — the state machine that consumes those events: cursor, modes, margins,
 //!   tab stops, SGR pen, and the operations that mutate the grid.
 //! - [`damage`] — what changed since the last frame.
+//! - [`search`] — a pure query over the grid, for the find bar to draw and scroll by.
 //!
 //! The parser is deliberately ignorant of terminal state. Everything that can be
 //! wrong about a terminal, from reflow to erase semantics, lives in [`term`], where
@@ -48,6 +49,7 @@ pub mod damage;
 pub mod grid;
 pub mod parser;
 pub mod row;
+pub mod search;
 pub mod term;
 
 pub use attrs::{Attrs, UnderlineStyle};
@@ -57,4 +59,5 @@ pub use damage::Damage;
 pub use grid::{Grid, Pos};
 pub use parser::{Params, Parser, Perform, Private};
 pub use row::Row;
+pub use search::Match;
 pub use term::{Modes, MouseEncoding, MouseMode, Pen, Term};

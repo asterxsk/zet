@@ -20,8 +20,8 @@ use zet_render::{Frame, Placement, Quad};
 use crate::fonts::GlyphSource;
 use crate::geometry::ROW_HEIGHT;
 use crate::{
-    Caption, Chrome, ChromeInput, Control, Hit, Layout, Rect, ScrollState, Scrollbar, SettingLine,
-    SettingPart, Size, TabInfo,
+    Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, Rect, ScrollState, Scrollbar,
+    SettingLine, SettingPart, Size, TabInfo,
 };
 
 /// A font source with no font in it.
@@ -164,6 +164,7 @@ fn input<'a>(palette: &'a Palette, tabs: &'a [TabInfo], size: Size) -> ChromeInp
         settings: &[],
         settings_scroll: 0.0,
         settings_focus: None,
+        find: None,
         window_title: "zet",
         size,
         scale: 1.0,
@@ -833,7 +834,7 @@ fn the_grid_gets_what_is_left() {
     let mut chrome = chrome();
     let mut input = input(&palette, &tabs, size);
     input.settings_open = true;
-    chrome.set_find_open(true);
+    input.find = Some(FindLine::default());
     let drawn = draw(&mut chrome, &input);
 
     let layout = drawn.layout;
@@ -854,7 +855,7 @@ fn the_grid_gets_what_is_left() {
     assert!((layout.grid.right() - size.width).abs() < f32::EPSILON);
 
     // A closed find bar gives the row back.
-    chrome.set_find_open(false);
+    input.find = None;
     let without = draw(&mut chrome, &input);
     assert!((without.layout.bottom).abs() < f32::EPSILON);
     assert!(without.layout.grid.height > layout.grid.height);
@@ -1275,8 +1276,9 @@ fn an_open_find_bar_is_a_row_of_its_own() {
     let tabs = tabs(&[1]);
     let size = window();
     let mut chrome = chrome();
-    chrome.set_find_open(true);
-    let drawn = draw(&mut chrome, &input(&palette, &tabs, size));
+    let mut input = input(&palette, &tabs, size);
+    input.find = Some(FindLine::default());
+    let drawn = draw(&mut chrome, &input);
 
     assert!((drawn.layout.bottom - 32.0).abs() < f32::EPSILON);
     let raised = color(palette.surface_raised);
@@ -1290,6 +1292,103 @@ fn an_open_find_bar_is_a_row_of_its_own() {
     // Nothing in the chrome hit-tests inside it: the field takes typing, and typing is
     // the app's.
     assert_eq!(chrome.hit(100.0, size.height - 16.0), Hit::None);
+}
+
+/// Everything the bar drew, as one string, with the spaces taken out.
+///
+/// The fake font gives a space no ink, so the painter emits no glyph for one and the
+/// blanks between words are not in what comes back. Everything else on the row is one
+/// sentence read left to right, so the order is the whole of what there is to check.
+///
+/// The window is drawn with no tabs, which is what makes this the find bar's text and
+/// nothing else's: with no tabs there is no strip, and the strip is the only other thing
+/// in the chrome that draws words.
+fn find_bar_text(chrome: &mut Chrome, palette: &Palette, find: FindLine<'_>) -> String {
+    let mut input = input(palette, &[], window());
+    input.find = Some(find);
+    let drawn = draw(chrome, &input);
+    let text: String = drawn_at(&drawn.frame, Weight::NORMAL).into_iter().collect();
+    text.replace(' ', "")
+}
+
+#[test]
+fn the_find_bar_shows_what_was_typed_and_which_match_it_is_on() {
+    let palette = Palette::instrument();
+    let mut chrome = chrome();
+    let text = find_bar_text(
+        &mut chrome,
+        &palette,
+        FindLine {
+            query: "hello",
+            position: Some((3, 17)),
+            capped: false,
+        },
+    );
+    assert_eq!(text, "Findhello3of17");
+}
+
+#[test]
+fn a_query_too_long_for_the_field_is_shown_from_its_end() {
+    // The caret is where the next character goes, and a caret off the right edge is a
+    // field that looks broken at the moment the user is typing into it.
+    let palette = Palette::instrument();
+    let mut chrome = chrome();
+    let long = "x".repeat(400) + "needle";
+    let text = find_bar_text(
+        &mut chrome,
+        &palette,
+        FindLine {
+            query: &long,
+            position: None,
+            capped: false,
+        },
+    );
+    assert!(text.starts_with("Findx"), "{text}");
+    assert!(
+        text.contains("needleNoresults"),
+        "the tail is what is shown: {text}"
+    );
+    assert!(text.len() < 100, "the head was dropped: {text}");
+}
+
+#[test]
+fn a_query_that_matched_nothing_says_so_rather_than_showing_a_zero() {
+    let palette = Palette::instrument();
+    let mut chrome = chrome();
+    let text = find_bar_text(
+        &mut chrome,
+        &palette,
+        FindLine {
+            query: "omega",
+            position: None,
+            capped: false,
+        },
+    );
+    assert_eq!(text, "FindomegaNoresults");
+}
+
+#[test]
+fn a_search_that_stopped_counting_says_that_it_did() {
+    let palette = Palette::instrument();
+    let mut chrome = chrome();
+    let text = find_bar_text(
+        &mut chrome,
+        &palette,
+        FindLine {
+            query: "x",
+            position: Some((1, 1000)),
+            capped: true,
+        },
+    );
+    assert_eq!(text, "Findx1of1000+");
+}
+
+#[test]
+fn an_empty_query_has_no_count_because_there_is_nothing_to_count() {
+    let palette = Palette::instrument();
+    let mut chrome = chrome();
+    let text = find_bar_text(&mut chrome, &palette, FindLine::default());
+    assert_eq!(text, "Find");
 }
 
 // ---------------------------------------------------------------------------------
@@ -1448,13 +1547,13 @@ fn the_chrome_only_ever_draws_the_chrome_palette() {
                 ..TabSettings::default()
             };
             let mut chrome = Chrome::new(&settings, &WindowSettings::default());
-            chrome.set_find_open(true);
             chrome.set_scroll(ScrollState {
                 offset: 0.5,
                 visible: 0.5,
             });
             let mut input = input(&palette, &tabs, window());
             input.settings_open = settings_open;
+            input.find = Some(FindLine::default());
             let drawn = draw(&mut chrome, &input);
 
             let allowed: Vec<[f32; 4]> = palette
