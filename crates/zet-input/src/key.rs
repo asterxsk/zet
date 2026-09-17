@@ -4,11 +4,12 @@ use crate::chord::{Key, Modifiers};
 
 /// What the host is reporting about a key.
 ///
-/// The kind is here because a program can see all three and the mode decides which
-/// of them it does see — an autorepeat is not a second press to a program that
-/// negotiated for repeats, and it is nothing at all to one that did not. The host
-/// has to pass the distinction along even though the legacy encoder discards it, or
-/// the information is gone by the time the kitty protocol needs it.
+/// The kind is here because the two encodings disagree about what a repeat is. Kitty
+/// can spell one as itself, so a program that negotiated for it can tell a held key
+/// from a tapped one; the legacy encoding cannot, and sends a repeat as the press it
+/// repeats. Only a release means the same thing to both, which is "nothing". The
+/// host has to pass the distinction along or it is gone by the time the encoding that
+/// can use it gets there.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum KeyKind {
     /// The key went down.

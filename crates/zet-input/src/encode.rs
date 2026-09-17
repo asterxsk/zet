@@ -42,20 +42,26 @@ const ESC: u8 = 0x1b;
 ///
 /// `None` is a real answer and not a failure: it means "write nothing to the pty",
 /// which is what a key that this encoding cannot describe has to produce. There are
-/// three such keys or events — a release, a repeat, and the handful of keys in
-/// [`Key`] that exist so a user can name them (`CapsLock`, `PrintScreen`, `Pause`,
-/// `Menu`, the three locks) and that never had a byte of their own. A host that
-/// treats `None` as an error will drop the keystroke twice.
+/// two such things — a release, and the handful of keys in [`Key`] that exist so a
+/// user can name them (`CapsLock`, `PrintScreen`, `Pause`, `Menu`, the three locks)
+/// and that never had a byte of their own. A host that treats `None` as an error
+/// will drop the keystroke twice.
 ///
 /// The modifiers are read from the event and the text is not; [`KeyEvent`] says why.
 #[must_use]
 pub fn encode_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
-    // Legacy VT has no byte for a key going up or for one repeating. That is the
-    // gap the kitty protocol exists to fill, and this crate does not implement it,
-    // so both kinds are dropped rather than approximated by a press — a repeat sent
-    // as a press is indistinguishable from the user holding the key down, which is
-    // a different thing to a program counting keystrokes.
-    if event.kind != KeyKind::Press {
+    // A key going up has no byte in legacy VT, so a release produces none. A key
+    // repeating does, and it is the byte its press produces, because a repeat *is* a
+    // press as far as the wire is concerned: the keyboard is held down and the
+    // autorepeat rate fired again, which the program is meant to see as another
+    // keystroke. Withholding it is not caution, it is a keyboard that stops working
+    // the moment a key is held — holding an arrow key walks nowhere and holding
+    // Backspace deletes exactly one character.
+    //
+    // The kind is still kept distinct in [`KeyKind`], because the kitty protocol can
+    // express it and is the reason the host tracks it at all; this encoder is simply
+    // not the one that can.
+    if event.kind == KeyKind::Release {
         return None;
     }
 
@@ -827,15 +833,55 @@ mod tests {
     }
 
     #[test]
-    fn release_and_repeat_encode_nothing() {
-        for kind in [KeyKind::Release, KeyKind::Repeat] {
-            let event = KeyEvent {
-                key: Key::Char('a'),
-                mods: Modifiers::empty(),
-                text: None,
-                kind,
-            };
-            assert_eq!(encode_key(&event, &Modes::default()), None, "{kind:?}");
+    fn a_release_encodes_nothing() {
+        let event = KeyEvent {
+            key: Key::Char('a'),
+            mods: Modifiers::empty(),
+            text: None,
+            kind: KeyKind::Release,
+        };
+        assert_eq!(encode_key(&event, &Modes::default()), None);
+    }
+
+    #[test]
+    fn a_repeat_encodes_exactly_what_its_press_does() {
+        // The test the whole held-key behaviour rests on: whatever a key sends when
+        // it goes down, it sends again for every repeat. Written as an equality
+        // against the press rather than against a byte, so it cannot drift — the
+        // keys worth checking are the ones whose encoding is complicated enough to
+        // have a special case in it.
+        for key in [
+            Key::Char('a'),
+            Key::Backspace,
+            Key::Up,
+            Key::Down,
+            Key::Delete,
+            Key::F(5),
+        ] {
+            for mods in [Modifiers::empty(), Modifiers::CTRL, Modifiers::ALT] {
+                let press = KeyEvent {
+                    key,
+                    mods,
+                    text: None,
+                    kind: KeyKind::Press,
+                };
+                let repeat = KeyEvent {
+                    kind: KeyKind::Repeat,
+                    ..press.clone()
+                };
+                let modes = Modes::default();
+                assert_eq!(
+                    encode_key(&repeat, &modes),
+                    encode_key(&press, &modes),
+                    "{key:?} with {mods:?}: holding the key sends something else than \
+                     pressing it"
+                );
+                assert!(
+                    encode_key(&press, &modes).is_some(),
+                    "{key:?} with {mods:?} encodes nothing at all, so this case proves \
+                     nothing"
+                );
+            }
         }
     }
 
