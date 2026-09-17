@@ -185,9 +185,16 @@ pub(crate) fn panel(
     }
 }
 
-/// Whether a box is worth drawing: it intersects the panel at all.
+/// Whether a box can be drawn without any of it escaping the panel.
+///
+/// Containment, not intersection. There is no scissor under this — the painter pushes
+/// rectangles and glyphs straight into the frame — so a row that is scrolled half off
+/// the top of the list draws its control, its border and its value over whatever the
+/// chrome put above the panel, which is the tab strip. A row is drawn once all of it is
+/// on the panel, and the panel's own padding is wide enough that it slides in over that
+/// rather than over the strip.
 fn visible(box_: Rect, panel: Rect) -> bool {
-    box_.bottom() > panel.y && box_.y < panel.bottom()
+    box_.y >= panel.y && box_.bottom() <= panel.bottom()
 }
 
 /// The eight pixels either side of a control that a hover reads as "on this one".

@@ -1119,17 +1119,18 @@ mod tests {
         // Each glyph covers half the surface, and each is sampled at the middle of its
         // own half of a two-texel atlas: the exact centre of a texel, so nothing is
         // filtered. Those points are where the tint and the flags are the only things
-        // deciding the colour.
+        // deciding the colour. The coordinates are texels, so the left column is
+        // `x` from 0 to 1 and the right column from 1 to 2.
         let mut frame = Frame::new();
         frame.begin_glyphs();
         frame.push_glyph(GlyphQuad::alpha(
             [0.0, 0.0, 32.0, 64.0],
-            [0.0, 0.0, 0.5, 1.0],
+            [0.0, 0.0, 1.0, 2.0],
             [1.0, 0.0, 0.0, 1.0],
         ));
         frame.push_glyph(GlyphQuad::color(
             [32.0, 0.0, 32.0, 64.0],
-            [0.5, 0.0, 1.0, 1.0],
+            [1.0, 0.0, 2.0, 2.0],
         ));
         frame.end_glyphs();
         let pixels = render(&mut gpu, &frame);
@@ -1142,7 +1143,7 @@ mod tests {
         // opaque blue over a black clear is half the light, which is what a premultiplied
         // blend of a premultiplied source does. A tint that only scaled the alpha would
         // draw this glyph at full strength.
-        let mut faded = GlyphQuad::color([32.0, 0.0, 32.0, 64.0], [0.5, 0.0, 1.0, 1.0]);
+        let mut faded = GlyphQuad::color([32.0, 0.0, 32.0, 64.0], [1.0, 0.0, 2.0, 2.0]);
         faded.color = [0.5, 0.5, 0.5, 0.5];
         frame.reset();
         frame.begin_glyphs();

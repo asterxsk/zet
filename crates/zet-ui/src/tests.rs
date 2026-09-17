@@ -1254,6 +1254,71 @@ fn a_focused_row_below_the_fold_is_scrolled_to_rather_than_hidden() {
 }
 
 #[test]
+fn a_row_scrolled_half_off_the_list_is_not_drawn_over_the_chrome_above_it() {
+    // Nothing under the panel clips it. A row that is scrolled half off the top would
+    // draw its control, its border and its value over the tab strip, which is chrome the
+    // panel is meant to sit on and not paint on.
+    let palette = Palette::instrument();
+    let lines: Vec<SettingLine<'static>> = (0..12)
+        .map(|_| SettingLine {
+            text: "Size",
+            control: Some(Control::Step),
+            value: "13",
+        })
+        .collect::<Vec<_>>();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let short = Size {
+        width: 800.0,
+        height: 300.0,
+    };
+    let mut input = input(&palette, &tabs, short);
+    input.settings_open = true;
+    input.settings = &lines;
+    // Two wheel notches. Small enough that the list does not reach its end, so the rows
+    // straddle the panel's top edge rather than all fitting inside it.
+    input.settings_scroll = 96.0;
+
+    let drawn = draw(&mut chrome, &input);
+    let panel = chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Settings(rect) => Some(*rect),
+            _ => None,
+        })
+        .expect("the panel is open");
+    assert!(
+        panel.y > 0.0,
+        "this window has no chrome above the panel, so nothing could escape it"
+    );
+
+    // Every control fill. `ground` is the colour a control is filled with and the panel
+    // itself is `surface-raised`, so these rectangles are exactly the panel's own.
+    let ground = color(palette.ground);
+    let controls: Vec<[f32; 4]> = drawn
+        .frame
+        .quads
+        .iter()
+        .filter(|quad| quad.color.map(f32::to_bits) == ground)
+        .map(|quad| quad.rect)
+        .collect();
+    assert!(
+        !controls.is_empty(),
+        "the panel drew no controls, so this test would pass on an empty frame"
+    );
+    for rect in controls {
+        assert!(
+            rect[1] >= panel.y && rect[1] + rect[3] <= panel.bottom(),
+            "a control at y {}..{} escaped the panel, which starts at {}",
+            rect[1],
+            rect[1] + rect[3],
+            panel.y
+        );
+    }
+}
+
+#[test]
 fn clicking_the_panel_is_not_clicking_the_grid() {
     // The panel floats over the terminal, so a click on its surface must stop there. A
     // click that fell through would type into a program the user was not looking at.
@@ -1514,6 +1579,55 @@ fn the_scrollbar_appears_only_when_there_is_something_to_scroll() {
         chrome.hit(size.width - 4.0, ROW_HEIGHT + 2.0),
         Hit::Scrollbar(Scrollbar::Above),
         "scrolled to the end, so the band above the thumb is the long one"
+    );
+}
+
+#[test]
+fn the_scrollbar_is_still_reachable_with_the_settings_panel_open() {
+    // The panel covers the right edge of the window and the scrollbar is eight pixels of
+    // that edge drawn over it, so the two overlap and only one of them can answer a
+    // click. It is the one the user can see: a thumb that shades a panel is a thumb, and
+    // a hit test that hands the click to the surface underneath is a scrollbar that
+    // cannot be dragged.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let size = window();
+    let mut chrome = chrome();
+    chrome.set_scroll(ScrollState {
+        offset: 0.0,
+        visible: 0.25,
+    });
+    let lines: Vec<SettingLine<'static>> = (0..12)
+        .map(|_| SettingLine {
+            text: "Size",
+            control: Some(Control::Step),
+            value: "13",
+        })
+        .collect::<Vec<_>>();
+    let mut with_panel = input(&palette, &tabs, size);
+    with_panel.settings_open = true;
+    with_panel.settings = &lines;
+    draw(&mut chrome, &with_panel);
+
+    let (track, thumb) = scrollbar(&chrome);
+    let panel = chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Settings(rect) => Some(*rect),
+            _ => None,
+        })
+        .expect("the panel is open");
+    assert!(
+        track.x >= panel.x,
+        "the scrollbar has to be inside the panel for this to be a conflict at all"
+    );
+
+    let (x, y) = (thumb.center().0, thumb.center().1);
+    assert_eq!(
+        chrome.hit(x, y),
+        Hit::Scrollbar(Scrollbar::Thumb),
+        "the panel swallowed a click on the thumb it is drawn under"
     );
 }
 

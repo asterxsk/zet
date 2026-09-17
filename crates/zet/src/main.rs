@@ -239,6 +239,13 @@ fn install_report(version: &str) -> String {
 
 /// Start the terminal, and say why if it cannot.
 fn run(directory: Option<PathBuf>) -> ExitCode {
+    // The first thing, because it is the only thing here that is about a previous launch.
+    // An update displaces the binary it replaced to `<exe>.old` and cannot delete it —
+    // that update is running from that very file — so the copy is left for the next time
+    // zet starts, which is now. Nothing is reported either way: the file is a copy of
+    // something already replaced, and failing to remove it costs disk and nothing else.
+    let _ = zet_update::install::clean_backups();
+
     let Ok(loop_) = EventLoop::<Wake>::with_user_event().build() else {
         // Failing here means the platform refused to make an event loop at all, which
         // happens on a thread that is not the main one and almost nowhere else.

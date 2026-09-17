@@ -666,6 +666,16 @@ impl Chrome {
         // with the first region that holds the point: pushed the other way round, every
         // control would be shadowed by the surface it sits on and no setting would ever
         // be clicked.
+        //
+        // The scrollbar comes before all of them for the same reason read the other way.
+        // It is drawn last of the three — it is the one thing on the window that is still
+        // visible over an open panel, being eight pixels of the right edge — so it is the
+        // thing a click there lands on. Pushed after the panel it would be a thumb you can
+        // see and cannot drag.
+        self.scrollbar = scroll;
+        if let Some((track, thumb)) = scroll {
+            self.regions.push(Region::Scrollbar { track, thumb });
+        }
         if let Some(panel) = &panel {
             for (line, part, rect) in &panel.controls {
                 self.regions.push(Region::Setting {
@@ -675,10 +685,6 @@ impl Chrome {
                 });
             }
             self.regions.push(Region::Settings(panel.rect));
-        }
-        self.scrollbar = scroll;
-        if let Some((track, thumb)) = scroll {
-            self.regions.push(Region::Scrollbar { track, thumb });
         }
 
         let grid = Rect::between(left, top, size.width, size.height - bottom);

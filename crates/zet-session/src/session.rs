@@ -314,8 +314,13 @@ impl Session {
     /// # Errors
     ///
     /// Fails with [`SessionError::Ended`] once the child has gone — the console's input
-    /// pipe outlives the child, so the write itself would succeed and report nothing —
-    /// and with the pty's own error if the write fails.
+    /// pipe outlives the child, so a write into it would succeed and report nothing — and
+    /// with the pty's own error once its writer has gone.
+    ///
+    /// What this does not do is wait for the bytes to reach the child. They are queued and
+    /// carried by a thread of the pty's own, because a program that is not reading its
+    /// input would otherwise block this call — and this call is made from the thread that
+    /// owns the window. See `Pty::write`.
     pub fn write(&self, bytes: &[u8]) -> Result<(), SessionError> {
         if self.is_exited() {
             return Err(SessionError::Ended);

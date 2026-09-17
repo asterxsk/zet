@@ -279,6 +279,20 @@ pub struct CursorSettings {
     pub thickness: u8,
 }
 
+/// The thinnest and thickest a cursor may be drawn, in pixels.
+///
+/// Written down once, because three things have to agree about it: the schema's check,
+/// the settings panel's stepper, and the documentation. A panel that offers a thickness
+/// the schema then complains about is a panel that lies about what it can set.
+///
+/// The unit is *physical* pixels and is not scaled by the display's DPI, which is why the
+/// top of the range is generous rather than tight: a two-pixel bar is a bar at 100% and a
+/// hairline at 200%, and the user on the 200% display is the one who needs the eight.
+pub const MIN_CURSOR_THICKNESS: u8 = 1;
+
+/// The thickest a cursor may be drawn, in pixels.
+pub const MAX_CURSOR_THICKNESS: u8 = 8;
+
 impl Default for CursorSettings {
     fn default() -> Self {
         Self {
@@ -556,9 +570,9 @@ fn check(config: &Config, diagnostics: &mut Vec<Diagnostic>) {
             config.window.opacity
         )));
     }
-    if !(1..=3).contains(&config.cursor.thickness) {
+    if !(MIN_CURSOR_THICKNESS..=MAX_CURSOR_THICKNESS).contains(&config.cursor.thickness) {
         diagnostics.push(Diagnostic::warning(format!(
-            "cursor.thickness = {} is outside 1 to 3",
+            "cursor.thickness = {} is outside {MIN_CURSOR_THICKNESS} to {MAX_CURSOR_THICKNESS}",
             config.cursor.thickness
         )));
     }
@@ -599,7 +613,10 @@ pub fn repaired(config: &Config) -> Config {
         fixed.font.size = defaults.font.size;
     }
     fixed.window.opacity = fixed.window.opacity.clamp(0.0, 1.0);
-    fixed.cursor.thickness = fixed.cursor.thickness.clamp(1, 3);
+    fixed.cursor.thickness = fixed
+        .cursor
+        .thickness
+        .clamp(MIN_CURSOR_THICKNESS, MAX_CURSOR_THICKNESS);
     if fixed.appearance.text_scale != 0.0 {
         fixed.appearance.text_scale = fixed.appearance.text_scale.clamp(0.5, 3.0);
     }
@@ -673,10 +690,18 @@ fn render(config: &Config, existing: &str) -> Result<String, ConfigError> {
         return Ok(text);
     };
     merge(document.as_table_mut(), fresh.as_table());
+    prune(document.as_table_mut(), fresh.as_table());
     Ok(document.to_string())
 }
 
 /// Copy every leaf of `fresh` into `document`, keeping comments on the way.
+///
+/// A value is only replaced when it actually says something different. The comparison is
+/// the value's own, not its rendering: an array with a comment between two of its
+/// elements renders differently from the same array without one, and a save that
+/// compared renderings would replace it and drop the comment. Comparing the values
+/// leaves an unchanged setting — and everything written around it — exactly as the user
+/// wrote it.
 fn merge(document: &mut toml_edit::Table, fresh: &toml_edit::Table) {
     for (key, value) in fresh {
         match (document.get_mut(key), value) {
@@ -684,7 +709,7 @@ fn merge(document: &mut toml_edit::Table, fresh: &toml_edit::Table) {
                 merge(existing, fresh);
             }
             (Some(toml_edit::Item::Value(existing)), toml_edit::Item::Value(fresh)) => {
-                if existing.to_string() != fresh.to_string() {
+                if !same_value(existing, fresh) {
                     // The suffix is where an inline `# comment` lives, and the prefix is
                     // the whitespace before the value. Carrying both across is the whole
                     // reason this is a merge rather than a re-serialize.
@@ -695,17 +720,86 @@ fn merge(document: &mut toml_edit::Table, fresh: &toml_edit::Table) {
                     *existing = replacement;
                 }
             }
-            (_, toml_edit::Item::Table(fresh)) => {
-                document.insert(key, toml_edit::Item::Table(fresh.clone()));
+            (Some(existing), other) => {
+                // The file held this setting in one shape and the writer produces
+                // another — an inline `background = { .. }` becomes a `[window.background]`
+                // section, for one. The setting itself is what is being replaced, and the
+                // comment on the file's line is not part of it, so the comment comes
+                // across to whatever now holds the setting.
+                let comment = existing
+                    .as_value()
+                    .and_then(|value| value.decor().suffix().cloned());
+                let mut replacement = other.clone();
+                if let (Some(comment), Some(table)) = (comment, replacement.as_table_mut()) {
+                    table.decor_mut().set_suffix(comment);
+                }
+                *existing = replacement;
             }
-            (_, toml_edit::Item::Value(fresh)) => {
-                document.insert(key, toml_edit::Item::Value(fresh.clone()));
-            }
-            (_, other) => {
+            (None, other) => {
                 document.insert(key, other.clone());
             }
         }
     }
+}
+
+/// Whether two values say the same thing, ignoring how they are written.
+///
+/// `toml_edit`'s own comparison is representation-sensitive — it includes the
+/// surrounding whitespace and comments — which is exactly what a merge must not care
+/// about. Only the value matters: `[ "a", # why\n "b" ]` and `["a", "b"]` are the same
+/// setting, and the first one's comment should survive a save that did not change it.
+///
+/// The float comparison is exact on purpose: a save re-serialises the same number the
+/// file was parsed into, so a value that has not changed is the same bits, and one that
+/// has moved by a rounding step is a change the user made.
+#[allow(clippy::float_cmp)]
+fn same_value(left: &toml_edit::Value, right: &toml_edit::Value) -> bool {
+    use toml_edit::Value;
+    match (left, right) {
+        (Value::String(left), Value::String(right)) => left.value() == right.value(),
+        (Value::Integer(left), Value::Integer(right)) => left.value() == right.value(),
+        (Value::Float(left), Value::Float(right)) => left.value() == right.value(),
+        (Value::Boolean(left), Value::Boolean(right)) => left.value() == right.value(),
+        (Value::Datetime(left), Value::Datetime(right)) => left.value() == right.value(),
+        (Value::Array(left), Value::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right.iter())
+                    .all(|(left, right)| same_value(left, right))
+        }
+        (Value::InlineTable(left), Value::InlineTable(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .all(|(key, left)| right.get(key).is_some_and(|right| same_value(left, right)))
+        }
+        _ => false,
+    }
+}
+
+/// Drop whatever `fresh` no longer has.
+///
+/// [`merge`] only ever copies forward. That is right for a leaf whose value changed and
+/// wrong for one that is gone, and one that is gone is a real case rather than a
+/// hypothetical: capturing a chord in the settings panel takes the key away from the
+/// action that held it, so `Config::keys` loses an entry. A merge that never visits a
+/// removed key leaves it in the file, and the file then says two actions hold the same
+/// chord. On the next load both are bound, the first in sort order wins, and the action
+/// the user displaced is holding the key they meant to give away.
+///
+/// Only the shape a save can produce is kept, which is also the only shape `load`
+/// accepts — every table in the schema is written out in full, and an unknown key is a
+/// parse error rather than something the user meant to keep.
+fn prune(document: &mut toml_edit::Table, fresh: &toml_edit::Table) {
+    document.retain(|key, item| match (fresh.get(key), item) {
+        (None, _) => false,
+        (Some(toml_edit::Item::Table(fresh)), toml_edit::Item::Table(existing)) => {
+            prune(existing, fresh);
+            true
+        }
+        _ => true,
+    });
 }
 
 #[cfg(test)]

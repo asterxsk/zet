@@ -63,7 +63,16 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let texel = textureSample(atlas, atlas_sampler, in.uv);
+    // The quad carries texels, not fractions of the atlas. The atlas grows downward as
+    // a session fills it, so a coordinate stored as a fraction of its height names a
+    // different row once the texture has been re-uploaded taller — and the quads for the
+    // frame being built were made before any glyph that grew it. Texels do not move, so
+    // the division happens here, against the size the texture actually has.
+    let texel = textureSample(
+        atlas,
+        atlas_sampler,
+        in.uv / vec2<f32>(textureDimensions(atlas)),
+    );
 
     if in.flags == FLAG_COLOR {
         // The atlas stored this glyph as premultiplied RGBA — an emoji is not the

@@ -58,7 +58,9 @@ impl Quad {
 pub struct GlyphQuad {
     /// `x`, `y`, `width`, `height` in physical pixels.
     pub rect: [f32; 4],
-    /// `u0`, `v0`, `u1`, `v1`, normalised within the atlas.
+    /// `x0`, `y0`, `x1`, `y1` in the atlas's texels. The fragment shader divides by the
+    /// texture's own size, because the atlas grows downward under a frame that is already
+    /// being built.
     pub uv: [f32; 4],
     /// Linear premultiplied RGBA.
     pub color: [f32; 4],

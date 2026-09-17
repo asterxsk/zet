@@ -30,8 +30,12 @@ pub const MIN_SIZE: f32 = 4.0;
 pub const MAX_SIZE: f32 = 72.0;
 
 /// The cursor thicknesses the panel offers, in pixels.
-const MIN_THICKNESS: u8 = 1;
-const MAX_THICKNESS: u8 = 8;
+///
+/// The schema's, not the panel's own: the panel offers what the configuration file
+/// accepts, and a stepper that could take a thickness past the range the schema warns
+/// about would let the user set a value the file then complains about.
+const MIN_THICKNESS: u8 = zet_config::MIN_CURSOR_THICKNESS;
+const MAX_THICKNESS: u8 = zet_config::MAX_CURSOR_THICKNESS;
 
 /// Text scales, as the system's own slider offers them.
 ///

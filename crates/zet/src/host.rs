@@ -228,9 +228,16 @@ impl Host {
     /// because the first frame should already be the right one: a high-contrast user
     /// seeing a normal-contrast window for a frame and then a white one is a flash
     /// bright enough to be worth avoiding.
+    ///
+    /// The app is told straight away, and not only when a later read notices a change.
+    /// [`Host::reread_system`] returns early when the settings have not moved, which they
+    /// have not — so a first read that only stored them in the host would leave the app
+    /// holding the defaults for the whole session: a cursor blinking against a system
+    /// that asked for no motion, and normal colours on a machine with high contrast on.
     #[must_use]
-    pub fn new(app: App) -> Self {
+    pub fn new(mut app: App) -> Self {
         let settings = SystemSettings::read();
+        app.system_accessibility(settings.reduce_motion, settings.high_contrast);
         let palette = zet_config::palette_for(app.config(), settings.highlight);
         let chrome = Chrome::new(&app.config().tabs, &app.config().window);
         let tabbed = app.config().tabs.clone();
@@ -958,6 +965,12 @@ impl Host {
             && let Some(at) = self.grid_cell(x, y)
         {
             self.app.select_to(at);
+            // The selection is drawn, and nothing else about a pointer move asks for a
+            // frame. Without this the sweep appears only when something else happens to
+            // want one, and on a still screen with the cursor's blink turned off nothing
+            // does until the button comes up — so the user drags across a screen that
+            // does not answer.
+            window.request_redraw();
         }
 
         // A resize border shows its arrow whenever the pointer is over it, and that
@@ -997,6 +1010,10 @@ impl Host {
                     if let Some(at) = self.grid_cell(x, y) {
                         self.pressed_at = Some(at);
                         self.app.select_from(at);
+                        // A press starts a selection where a previous one was, so the
+                        // thing on screen has changed even though the drag has not
+                        // started yet.
+                        window.request_redraw();
                     }
                 }
                 WinitButton::Middle => {
@@ -1022,6 +1039,9 @@ impl Host {
             // selection alone, because that is what the drag was for.
             if self.grid_cell(x, y) == Some(pressed) {
                 self.app.select_none();
+                // Clearing a selection nobody had is a frame of nothing, and clearing one
+                // somebody had is the frame that takes it off the screen.
+                window.request_redraw();
             }
         }
 
@@ -1559,6 +1579,42 @@ mod tests {
         // would become a session with no columns.
         let host = Host::new(app());
         assert_eq!(host.grid_size(), EMPTY_GRID);
+    }
+
+    #[test]
+    fn the_app_is_told_what_the_system_said_before_the_first_frame() {
+        // Two apps put on opposite answers are handed over, so that this is caught on any
+        // machine: whatever the system says, one of the two was on the wrong side of it
+        // and a `Host::new` that did not tell the app would leave it there.
+        //
+        // It matters because `reread_system` returns early when the settings have not
+        // moved, and they have not moved — a first read that reached only the host would
+        // leave the app on its defaults for the whole session, blinking a cursor on a
+        // machine that asked for no motion and drawing normal colours to a user with high
+        // contrast on.
+        let mut on = app();
+        on.system_accessibility(true, true);
+        let mut off = app();
+        off.system_accessibility(false, false);
+
+        let told_on = Host::new(on);
+        let told_off = Host::new(off);
+        assert_eq!(
+            told_on.settings, told_off.settings,
+            "both hosts read the same system"
+        );
+        for host in [&told_on, &told_off] {
+            assert_eq!(
+                host.app.reduce_motion(),
+                host.settings.reduce_motion,
+                "the app was not told what the system said about motion"
+            );
+            assert_eq!(
+                host.app.theme().slug == "zet-contrast",
+                host.settings.high_contrast,
+                "the app was not told what the system said about contrast"
+            );
+        }
     }
 
     #[test]

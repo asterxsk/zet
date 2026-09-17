@@ -302,6 +302,90 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     chrome puts the grid, and only the layout knows that. Fitting from the event fitted against
     the previous frame's layout and never corrected it, so a window opened at 1100x720 spent its
     whole life as an eighty-column terminal.
+- **`zet-config`** — a binding the configuration no longer has stayed in the file.
+  - The save merges the new settings into the file so that comments survive, and it only ever
+    copied forward. Capturing a chord in the settings panel takes the key away from the action
+    that held it, so the map the panel saves is missing an entry the file still had — and the file
+    then said two actions held the same chord. On the next load both were bound, the first in sort
+    order won, and the action the user displaced was back, holding the key they meant to give away.
+    A save now drops what the configuration no longer has, which is also the only shape `load`
+    accepts.
+- **`zet-config`** — a comment inside an array, or on an inline table, was lost by a save that did
+  not change it.
+  - Whether a value had changed was decided by comparing its *rendering*, and an array with a
+    comment between two of its elements renders differently from the same array without one — so
+    an untouched setting was replaced and the annotation went with it. The comparison is the
+    value's own now, ignoring how it is written, and a setting the file spells in one shape and
+    the writer in another keeps the comment across the change of shape.
+- **`zet-render`** — every glyph already in the atlas sampled the wrong texel rows once the atlas
+  grew.
+  - A placement stored its texture coordinates as a fraction of the atlas's height at the moment
+    it was inserted, and growing the texture downward doubles that height. Nothing rebased them,
+    and nothing could have: the quads for the frame being built are made before the growth and the
+    texture is uploaded after it. A session that filled the first shelf and then grew drew its
+    whole screen with the wrong rows — glyphs smeared into their neighbours' bitmaps. The
+    coordinates are texels now, which do not move, and the shader divides by the size the texture
+    actually has.
+- **`zet-ui`** — a settings row scrolled half off the list drew over the tab strip.
+  - The panel culled a row only when it was entirely off the panel, and there is no scissor under
+    the painter: the rectangles and glyphs go straight into the frame. A row straddling the top
+    edge put its control, its border and its value on top of the strip. A row is drawn once all of
+    it is on the panel, which the panel's own padding is wide enough to absorb.
+- **`zet-ui`** — the scrollbar could not be dragged while the settings panel was open.
+  - The panel covers the window's right edge and the scrollbar is eight pixels of that edge drawn
+    *over* it, so the thumb is visible — but its hit region was pushed after the panel's, and the
+    first region holding a point is the one that answers. A click on the thumb landed on the
+    surface beneath it and started nothing. The regions are pushed in the order the things are
+    drawn now.
+- **`zet`** — a click on the last pixel of the grid was reported to the program as one cell past
+  its last column.
+  - The grid's rectangle belongs to the window and is not a whole number of cells across, so a
+    point in the leftover strip floored to one past the end and a wheel notch at the right edge
+    sent column `cols + 1` to a program that has no such column. The cell is clamped to the
+    cells the rectangle actually holds.
+- **`zet-app`** — the release of a bound chord was sent to the shell.
+  - The press runs the action and is swallowed, but the release took a different path and reached
+    `encode_key` — which, for a program that has turned on the kitty keyboard protocol's
+    event-reporting flag, encodes it. The program was told about the release of a key it never saw
+    go down. A chord zet has claimed stays zet's on every event, which is now one question asked
+    in one place.
+- **`zet`** — the system's accessibility settings did not reach the app until something changed
+  them again.
+  - `Host::new` read them and kept them, and the only path that told the app returns early when the
+    settings have not moved — which, for a session where the user does not reach into Windows'
+    settings mid-run, is every frame. A user with "Animation effects" off got a blinking cursor
+    for the whole session, and one with high contrast on got the ordinary theme. The app is told
+    at construction now.
+- **`zet`** — dragging out a selection with the cursor's blink turned off drew nothing.
+  - A pointer move changed the selection and asked for no frame. Every other frame in the window
+    is owed to something that answers — the program's echo, the blink timer — and on a still screen
+    with the blink off there is nothing, so the sweep appeared only when the button came up. A
+    drag now asks for its own frame, as the scrollbar drag next to it already did.
+- **`zet-update`** — the binary a previous update displaced was never deleted.
+  - An update cannot remove the copy it made, because it is running from that file; the cleanup
+    that takes it away on the next launch existed and was documented as called at startup, and was
+    called from nowhere. It runs on the path that starts the terminal now, and not on the one that
+    performs an update — which is about to make the backup it would otherwise delete.
+- **`zet-pty`** — a pseudoconsole leaked when a session could not be started.
+  - `Pty::spawn` creates the console before the job object and before the reader thread, and either
+    of those can fail and return straight out. Nothing closes the console on that path — no `Pty`
+    exists yet — and it was dropped as a plain struct, so the pseudoconsole, both pipe ends and
+    the conhost process behind them stayed for the life of zet. Once per attempt, so a user
+    retrying a tab under the same pressure leaked a set each time. `Console` now closes itself
+    when nothing else has, and the deliberate closes take the handle away first so none of them
+    close it twice.
+- **`zet-pty`** — a paste into a program that was not reading its input froze the window.
+  - The console's input pipe is synchronous, so a write into it blocks until the pipe drains, and
+    the caller is the thread that owns the window. Pasting a few megabytes into a program that had
+    stopped reading stopped zet drawing frames and answering keys until the program read something
+    or was killed. Keystrokes are one or two bytes and never showed it. Input is queued now and
+    carried by a thread of the pty's own, so the most a caller pays is the copy.
+- **`zet-config`** — the documented range for `cursor.thickness` was narrower than the one the
+  settings panel offered.
+  - The schema warned outside 1 to 3 and the panel's stepper went to 8, so a user who set a
+    thickness the panel offered was told on the next launch that their own setting was out of
+    range. The unit is *physical* pixels and is not scaled by the display, so a two-pixel bar is a
+    hairline at 200% — the range is 1 to 8 now, in one constant rather than three literals.
 
 ## [0.1.0] — unreleased
 

@@ -496,14 +496,28 @@ impl App {
         if let Some(action) = self.action_for(event) {
             return self.run(action);
         }
-        // A bound chord belongs to zet even on the event `action_for` declined to run
-        // it for. Falling through to the program there would type the chord into the
-        // shell, so holding `Ctrl+Shift+F` past the first repeat would send the find
-        // bar's own binding to the prompt.
-        if event.kind == KeyKind::Release || self.bound(event.mods, event.key).is_none() {
+        // A bound chord belongs to zet even on the events `action_for` declined to run it
+        // for: the release of the key, and the auto-repeat of a toggle. Falling through to
+        // the program there would type the chord into the shell — holding `Ctrl+Shift+F`
+        // past the first repeat would send the find bar's own binding to the prompt, and
+        // the release is worse, because a program under the kitty keyboard protocol is
+        // sent key-up events and would be told about the release of a key it never saw go
+        // down.
+        if !self.owns(event) {
             self.type_into_session(event);
         }
         Vec::new()
+    }
+
+    /// Whether this event's chord is one zet has claimed for itself.
+    ///
+    /// A bound chord stays zet's on every event, including the ones no action runs for:
+    /// the release of the key, and the auto-repeat of a toggle. It is the question [`App::key`]
+    /// asks before typing, and it is asked here rather than inline so that "what does zet
+    /// keep for itself" has one answer.
+    #[must_use]
+    pub fn owns(&self, event: &KeyEvent) -> bool {
+        self.bound(event.mods, event.key).is_some()
     }
 
     /// The action a key event runs, if it runs one.
@@ -1144,6 +1158,47 @@ mod tests {
         assert!(
             commands.is_empty(),
             "the repeat ran something: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn the_release_of_a_bound_chord_is_zet_and_not_the_shell() {
+        // The press runs the action, so the release has to stay zet's. A program under
+        // the kitty keyboard protocol is sent key-up events, and the release of a chord
+        // the app swallowed on the way down is a key-up for a press the program never
+        // saw. It is also the half that a guard which simply swallowed every release
+        // would get wrong, so the key nobody claimed is checked alongside it.
+        let mut app = app();
+        let _ = app.open_tab(80, 24).expect("a shell starts");
+        let chord = Modifiers::CTRL | Modifiers::SHIFT;
+        let release = KeyEvent {
+            kind: KeyKind::Release,
+            ..key(Key::Char('F'), chord)
+        };
+
+        assert!(app.owns(&release), "a bound chord is zet's on the way up");
+        assert_eq!(
+            app.action_for(&release),
+            None,
+            "and it runs nothing on the way up"
+        );
+        assert!(
+            !app.owns(&KeyEvent {
+                kind: KeyKind::Release,
+                ..key(Key::Char('a'), Modifiers::empty())
+            }),
+            "an unbound key is still the shell's to receive"
+        );
+
+        // And a key nobody claimed does reach the program. Sending anything to it is what
+        // returns the view to the bottom — that is `Session::write`'s own rule — so a view
+        // that was scrolled back is the observation.
+        app.active_mut().expect("a tab").scroll_to(3);
+        let _ = app.key(&key(Key::Char('a'), Modifiers::empty()));
+        assert_eq!(
+            app.active().expect("a tab").scroll_offset(),
+            0,
+            "typing did not reach the program"
         );
     }
 

@@ -154,4 +154,17 @@ mod tests {
             Err(Error::NothingToInstall(_))
         ));
     }
+
+    #[test]
+    fn the_displaced_binary_is_removed_once_and_only_once() {
+        // The cleanup an update cannot do for itself. The file this makes is beside the
+        // test binary, which is inside `target/` and is a sibling of nothing that matters:
+        // the point is only that a leftover copy is there one moment and gone the next.
+        let backup = backup_path().expect("the test binary has a path");
+        std::fs::write(&backup, b"").expect("target should be writable");
+
+        assert_eq!(clean_backups(), 1, "the leftover was there to be removed");
+        assert!(!backup.exists(), "it is still there");
+        assert_eq!(clean_backups(), 0, "a second sweep found nothing");
+    }
 }

@@ -68,13 +68,19 @@ pub fn cell(x: f64, y: f64, grid: Rect, metrics: &Metrics, scale: f32) -> Option
     }
     let col = ((x - f64::from(grid.x)) / cell_width).floor();
     let row = ((y - f64::from(grid.y)) / cell_height).floor();
-    // The grid's own rectangle is the bound, but a right or bottom edge that lands
-    // exactly on a cell boundary passes `contains` and then floors to one past the last
-    // cell. Clamping rather than rejecting keeps a click on the last pixel of the window
-    // working, which is what a user aiming at the last column expects.
-    let col = col.max(0.0);
-    let row = row.max(0.0);
-    Some(Pos::new(row as usize, col as usize))
+    // The rectangle belongs to the window, not to the terminal. A grid that is not a
+    // whole number of cells across has a strip of pixels past its last column, and a
+    // point in that strip floors to one cell past the end — which the program is then
+    // told about as column `cols + 1`. Clamping to the cells the rectangle actually holds
+    // keeps the answer inside the grid the program has, and still lets a click on the
+    // last pixel of the window land on the last column, which is what a user aiming at it
+    // expects.
+    let cols = (f64::from(grid.width) / cell_width).floor().max(1.0);
+    let rows = (f64::from(grid.height) / cell_height).floor().max(1.0);
+    Some(Pos::new(
+        row.clamp(0.0, rows - 1.0) as usize,
+        col.clamp(0.0, cols - 1.0) as usize,
+    ))
 }
 
 /// A cell's size in logical pixels.
@@ -338,6 +344,24 @@ mod tests {
         let grid = Rect::new(0.0, 0.0, 800.0, 600.0);
         let at = cell(799.9, 599.9, grid, &metrics(), 1.0).expect("the last pixel is in the grid");
         assert_eq!(at, Pos::new(29, 79));
+    }
+
+    #[test]
+    fn a_click_past_the_last_whole_column_is_still_in_the_grid() {
+        // A grid 805 pixels wide holds eighty whole ten-pixel cells and five pixels of an
+        // eighty-first. A point in that strip is inside the grid's rectangle, so it used
+        // to be reported to the program as column 81 of 80 — a coordinate the program has
+        // no cell for, and one a wheel at the very edge of the window sends on every
+        // notch.
+        let grid = Rect::new(0.0, 0.0, 805.0, 605.0);
+        assert_eq!(
+            cell(804.0, 300.0, grid, &metrics(), 1.0),
+            Some(Pos::new(15, 79))
+        );
+        assert_eq!(
+            cell(300.0, 604.0, grid, &metrics(), 1.0),
+            Some(Pos::new(29, 30))
+        );
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, channel, sync_channel};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, S_OK, WAIT_OBJECT_0};
@@ -99,7 +99,13 @@ impl SpawnConfig {
 /// child dead and the session usable for reading whatever it printed on the way out.
 pub struct Pty {
     console: Option<Console>,
-    input: Option<std::fs::File>,
+    // Behind a mutex for the same reason `events` is: `Sender` is `Send` and not `Sync`,
+    // and a terminal host needs both. The lock is held for one push onto an unbounded
+    // queue and nothing else.
+    input: Option<Mutex<Sender<Vec<u8>>>>,
+    // The thread that carries those bytes to the child. Not optional, and not joined
+    // anywhere but `release`, for the reason described on `Pty::write`.
+    writer: Option<std::thread::JoinHandle<()>>,
     process: Option<OwnedHandle>,
     job: OwnedHandle,
     pid: u32,
@@ -113,10 +119,10 @@ pub struct Pty {
 }
 
 // SAFETY: every field is a handle, a channel, or a join handle. The handles are only
-// ever used through `&self` methods, which Windows serialises internally — `WriteFile`
-// on a pipe and `ResizePseudoConsole` are both safe to call from two threads at once —
-// and the one method that consumes the value takes it by value. The receiver, which is
-// the only field that is not already `Sync`, is behind a mutex.
+// ever used through `&self` methods, which Windows serialises internally —
+// `ResizePseudoConsole` is safe to call from two threads at once — and the one method
+// that consumes the value takes it by value. The receiver and the sender, which are the
+// only fields that are not already `Sync`, are each behind a mutex.
 unsafe impl Send for Pty {}
 // SAFETY: as above. This is what lets one thread read the child while another writes to
 // it, which is the only arrangement that keeps typing responsive while a program is
@@ -169,9 +175,21 @@ impl Pty {
                 message: error.to_string(),
             })?;
 
+        // The write end of the input pipe belongs to a thread of its own, because writing
+        // to it can block for ever — see `Pty::write`.
+        let (queue, queued) = channel::<Vec<u8>>();
+        let writer = std::thread::Builder::new()
+            .name("zet-pty-write".into())
+            .spawn(move || write_loop(input, &queued))
+            .map_err(|error| PtyError::Io {
+                what: "spawning the writer thread",
+                message: error.to_string(),
+            })?;
+
         Ok(Pty {
             console: Some(console),
-            input: Some(input),
+            input: Some(Mutex::new(queue)),
+            writer: Some(writer),
             process: Some(process.0),
             job,
             pid: process.1,
@@ -207,31 +225,38 @@ impl Pty {
     /// These are keystrokes or a bracketed paste, already encoded. This crate does not
     /// turn key events into bytes; that belongs to whatever owns the keymap.
     ///
+    /// # Why the bytes are queued rather than written here
+    ///
+    /// The pipe `CreatePipe` makes is synchronous, so a write into a pipe the child is not
+    /// reading blocks until the pipe drains — and the caller of this is the thread that
+    /// owns the window. A paste of a few megabytes into a program that is not reading its
+    /// input would stop zet drawing frames and answering keys until that program read
+    /// something or was killed. Keystrokes are one or two bytes and never show it, which is
+    /// what makes this worth doing rather than worth reasoning about.
+    ///
+    /// So the bytes are handed to a thread whose only job is this. The queue is unbounded
+    /// and `send` never blocks, which is the whole point: the most a caller pays is the
+    /// copy of bytes it has already built.
+    ///
     /// Takes `&self` rather than `&mut self` so that keystrokes can be written while
-    /// another thread is blocked reading the child's output. Nothing here mutates: the
-    /// write end of a pipe is safe to write to from two threads, and the only reason
-    /// this once needed `&mut` is that `std::fs::File` happens to implement `Write` for
-    /// `&File` rather than for `File`.
+    /// another thread is blocked reading the child's output.
     ///
     /// # Errors
     ///
-    /// Fails if the child has gone away.
+    /// Fails once the writer thread has gone, which is the child having gone with it.
     pub fn write(&self, bytes: &[u8]) -> Result<(), PtyError> {
-        let input = self.input.as_ref().ok_or_else(|| PtyError::Io {
+        let queue = self.input.as_ref().ok_or_else(|| PtyError::Io {
             what: "writing to the child",
             message: "the session has ended".into(),
         })?;
-        // The by-reference implementation of `Write`, which is what lets the file stay
-        // borrowed rather than owned mutably.
-        let mut handle = input;
-        handle.write_all(bytes).map_err(|error| PtyError::Io {
-            what: "writing to the child",
-            message: error.to_string(),
-        })?;
-        handle.flush().map_err(|error| PtyError::Io {
-            what: "flushing to the child",
-            message: error.to_string(),
-        })
+        queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .send(bytes.to_vec())
+            .map_err(|_| PtyError::Io {
+                what: "writing to the child",
+                message: "the session has ended".into(),
+            })
     }
 
     /// The output channel, ignoring whether a previous holder panicked.
@@ -336,14 +361,10 @@ impl Pty {
     fn release(&mut self) {
         if let Some(mut console) = self.console.take() {
             // The reader is still running and will keep draining, which is what lets this
-            // return instead of blocking.
-            // SAFETY: the console came from `CreatePseudoConsole` and `take` means this
-            // runs at most once.
-            unsafe { ClosePseudoConsole(console.handle) };
-            // Only now are the pipes ours to close. Closing them first would leave the
-            // close above flushing into a pipe with no reader on the far end; leaving
-            // them open would keep the reader from ever seeing the pipe break.
-            console.close_pipes();
+            // return instead of blocking. The console goes out of scope at the end of this
+            // block, and `close` has already nulled the handle by then, so the drop is a
+            // second call that does nothing.
+            console.close();
         }
 
         while self
@@ -358,7 +379,14 @@ impl Pty {
 
         // The write end goes last. Closing it earlier reads as "the window went away" to
         // the console, which kills the child rather than letting it exit on its own.
+        //
+        // It is the writer thread that holds it now, so the queue is closed first and the
+        // thread joined: with the console gone, a write that was blocked on it has already
+        // failed, and what is left of the thread is the drop that closes the pipe.
         drop(self.input.take());
+        if let Some(writer) = self.writer.take() {
+            let _ = writer.join();
+        }
         drop(self.process.take());
     }
 }
@@ -368,6 +396,24 @@ impl Drop for Pty {
         if self.console.is_some() {
             let _ = self.kill();
             self.release();
+        }
+    }
+}
+
+/// Carry queued bytes to the child until the queue closes.
+///
+/// Owns the write end of the console's input pipe for the life of the session, which is
+/// what keeps it open: a write end that is dropped reads as "the window went away" to the
+/// console, which kills the child rather than letting it exit on its own.
+///
+/// A write that fails ends the loop, and with it the pipe. That happens when the read end
+/// has gone — the child has exited, or the console has been closed around it — and there
+/// is nothing left to send either way. The remaining bytes are dropped rather than
+/// written into a console that is no longer there to hear them.
+fn write_loop(mut input: std::fs::File, queued: &Receiver<Vec<u8>>) {
+    while let Ok(bytes) = queued.recv() {
+        if input.write_all(&bytes).is_err() {
+            break;
         }
     }
 }
@@ -511,8 +557,7 @@ fn close_console(mut console: Console, mut output: std::fs::File) {
         }
     });
     // SAFETY: the console came from `CreatePseudoConsole` and is closed exactly once.
-    unsafe { ClosePseudoConsole(console.handle) };
-    console.close_pipes();
+    console.close();
     let _ = drain.join();
 }
 
@@ -532,13 +577,25 @@ struct Console {
 }
 
 impl Console {
-    /// Release the pipe ends the pseudoconsole was built from.
+    /// Close the pseudoconsole and the pipe ends it was built from.
     ///
-    /// This is only safe once the console behind them has been closed. Closing them
-    /// earlier cuts the console off from its own output; leaving them open after the
+    /// Idempotent, because a spawn has three ways out that overlap: the deliberate close
+    /// when `start_process` fails, the ordinary release when a session shuts down, and the
+    /// drop that catches the two failures in between.
+    ///
+    /// The pipes are only safe to close once the console behind them has gone. Closing
+    /// them earlier cuts the console off from its own output; leaving them open after the
     /// console is gone keeps the reader from ever seeing the pipe break, so the reader
     /// thread would block on a channel that can no longer carry anything.
-    fn close_pipes(&mut self) {
+    fn close(&mut self) {
+        // `HPCON` is an integer handle, and zero is what Windows uses for one that is not
+        // there. It is also what makes this idempotent.
+        if self.handle != 0 {
+            // SAFETY: the handle came from `CreatePseudoConsole` and has not been closed
+            // since — the check above is what keeps this to once.
+            unsafe { ClosePseudoConsole(self.handle) };
+            self.handle = 0;
+        }
         for handle in std::mem::take(&mut self.attached) {
             if !handle.is_null() {
                 // SAFETY: each handle came from a successful `CreatePipe`, was given to
@@ -547,6 +604,19 @@ impl Console {
                 unsafe { CloseHandle(handle) };
             }
         }
+    }
+}
+
+impl Drop for Console {
+    /// The last resort, and the reason a spawn that fails halfway does not leak.
+    ///
+    /// `Pty::spawn` creates the console before the job object and before the reader
+    /// thread, and either of those can fail and return through `?`. Dropping the console
+    /// as a plain struct there would leak the pseudoconsole, both pipe ends and the
+    /// conhost process behind them for as long as zet runs — once per attempt, so a user
+    /// retrying a tab under the same pressure leaks a set each time.
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -804,6 +874,38 @@ fn last_error(what: &'static str) -> PtyError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_console_closes_itself_when_nothing_else_does() {
+        // `Pty::spawn` makes the console before the job object and before the reader
+        // thread, and either of those can fail and return straight out. Nothing closes the
+        // console on that path — no `Pty` exists yet to do it — so the type has to. Drop
+        // it without a `Drop` and the pseudoconsole, both pipe ends and the conhost
+        // process behind them leak for the life of zet, once per attempt.
+        assert!(
+            std::mem::needs_drop::<Console>(),
+            "a console dropped without being closed leaks the pseudoconsole"
+        );
+    }
+
+    #[test]
+    fn closing_a_console_twice_is_a_second_call_that_does_nothing() {
+        // `Drop` runs `close`, and so does every deliberate path: the release on shutdown,
+        // and the draining close for a console whose process never started. The first one
+        // takes the handle away, so the rest are no-ops rather than a second
+        // `ClosePseudoConsole` on a handle that is already gone.
+        let mut console = Console {
+            handle: 0,
+            attached: [std::ptr::null_mut(); 2],
+        };
+        console.close();
+        console.close();
+        assert_eq!(console.handle, 0, "the handle came back");
+        assert!(
+            console.attached.iter().all(|handle| handle.is_null()),
+            "a pipe handle came back"
+        );
+    }
 
     fn quote(value: &str) -> String {
         let mut line = Vec::new();

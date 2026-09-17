@@ -20,6 +20,14 @@
 //! `Frame` that has already been built, or is being built, does not become a set of
 //! wrong coordinates because a glyph arrived that did not fit.
 //!
+//! It is only true because [`Placement::uv`] is in **texels**. A coordinate stored as a
+//! fraction of the atlas height is a coordinate that silently means a different row the
+//! moment the height doubles, and nothing downstream can repair it: the quads for the
+//! frame being built were made before the growth, and the texture is uploaded after it.
+//! Texels do not move, so the shader divides by the texture's own size at sample time
+//! and the property holds for a frame built across a growth, a cache that outlives one,
+//! and anything else that holds a placement for longer than a moment.
+//!
 //! # What is in it
 //!
 //! An alpha glyph is stored as white with its coverage in the alpha channel. A colour
@@ -59,7 +67,11 @@ const PADDING: u32 = 1;
 /// Where a glyph ended up.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Placement {
-    /// `u0`, `v0`, `u1`, `v1`, normalised within the atlas.
+    /// `x0`, `y0`, `x1`, `y1` in the atlas's texels.
+    ///
+    /// Texels and not a fraction of the atlas, because the atlas grows downward: a
+    /// fraction of a height that has since doubled names a row twice as far down. See
+    /// the module comment.
     pub uv: [f32; 4],
     /// The distance from the pen position to the left edge of the bitmap.
     pub left: i32,
@@ -200,17 +212,17 @@ impl Atlas {
 
         let (cell_x, cell_y) = self.allocate(cell_width, cell_height)?;
         // The pixel a glyph starts at, worked out once and used for both the copy and
-        // the texture coordinates. Deriving the copy position back out of the floating
-        // point coordinates would be a round trip through a division that is exact only
-        // by luck.
+        // the texture coordinates. Deriving the copy position back out of floating point
+        // coordinates would be a round trip through a division that is exact only by
+        // luck, and this is also what keeps the coordinates valid across a growth.
         let x = cell_x + PADDING;
         let y = cell_y + PADDING;
         let placement = Placement {
             uv: [
-                x as f32 / WIDTH as f32,
-                y as f32 / self.height as f32,
-                (x + glyph.width) as f32 / WIDTH as f32,
-                (y + glyph.height) as f32 / self.height as f32,
+                x as f32,
+                y as f32,
+                (x + glyph.width) as f32,
+                (y + glyph.height) as f32,
             ],
             left: glyph.left,
             top: glyph.top,
@@ -263,8 +275,8 @@ impl Atlas {
 
     /// Extend the pixel buffer downward.
     ///
-    /// The rows already there keep their offset, which is the whole point: every
-    /// texture coordinate handed out so far refers to the same pixel of the same glyph.
+    /// The rows already there keep their offset, which is the whole point: a placement
+    /// holds texels, so it still names the same pixel of the same glyph after this.
     fn grow(&mut self, height: u32) {
         self.pixels.resize((WIDTH * height * 4) as usize, 0);
         self.height = height;
@@ -379,8 +391,8 @@ mod tests {
         assert_eq!(placement.advance, 8.0);
         assert!(!placement.color);
 
-        let x = (placement.uv[0] * WIDTH as f32).round() as u32;
-        let y = (placement.uv[1] * atlas.height() as f32).round() as u32;
+        let x = placement.uv[0] as u32;
+        let y = placement.uv[1] as u32;
         assert_eq!(pixel(&atlas, x, y), [255, 255, 255, 255]);
         // One pixel outside is the padding, which is empty. Without it, bilinear
         // sampling would reach into the neighbouring glyph.
@@ -398,8 +410,8 @@ mod tests {
         let placement = atlas
             .insert(key(face(), 1), &ink((4, 4), 128))
             .expect("it fits");
-        let x = (placement.uv[0] * WIDTH as f32).round() as u32;
-        let y = (placement.uv[1] * atlas.height() as f32).round() as u32;
+        let x = placement.uv[0] as u32;
+        let y = placement.uv[1] as u32;
         assert_eq!(pixel(&atlas, x, y), [255, 255, 255, 128]);
     }
 
@@ -410,8 +422,8 @@ mod tests {
             .insert(key(face(), 1), &colored((4, 4)))
             .expect("it fits");
         assert!(placement.color);
-        let x = (placement.uv[0] * WIDTH as f32).round() as u32;
-        let y = (placement.uv[1] * atlas.height() as f32).round() as u32;
+        let x = placement.uv[0] as u32;
+        let y = placement.uv[1] as u32;
         assert_eq!(pixel(&atlas, x, y), [10, 20, 30, 200]);
     }
 
@@ -450,8 +462,8 @@ mod tests {
             let placement = atlas
                 .insert(key(face, id), &ink((9, 12), 255))
                 .expect("it fits");
-            let u = (placement.uv[0] * WIDTH as f32).round() as u32;
-            let v = (placement.uv[1] * atlas.height() as f32).round() as u32;
+            let u = placement.uv[0] as u32;
+            let v = placement.uv[1] as u32;
             for (x, y) in &seen {
                 let apart = placement.width + u <= *x
                     || *x + placement.width <= u
@@ -464,9 +476,11 @@ mod tests {
     }
 
     #[test]
-    fn the_atlas_grows_downward_and_keeps_every_coordinate_valid() {
-        // The load-bearing property. If growing changed the stride, or moved a shelf,
-        // every frame already built would draw the wrong glyph.
+    fn a_placement_names_the_same_texels_before_and_after_a_growth() {
+        // The load-bearing property. If growing changed the stride, or moved a shelf, or
+        // if a coordinate were a fraction of the height rather than a texel row, a frame
+        // already built would draw the wrong glyph — and a frame is built *before* the
+        // texture is re-uploaded, so nothing downstream could put it right.
         let mut atlas = Atlas::new();
         let face = face();
         let first = key(face, 1);
@@ -474,6 +488,15 @@ mod tests {
             .insert(first, &ink((16, 16), 255))
             .expect("it fits")
             .uv;
+
+        // The glyph goes at the first shelf with one pixel of padding on each side, so
+        // its rectangle is exactly this. Anything that divided by the atlas height would
+        // read the first two as a fraction and land on a different row.
+        assert_eq!(
+            first_uv,
+            [PADDING as f32, PADDING as f32, 17.0, 17.0],
+            "the coordinates should be texels, not fractions of the atlas"
+        );
 
         let mut grown_to = 0;
         for id in 2..2000u16 {
@@ -497,10 +520,17 @@ mod tests {
             "growing the atlas moved a glyph that was already placed"
         );
 
-        // And the pixel the coordinate points at is still the right ink.
-        let x = (first_uv[0] * WIDTH as f32).round() as u32;
-        let y = (first_uv[1] * atlas.height() as f32).round() as u32;
+        // And the texel it names is still the glyph's own top-left corner. The row below
+        // the 16-pixel bitmap belongs to the next shelf, so a coordinate that had drifted
+        // would land on another glyph's ink rather than on padding.
+        let x = first_uv[0] as u32;
+        let y = first_uv[1] as u32;
         assert_eq!(pixel(&atlas, x, y), [255, 255, 255, 255]);
+        assert_eq!(
+            pixel(&atlas, x, y + 16)[3],
+            0,
+            "the row past the bitmap should still be the padding below it"
+        );
     }
 
     #[test]

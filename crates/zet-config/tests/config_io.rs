@@ -134,6 +134,121 @@ fn saving_twice_writes_the_same_bytes_the_second_time() {
 }
 
 #[test]
+fn a_binding_the_config_no_longer_has_is_removed_from_the_file() {
+    // Capturing a chord in the settings panel takes the key away from the action that
+    // held it, so the map the panel saves is missing an entry the file still has. A save
+    // that only copies forward leaves both actions holding the key. On the next load the
+    // first in sort order wins, and the action the user displaced is back — holding the
+    // chord they meant to give away.
+    let dir = scratch("pruned-key");
+    let path = write(
+        &dir,
+        "config.toml",
+        "\
+[keys]
+close-tab = \"Ctrl+Shift+W\"
+find = \"Ctrl+F\"
+new-tab = \"Ctrl+Shift+T\"
+",
+    );
+
+    let mut config = load(&path).expect("loads").config;
+    config.keys.remove("close-tab");
+    config
+        .keys
+        .insert("find".to_owned(), "Ctrl+Shift+W".to_owned());
+    save(&config, &path).expect("saves");
+
+    let written = read(&path);
+    assert!(
+        !written.contains("close-tab"),
+        "a binding the config no longer has was left in the file:\n{written}"
+    );
+    let back = load(&path).expect("loads").config;
+    assert_eq!(back, config, "the file says something the config does not");
+    assert_eq!(
+        back.keys.get("find").map(String::as_str),
+        Some("Ctrl+Shift+W")
+    );
+    assert_eq!(
+        back.keys.get("new-tab").map(String::as_str),
+        Some("Ctrl+Shift+T"),
+        "an untouched binding was lost"
+    );
+}
+
+#[test]
+fn a_comment_inside_a_value_survives_a_save_that_did_not_touch_it() {
+    // A setting the save did not change must come out exactly as it went in. An array
+    // with a comment between two of its elements renders differently from one without,
+    // so a merge that decided "changed" by comparing renderings would replace the array
+    // and take the annotation with it.
+    let dir = scratch("inner-comment");
+    let path = write(
+        &dir,
+        "config.toml",
+        "\
+theme = \"nord\"
+
+[font]
+fallback = [
+    \"Consolas\", # my fallback
+    \"Segoe UI Emoji\",
+]
+size = 15.0
+",
+    );
+
+    let mut config = load(&path).expect("loads").config;
+    config.theme = "gruvbox-dark".to_owned();
+    save(&config, &path).expect("saves");
+
+    let written = read(&path);
+    assert!(
+        written.contains("# my fallback"),
+        "a comment inside an array was lost:\n{written}"
+    );
+    assert!(
+        written.contains("\"Segoe UI Emoji\""),
+        "an element of the array was lost:\n{written}"
+    );
+    assert!(
+        written.contains("theme = \"gruvbox-dark\""),
+        "the edit was not written:\n{written}"
+    );
+    assert_eq!(load(&path).expect("loads").config, config);
+}
+
+#[test]
+fn a_comment_on_an_inline_table_survives_being_written_out_as_a_section() {
+    // The writer spells this setting as a `[window.background]` section where the file
+    // had it inline, so the setting changes shape on the way out. The comment is not
+    // part of the setting and has to come across with it.
+    let dir = scratch("inline-comment");
+    let path = write(
+        &dir,
+        "config.toml",
+        "\
+[window]
+background = { kind = \"solid\", color = \"#101010\" } # my background
+",
+    );
+
+    let mut config = load(&path).expect("loads").config;
+    config.font.size = 17.0;
+    save(&config, &path).expect("saves");
+
+    let written = read(&path);
+    assert!(
+        written.contains("# my background"),
+        "the comment on the inline table was lost:\n{written}"
+    );
+    let back = load(&path).expect("loads");
+    assert!(back.diagnostics.is_empty(), "{:?}", back.diagnostics);
+    assert_eq!(back.config, config);
+}
+
+#[test]
 fn a_hand_written_file_applies_without_being_rewritten_first() {
     let dir = scratch("hand-written");
     let path = write(
