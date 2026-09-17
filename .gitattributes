@@ -6,10 +6,14 @@
 *.toml text eol=lf
 *.md text eol=lf
 
-# Windows-only binary artifacts, if any ever land in the tree.
+# Windows-only binary artifacts.
 *.exe binary
 *.dll binary
 *.pdb binary
+
+# The icon is a real binary file, and it is the one asset that is checked in rather than
+# compiled in. `text=auto` above would be guessing at its first NUL byte; this says so.
+*.ico binary
 
 # Keep generated lockfiles out of language statistics.
 Cargo.lock linguist-generated=true

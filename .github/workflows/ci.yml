@@ -42,3 +42,41 @@ jobs:
       # The tests that talk to GitHub are `#[ignore]`d so that a flaky network is never
       # the reason a pull request looks broken. Nothing here runs them; see
       # `crates/zet-update/tests/live.rs` for how to run them on purpose.
+
+  package:
+    name: the installer compiles
+    runs-on: windows-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Inno Setup 6.7.1 is in the runner image and its Chocolatey package puts ISCC.exe
+      # on PATH, so there is nothing to install.
+      - name: Inno Setup is available
+        shell: pwsh
+        run: |
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { throw 'ISCC.exe is not on PATH' }
+          Write-Host "using $iscc"
+
+      # The script's `[Files]` entries name the real binary, so the real binary has to
+      # exist. `-p zet` and not `--workspace`: the installer ships one executable.
+      - name: Build
+        run: cargo build --release --locked -p zet
+
+      # A packaging script is code, and it rots the same way. Compiling it on every push
+      # is what stops the release-day discovery that it has been broken for a month —
+      # which is the usual fate of a script that only runs when a tag is pushed.
+      - name: Compile the installer
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' |
+            Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $version) { throw 'no version found in Cargo.toml' }
+          ISCC.exe /Q "/DVersion=$version" /O"dist" packaging\zet.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          Get-ChildItem dist

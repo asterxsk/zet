@@ -21,3 +21,6 @@ desktop.ini
 /dist/
 *.pdb
 *.ilk
+
+# `packaging/make-icon.py` is importable, and importing it leaves this behind.
+__pycache__/

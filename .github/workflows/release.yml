@@ -2,10 +2,10 @@ name: Release
 
 # Tag-driven: `git tag v0.2.0 && git push origin v0.2.0` is the whole release procedure.
 #
-# NOTE: this workflow builds `-p zet`, the binary crate, which does not exist yet. It is
-# committed ahead of that crate so that the publishing path is reviewable and so that the
-# first release is a tag rather than a debugging session. It will fail until `crates/zet`
-# lands.
+# Two artifacts are published, and both are wanted. `zet-<version>-<target>.exe` is the
+# bare binary, which is what `zet-update` looks for by that exact suffix and replaces in
+# place. `zet-<version>-setup.exe` is the per-user installer from `packaging/`, which is
+# what a person downloads the first time.
 on:
   push:
     tags: ["v*"]
@@ -72,11 +72,21 @@ jobs:
           $target = 'x86_64-pc-windows-msvc'
           $name = "zet-$version-$target.exe"
           Copy-Item "target/release/zet.exe" $name
-          # A digest, published beside the archive. The updater refuses an archive whose
-          # SHA-256 does not match this file, so a truncated or substituted download never
-          # becomes the binary that runs.
-          $digest = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
-          [IO.File]::WriteAllText("$PWD/SHA256SUMS", "$digest  $name`n")
+
+          # The installer. Inno Setup is in the runner image; see packaging/README.md for
+          # why it is built the way it is.
+          ISCC.exe /Q "/DVersion=$version" /O"dist" /F"zet-$version-setup" packaging\zet.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+          $setup = "zet-$version-setup.exe"
+          Copy-Item "dist/$setup" $setup
+
+          # A digest per file, published beside them. The updater refuses an archive whose
+          # SHA-256 does not match its line here, so a truncated or substituted download
+          # never becomes the binary that runs.
+          $lines = @($name, $setup) | ForEach-Object {
+            "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $_"
+          }
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS", ($lines -join "`n") + "`n")
           Get-Content SHA256SUMS
 
       - name: Publish
@@ -87,9 +97,14 @@ jobs:
           # NOT `--prerelease`. The updater reads `/releases/latest`, which skips anything
           # GitHub marks as a pre-release, so marking a 0.x release that way would publish
           # a version no existing install could ever see.
+          #
+          # Named one by one rather than as a glob. `zet-*.exe` would work today and would
+          # quietly start uploading whatever else happens to match tomorrow.
+          $version = '${{ github.ref_name }}'.TrimStart('v')
           gh release create '${{ github.ref_name }}' `
             --title 'zet ${{ github.ref_name }}' `
             --generate-notes `
             --verify-tag `
-            "zet-*.exe" `
+            "zet-$version-x86_64-pc-windows-msvc.exe" `
+            "zet-$version-setup.exe" `
             SHA256SUMS
