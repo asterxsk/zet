@@ -281,9 +281,9 @@ pub fn adjust(config: &mut Config, id: Id, back: bool, families: &[String]) -> E
             Effect::Changed
         }
         Id::TextScale => {
-            let at = TEXT_SCALES
-                .iter()
-                .position(|(_, value)| (*value - config.appearance.text_scale).abs() < f32::EPSILON);
+            let at = TEXT_SCALES.iter().position(|(_, value)| {
+                (*value - config.appearance.text_scale).abs() < f32::EPSILON
+            });
             config.appearance.text_scale = TEXT_SCALES[step(TEXT_SCALES.len(), at, back)].1;
             Effect::Changed
         }
@@ -365,7 +365,8 @@ fn step(len: usize, at: Option<usize>, back: bool) -> usize {
 
 /// The display name of the configured theme.
 fn theme_name(config: &Config) -> String {
-    zet_config::by_slug(&config.theme).map_or_else(|| config.theme.clone(), |theme| theme.name.into())
+    zet_config::by_slug(&config.theme)
+        .map_or_else(|| config.theme.clone(), |theme| theme.name.into())
 }
 
 /// The display name of a text scale.
@@ -373,7 +374,10 @@ fn scale_name(scale: f32) -> String {
     TEXT_SCALES
         .iter()
         .find(|(_, value)| (*value - scale).abs() < f32::EPSILON)
-        .map_or_else(|| format!("{}%", (scale * 100.0).round()), |(name, _)| (*name).into())
+        .map_or_else(
+            || format!("{}%", (scale * 100.0).round()),
+            |(name, _)| (*name).into(),
+        )
 }
 
 /// `On` or `Off`.
@@ -495,7 +499,11 @@ mod tests {
         let mut config = config();
         config.cursor.shape = CursorShape::Block;
         let block = lines(&config, &parse_bindings(&config));
-        assert!(!block.iter().any(|line| line.id() == Some(Id::CursorThickness)));
+        assert!(
+            !block
+                .iter()
+                .any(|line| line.id() == Some(Id::CursorThickness))
+        );
 
         config.cursor.shape = CursorShape::Underline;
         let underline = lines(&config, &parse_bindings(&config));
@@ -575,7 +583,10 @@ mod tests {
         config.font.family = "No Such Mono".into();
         let list = candidates(&config, &["Cascadia Mono".to_owned()]);
         assert_eq!(list[0], "No Such Mono");
-        assert_eq!(lines(&config, &parse_bindings(&config)).len(), lines(&config, &parse_bindings(&config)).len());
+        assert_eq!(
+            lines(&config, &parse_bindings(&config)).len(),
+            lines(&config, &parse_bindings(&config)).len()
+        );
     }
 
     #[test]
@@ -600,7 +611,11 @@ mod tests {
     #[test]
     fn a_binding_row_shows_the_chord_that_actually_runs_it() {
         let mut config = config();
-        bind(&mut config, Action::Quit, Chord::parse("Ctrl+Q").expect("a parseable chord"));
+        bind(
+            &mut config,
+            Action::Quit,
+            Chord::parse("Ctrl+Q").expect("a parseable chord"),
+        );
         let lines = lines(&config, &parse_bindings(&config));
         assert_eq!(at(&lines, Id::Binding(Action::Quit)), "Ctrl+Q");
     }

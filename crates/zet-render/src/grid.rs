@@ -317,7 +317,11 @@ pub fn draw_grid(
                 // and two weights of it is the whole of what this app knows about
                 // depth.
                 if let Some(found) = found {
-                    let alpha = if marks.active == Some(found) { 1.0 } else { 0.5 };
+                    let alpha = if marks.active == Some(found) {
+                        1.0
+                    } else {
+                        0.5
+                    };
                     frame.push_quad(Quad::new(
                         rect[0],
                         rect[1],

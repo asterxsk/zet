@@ -21,8 +21,7 @@ use crate::fonts::GlyphSource;
 use crate::geometry::ROW_HEIGHT;
 use crate::{
     Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, Rect, ScrollState, Scrollbar,
-    thumb_offset,
-    SettingLine, SettingPart, Size, TabInfo,
+    SettingLine, SettingPart, Size, TabInfo, thumb_offset,
 };
 
 /// A font source with no font in it.
@@ -995,7 +994,9 @@ fn every_control_is_a_region_that_names_its_line() {
             .iter()
             .find_map(|region| match region {
                 crate::Region::Setting {
-                    line: at, part, rect,
+                    line: at,
+                    part,
+                    rect,
                 } if *at == line => Some((*part, *rect)),
                 _ => None,
             })
@@ -1023,7 +1024,10 @@ fn a_stepper_answers_twice_and_everything_else_once() {
         .iter()
         .filter_map(|region| match region {
             crate::Region::Setting {
-                line: 4, part, rect, ..
+                line: 4,
+                part,
+                rect,
+                ..
             } => Some((*part, *rect)),
             _ => None,
         })
@@ -1031,7 +1035,10 @@ fn a_stepper_answers_twice_and_everything_else_once() {
     assert_eq!(halves.len(), 2, "the size row is not two halves");
     let (left, right) = (halves[0].1, halves[1].1);
     assert!((left.width - right.width).abs() < f32::EPSILON);
-    assert!((left.right() - right.x).abs() < f32::EPSILON, "the halves meet");
+    assert!(
+        (left.right() - right.x).abs() < f32::EPSILON,
+        "the halves meet"
+    );
     assert_eq!(
         chrome.hit(left.x + 2.0, left.y + 2.0),
         Hit::Setting {
@@ -1180,7 +1187,10 @@ fn the_row_the_keyboard_is_on_wears_the_brightest_edge_and_the_others_do_not() {
         let drawn = draw(&mut chrome, &input);
         edge_of(&chrome, &drawn, 1)
     };
-    assert_ne!(plain, focused, "the focused row looks exactly like the rest");
+    assert_ne!(
+        plain, focused,
+        "the focused row looks exactly like the rest"
+    );
 
     // And the row that is not focused is untouched by it, which is the half a test that
     // only compared two frames would miss.

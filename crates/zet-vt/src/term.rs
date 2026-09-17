@@ -2158,7 +2158,11 @@ mod tests {
         feed(&mut t, b"\x1b[3;5H\x1b7\x1b[=1u");
         feed(&mut t, b"\x1b[9;9H\x1b[u");
         assert_eq!(t.modes().keyboard, KeyboardFlags::DISAMBIGUATE);
-        assert_eq!(t.cursor(), Pos::new(2, 4), "and it still restored the cursor");
+        assert_eq!(
+            t.cursor(),
+            Pos::new(2, 4),
+            "and it still restored the cursor"
+        );
     }
 
     #[test]

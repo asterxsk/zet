@@ -183,8 +183,7 @@ fn scan(line: &[Glyph], needle: &[char], sensitive: bool, limit: usize, out: &mu
 /// Whether a run of the line is the needle.
 fn agrees(run: &[Glyph], needle: &[char], sensitive: bool) -> bool {
     run.iter().zip(needle).all(|(glyph, want)| {
-        glyph.ch == *want
-            || (!sensitive && glyph.ch.to_lowercase().eq(want.to_lowercase()))
+        glyph.ch == *want || (!sensitive && glyph.ch.to_lowercase().eq(want.to_lowercase()))
     })
 }
 

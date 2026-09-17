@@ -270,7 +270,12 @@ impl Gpu {
     /// way to test that on a machine that *has* one is to ask for the fallback by name and
     /// push a frame through it. A device made from WARP is a device made from WARP whether
     /// or not it was the machine's first choice.
-    fn offscreen_on(adapter: &wgpu::Adapter, width: u32, height: u32, scale: f32) -> GpuResult<Self> {
+    fn offscreen_on(
+        adapter: &wgpu::Adapter,
+        width: u32,
+        height: u32,
+        scale: f32,
+    ) -> GpuResult<Self> {
         let (device, queue) = Self::open(adapter)?;
 
         // The same format a window would be given, so that what a readback returns is
@@ -941,10 +946,11 @@ mod tests {
     /// with no adapter at all.
     fn software_device() -> Option<Gpu> {
         let instance = wgpu::Instance::default();
-        let requested = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            force_fallback_adapter: true,
-            ..Default::default()
-        }));
+        let requested =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                force_fallback_adapter: true,
+                ..Default::default()
+            }));
         let adapter = match requested {
             Ok(adapter) => adapter,
             Err(error) => {

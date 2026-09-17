@@ -87,7 +87,12 @@ pub(crate) struct Panel {
 /// Lines that do not fit are scrolled rather than dropped. A panel that silently stops
 /// listing settings once the window is short is a panel where the user cannot find a
 /// setting and has no way to tell that it is there.
-pub(crate) fn panel(paint: &mut Painter<'_>, input: &ChromeInput<'_>, top: f32, bottom: f32) -> Panel {
+pub(crate) fn panel(
+    paint: &mut Painter<'_>,
+    input: &ChromeInput<'_>,
+    top: f32,
+    bottom: f32,
+) -> Panel {
     let palette = *input.palette;
     // Narrower than 380 pixels of window means the panel is the window. Letting it hang
     // off the left edge would put the heading of a section nobody can read behind the
@@ -110,7 +115,9 @@ pub(crate) fn panel(paint: &mut Painter<'_>, input: &ChromeInput<'_>, top: f32, 
     // second walk is the one that draws.
     let content = list_height(input.settings);
     let viewport = (rect.height - 2.0 * PAD).max(0.0);
-    let mut scroll = input.settings_scroll.clamp(0.0, (content - viewport).max(0.0));
+    let mut scroll = input
+        .settings_scroll
+        .clamp(0.0, (content - viewport).max(0.0));
     // A row the keyboard is on has to be on screen, or the keys move a highlight nobody
     // can see and the panel looks broken rather than scrolled.
     if let Some(focus) = input.settings_focus {
@@ -155,7 +162,12 @@ pub(crate) fn panel(paint: &mut Painter<'_>, input: &ChromeInput<'_>, top: f32, 
         if visible(row, rect) {
             // The label grows into whatever the control does not take, which is what
             // keeps a long family name from running under its own value.
-            let label_box = Rect::new(row.x, y, (row.width - CONTROL_WIDTH - LABEL_GAP).max(0.0), ROW);
+            let label_box = Rect::new(
+                row.x,
+                y,
+                (row.width - CONTROL_WIDTH - LABEL_GAP).max(0.0),
+                ROW,
+            );
             let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
             paint.centered(setting.text, label_box, style);
             draw_control(paint, input, control, control_rect, setting.value, focused);
@@ -355,7 +367,10 @@ pub(crate) fn find_bar(paint: &mut Painter<'_>, input: &ChromeInput<'_>, height:
     );
 
     let (count, color) = match find.position {
-        Some((at, total)) => (format!("{at} of {total}{}", plus(find.capped)), palette.ink_mid),
+        Some((at, total)) => (
+            format!("{at} of {total}{}", plus(find.capped)),
+            palette.ink_mid,
+        ),
         None if find.query.is_empty() => (String::new(), palette.ink_dim),
         None => ("No results".to_owned(), palette.ink_dim),
     };

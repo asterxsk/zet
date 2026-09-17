@@ -34,7 +34,6 @@ use zet_session::Waker;
 use crate::host::Host;
 use crate::waker::{ProxyWaker, Wake};
 
-
 /// What `zet --help` prints.
 const USAGE: &str = "\
 zet — a terminal for Windows, built around the grid
@@ -273,7 +272,11 @@ mod tests {
         assert!(line.starts_with("zet "), "{line}");
         assert!(line.contains(env!("CARGO_PKG_VERSION")), "{line}");
         assert!(line.contains(zet_update::TARGET), "{line}");
-        assert_eq!(line.lines().count(), 1, "a --version that wraps gets truncated");
+        assert_eq!(
+            line.lines().count(),
+            1,
+            "a --version that wraps gets truncated"
+        );
     }
 
     #[test]
