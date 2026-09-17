@@ -76,7 +76,7 @@
       <table>
         <caption>Policy</caption>
         <tbody>
-          <tr><th scope="row">Effective date</th><td class="k">17 September 2026</td></tr>
+          <tr><th scope="row">Effective date</th><td class="k">18 September 2026</td></tr>
           <tr><th scope="row">Applies to</th><td>zet ("the application"), a terminal emulator for Windows distributed from <a href="https://github.com/asterxsk/zet">github.com/asterxsk/zet</a></td></tr>
         </tbody>
       </table>
@@ -88,7 +88,9 @@
         reports, or usage data.</li>
         <li>zet does <strong>not</strong> have accounts, logins, or any server it operates.</li>
         <li>zet <strong>does</strong> make one kind of outbound request: an update check against the
-        public GitHub Releases API. It can be turned off.</li>
+        public GitHub Releases API. It happens only when you type <code>zet --check-update</code> or
+        <code>zet --update</code>, and there is nothing to turn off, because nothing makes it on its
+        own.</li>
         <li>Everything your shell prints stays on your machine.</li>
       </ul>
 

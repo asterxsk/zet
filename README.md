@@ -142,10 +142,9 @@ matches the release — not who published it. What that does and does not buy yo
 ## Privacy
 
 zet has no telemetry, no accounts, and no server. The only requests it can make are the ones
-behind `zet --check-update` and `zet --update`, and they happen only when you type one. zet makes
-no request on its own, ever; the only thing such a request would disclose is your IP address to
-GitHub. [PRIVACY.md](PRIVACY.md) says exactly what is sent, what is not, and what is written to
-your disk.
+behind `zet --check-update` and `zet --update`, and they happen only when you type one — nothing
+in zet asks on its own, ever. A request discloses your IP address to GitHub and nothing else.
+[PRIVACY.md](PRIVACY.md) says exactly what is sent, what is not, and what is written to your disk.
 
 ## Security
 

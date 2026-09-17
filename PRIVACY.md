@@ -1,19 +1,20 @@
 # Privacy Policy
 
-**Effective date:** 17 September 2026
+**Effective date:** 18 September 2026
 **Applies to:** zet ("the application"), a terminal emulator for Windows distributed from
 <https://github.com/asterxsk/zet>.
 
 zet is a local desktop application. It has no user accounts, no server of its own, and no
-telemetry. This policy describes the one situation in which the application contacts the
-network on its own, and what it writes to your disk.
+telemetry. This policy describes the only situation in which the application contacts the
+network, and what it writes to your disk.
 
 ## Summary
 
 - zet does **not** collect, transmit, or store telemetry, analytics, crash reports, or usage data.
 - zet does **not** have accounts, logins, or any server it operates.
 - zet **does** make one kind of outbound request: an update check against the public GitHub
-  Releases API. It can be turned off.
+  Releases API. It happens only when you type `zet --check-update` or `zet --update`, and there
+  is nothing to turn off, because nothing makes it on its own.
 - Everything your shell prints stays on your machine.
 
 ## What stays on your machine
