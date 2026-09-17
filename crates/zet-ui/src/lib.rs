@@ -1,0 +1,557 @@
+//! zet's chrome: the titlebar, the tab strip, the caption buttons, the scrollbar, the
+//! settings panel, and the find bar.
+//!
+//! This crate is pure computation on the CPU. It opens no window, touches no device, and
+//! never reads a terminal grid. It is handed a description of the window, it fills a
+//! [`zet_render::Frame`] with rectangles, and it answers where the user just clicked.
+//! That is the whole of it, and the boundary is load-bearing: everything the chrome does
+//! can be asserted against a frame and a hit test, with no window and no GPU in the loop.
+//!
+//! # Two planes, never mixed
+//!
+//! [DESIGN.md] splits the window into the **chrome plane**, which is zet's, and the
+//! **grid plane**, which is the program's. The chrome draws from [`zet_config::Palette`]
+//! and nothing else; the grid draws from [`zet_config::Theme`] and nothing else; and the
+//! signal colour stops at the grid's boundary. This crate is the strongest form of that
+//! rule, because it *cannot* break it: it holds a palette for the length of one call and
+//! has no way to name a theme at all. The test that draws a whole frame and checks every
+//! colour against the palette is there because that is a property a regression could take
+//! away, not a property the types make impossible.
+//!
+//! # What the chrome is not told
+//!
+//! Three things it needs are not in [`ChromeInput`], and they are worth naming here
+//! because each one is a deliberate limit rather than an oversight:
+//!
+//! - **Nothing about the grid.** Not the cursor, not the scrollback, not the cell size.
+//! - **No clock.** The indicator's travel is measured against a time the caller supplies
+//!   through [`Chrome::set_time`], because a transition that reads `Instant::now` cannot
+//!   be asserted seventy milliseconds into itself. A caller that never sets one gets a
+//!   bar that stays where it was, which is a bug that shows up immediately rather than a
+//!   flashing one that does not.
+//! - **No scrollback position and no find bar.** They change without the configuration
+//!   changing, so they arrive through [`Chrome::set_scroll`] and [`Chrome::set_find_open`]
+//!   rather than being carried on every frame.
+//!
+//! # Text
+//!
+//! The chrome's typeface is IBM Plex Sans at two weights, self-hosted in this crate and
+//! registered into the font database before anything is resolved — see [`fonts`]. The
+//! layout asks for a character and is told where its pixels are; it never rasterises,
+//! never owns a texture, and never knows that an atlas exists. The atlas it draws from
+//! is the renderer's, shared with the grid: one texture, two faces, told apart by the
+//! face in each glyph's key.
+//!
+//! **Known gap:** DESIGN.md asks for tabular figures in every number the chrome draws,
+//! and `zet_font::GlyphSpec` has no way to ask for an OpenType feature. The numbers are
+//! set in Plex Sans's default (proportional) figures. Faking it by spacing digits by hand
+//! would be a lie about the font's own metrics, so it is left as it is and recorded here.
+//!
+//! [DESIGN.md]: https://github.com/asterxsk/zet/blob/main/DESIGN.md
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+#![warn(clippy::all, clippy::pedantic)]
+// Two casts, both of them a count or a glyph dimension turned into a distance in the
+// same units as the window it is drawn in: a tab index, a glyph's width, a number of
+// rails cells. All of them are smaller than a window and a window is smaller than the
+// 2^24 where `f32` starts rounding, so every one of these is exact. The alternative is
+// an attribute per line saying "a terminal is not sixteen million pixels wide", which is
+// not a fact any reader needs told.
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+
+pub mod fonts;
+mod geometry;
+mod overlays;
+mod paint;
+mod strip;
+#[cfg(test)]
+mod tests;
+
+use std::mem;
+
+use zet_config::{TabPosition, TabSettings, WindowSettings};
+use zet_render::{GlyphQuad, Quad};
+
+pub use crate::fonts::GlyphSource;
+pub use crate::geometry::{Rect, Size};
+
+/// The height of the one row that holds the app name, the tabs, the drag region, and the
+/// caption buttons.
+///
+/// Exposed because the caller has to lay a window out around it, and because a window
+/// with no tabs is exactly this much shorter.
+pub use crate::geometry::ROW_HEIGHT;
+
+/// Everything the chrome needs to draw itself for one frame.
+pub struct ChromeInput<'a> {
+    /// The chrome palette. The only colours the chrome has.
+    pub palette: &'a zet_config::Palette,
+    /// The tabs, in the order they are shown.
+    pub tabs: &'a [TabInfo],
+    /// The number of the active tab, or `None` when nothing is open.
+    pub active: Option<u32>,
+    /// Whether the settings panel is open.
+    pub settings_open: bool,
+    /// The text in the titlebar's name slot, which the app name goes in.
+    pub window_title: &'a str,
+    /// The whole window's size in logical pixels.
+    pub size: Size,
+    /// The DPI scale.
+    pub scale: f32,
+    /// Whether the window is maximized, which drops the bottom hairline.
+    pub maximized: bool,
+    /// Whether the OS asks for reduced motion. Read live; it can change mid-session.
+    pub reduce_motion: bool,
+    /// The pointer's position in logical pixels, for hover states that are not a tab's.
+    ///
+    /// A tab's own hover is [`TabInfo::hovered`], because the caller has already asked
+    /// [`Chrome::hit`] and knows the answer better than a rectangle comparison does.
+    pub pointer: Option<(f32, f32)>,
+}
+
+/// One tab, as the strip needs to know it.
+pub struct TabInfo {
+    /// The tab's number. Creation order, never renumbered on close.
+    pub index: u32,
+    /// The tab's own title. The strip does not draw it — a tab is a number — and it is
+    /// here because the caller has one and the next version of this will want it.
+    pub title: String,
+    /// Whether the pointer is over this tab's cell.
+    pub hovered: bool,
+}
+
+/// What the chrome took for itself, so the caller knows where the grid goes.
+///
+/// All logical pixels, and all zero for a window with nothing in it. The grid is what is
+/// left after the chrome has taken its edges, which is why the chrome answers this rather
+/// than the caller working it out: two places computing "where does the grid go" is one
+/// place too many.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct Layout {
+    /// The height of the titlebar and tab-strip row, or 0 when there are no tabs.
+    pub top: f32,
+    /// The width of the vertical tab rail, or 0 in horizontal mode.
+    pub left: f32,
+    /// The height of the find bar, or 0 when it is closed.
+    pub bottom: f32,
+    /// The rect the terminal grid occupies, in logical pixels.
+    pub grid: Rect,
+}
+
+/// What the user hit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hit {
+    /// A tab, by its number.
+    Tab(u32),
+    /// The new-tab mark.
+    NewTab,
+    /// A tab's close affordance.
+    ///
+    /// Never returned by this version. DESIGN.md's strip is a number, a bar, and nothing
+    /// else, and its hover rule is exhaustive — the index moves to `ink-mid` and the bar
+    /// previews, and nothing else happens — so a close mark on a tab would be an
+    /// invention this crate is not entitled to make. Closing is a keyboard action
+    /// (`close-tab`, which the default keymap binds) and, by convention, a middle click
+    /// on [`Hit::Tab`]. The variant stays because a caller matching on `Hit` should not
+    /// have to be rewritten when that convention becomes an affordance.
+    CloseTab(u32),
+    /// A caption button.
+    Caption(Caption),
+    /// The draggable region between the last tab and the caption buttons.
+    Drag,
+    /// The settings panel is open and the point is inside it.
+    Settings,
+    /// The scrollbar.
+    Scrollbar(Scrollbar),
+    /// Nothing the chrome owns.
+    None,
+}
+
+/// A caption button.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Caption {
+    /// Minimize.
+    Minimize,
+    /// Maximize or restore.
+    Maximize,
+    /// Close.
+    Close,
+}
+
+impl Caption {
+    /// The character the mark is drawn as.
+    ///
+    /// Chosen from what the chrome's own face certainly has rather than from a symbol
+    /// font: a minus sign, a multiplication sign, and a white square. The first and last
+    /// are the shapes Windows draws anyway; the middle one is the square-alike, and it
+    /// is the reason a caption is drawn from text rather than from four rectangles.
+    #[must_use]
+    pub const fn mark(self) -> char {
+        match self {
+            Self::Minimize => '\u{2212}',
+            Self::Maximize => '\u{25a1}',
+            Self::Close => '\u{00d7}',
+        }
+    }
+}
+
+/// Where on the scrollbar the point fell.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scrollbar {
+    /// On the thumb.
+    Thumb,
+    /// In the band, above the thumb.
+    Above,
+    /// In the band, below the thumb.
+    Below,
+}
+
+/// Where the scrollback is, for the scrollbar.
+///
+/// The chrome is not given the terminal, so the two numbers the scrollbar is made of are
+/// handed over separately. Both are fractions rather than counts, because a scrollbar is
+/// a picture of a proportion and the counts behind it are the grid plane's business.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ScrollState {
+    /// How far down the scrollback the viewport sits, from 0 at the top to 1 at the
+    /// bottom.
+    pub offset: f32,
+    /// The fraction of the scrollback the viewport shows.
+    ///
+    /// One or more means there is nothing to scroll, and a terminal spends most of its
+    /// life there: the default draws no scrollbar at all.
+    pub visible: f32,
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        Self {
+            offset: 0.0,
+            visible: 1.0,
+        }
+    }
+}
+
+/// What the chrome remembered from one frame to the next.
+enum Region {
+    Tab { index: u32, rect: Rect },
+    NewTab(Rect),
+    Caption { caption: Caption, rect: Rect },
+    Drag(Rect),
+    Settings(Rect),
+    Scrollbar { track: Rect, thumb: Rect },
+}
+
+impl Region {
+    /// Whether the point is in this region, and what it is if so.
+    fn hit(&self, x: f32, y: f32) -> Option<Hit> {
+        match self {
+            Self::Tab { index, rect } if rect.contains(x, y) => Some(Hit::Tab(*index)),
+            Self::NewTab(rect) if rect.contains(x, y) => Some(Hit::NewTab),
+            Self::Caption { caption, rect } if rect.contains(x, y) => Some(Hit::Caption(*caption)),
+            Self::Drag(rect) if rect.contains(x, y) => Some(Hit::Drag),
+            Self::Settings(rect) if rect.contains(x, y) => Some(Hit::Settings),
+            Self::Scrollbar { track, thumb } if track.contains(x, y) => {
+                Some(Hit::Scrollbar(if thumb.contains(x, y) {
+                    Scrollbar::Thumb
+                } else if y < thumb.y {
+                    Scrollbar::Above
+                } else {
+                    Scrollbar::Below
+                }))
+            }
+            _ => None,
+        }
+    }
+}
+
+/// The window's chrome, and what it remembers between frames.
+///
+/// Cheap to build and cheap to keep: the only state is the previous frame's shape, which
+/// is what lets the indicator know where it is coming from. Rebuild it when the
+/// configuration changes and not otherwise.
+pub struct Chrome {
+    position: TabPosition,
+    /// What the caller last said the time was. The chrome never reads a clock.
+    now: f32,
+    /// The active tab as of the last layout, which is how a change is noticed.
+    active: Option<u32>,
+    /// The indicator's travel, while one is in flight.
+    travel: Option<strip::Travel>,
+    /// Where the indicator was drawn last frame.
+    ///
+    /// Kept so that a change mid-travel continues from where the bar *is* rather than
+    /// from the tab it was heading for. That is the difference between holding down
+    /// `Ctrl+Tab` and watching one bar move, and holding it down and watching a bar
+    /// snap backwards on every step.
+    indicator: Option<Rect>,
+    find_open: bool,
+    scroll: ScrollState,
+    layout: Layout,
+    regions: Vec<Region>,
+    /// Two arrays the layout fills and the frame is then given, so that every rectangle
+    /// goes into one batch and every glyph into the next. Retained across frames for the
+    /// same reason a frame is: this runs sixty times a second.
+    quads: Vec<Quad>,
+    glyphs: Vec<GlyphQuad>,
+}
+
+impl Chrome {
+    /// Build the chrome for one configuration. Cheap; rebuild it when the config changes.
+    #[must_use]
+    pub fn new(tabs: &TabSettings, window: &WindowSettings) -> Self {
+        // Nothing in `WindowSettings` reaches the chrome. The background and the opacity
+        // are the grid plane's, remembering where the window was is the app's, and
+        // whether the window *is* maximized arrives per frame in `ChromeInput` because it
+        // changes without the configuration changing. The argument is here because the
+        // two are written down together and a caller should not have to remember which of
+        // them the chrome wanted.
+        let _ = window;
+        Self {
+            position: tabs.position,
+            now: 0.0,
+            active: None,
+            travel: None,
+            indicator: None,
+            find_open: false,
+            scroll: ScrollState::default(),
+            layout: Layout::default(),
+            regions: Vec::new(),
+            quads: Vec::new(),
+            glyphs: Vec::new(),
+        }
+    }
+
+    /// Tell the chrome what time it is, in seconds.
+    ///
+    /// Called before [`Chrome::layout`], every frame. The chrome reads no clock of its
+    /// own, which is what makes the indicator's travel a function of its inputs and
+    /// therefore a thing a test can stand in the middle of. Any monotonically increasing
+    /// clock will do — only differences are ever taken — and seconds is the unit
+    /// `Instant` hands out.
+    pub fn set_time(&mut self, now: f32) {
+        self.now = now;
+    }
+
+    /// Whether the find bar is open, which is what `Layout::bottom` reports.
+    pub fn set_find_open(&mut self, open: bool) {
+        self.find_open = open;
+    }
+
+    /// Where the scrollback is, for the scrollbar.
+    pub fn set_scroll(&mut self, scroll: ScrollState) {
+        self.scroll = scroll;
+    }
+
+    /// Draw the chrome for this frame into `frame`.
+    ///
+    /// The frame is appended to rather than replaced, so a caller draws the grid and then
+    /// the chrome over it. `frame.clear` is left alone for the same reason: the ground
+    /// behind everything is the window's, and the chrome has no opinion about it.
+    pub fn layout(
+        &mut self,
+        input: &ChromeInput<'_>,
+        fonts: &mut dyn GlyphSource,
+        frame: &mut zet_render::Frame,
+    ) -> Layout {
+        // The two arrays are moved out for the duration rather than borrowed, because the
+        // planner needs `&mut self` and the painter needs `&mut` of both. Taking them also
+        // means they are put back with their capacity intact, which is the point of
+        // keeping them at all.
+        let mut quads = mem::take(&mut self.quads);
+        let mut glyphs = mem::take(&mut self.glyphs);
+        quads.clear();
+        glyphs.clear();
+        self.regions.clear();
+
+        let layout = {
+            let mut paint = paint::Painter::new(fonts, &mut quads, &mut glyphs, input.scale);
+            self.plan(input, &mut paint)
+        };
+
+        // Every rectangle in one batch and every glyph in the next. The frame draws its
+        // batches in the order they were opened, so this is also the layering rule: the
+        // chrome's text is always over the chrome's surfaces, without the layout having to
+        // interleave anything.
+        if !quads.is_empty() {
+            frame.begin_quads();
+            for quad in &quads {
+                frame.push_quad(*quad);
+            }
+            frame.end_quads();
+        }
+        if !glyphs.is_empty() {
+            frame.begin_glyphs();
+            for glyph in &glyphs {
+                frame.push_glyph(*glyph);
+            }
+            frame.end_glyphs();
+        }
+
+        self.quads = quads;
+        self.glyphs = glyphs;
+        layout
+    }
+
+    /// What is at this point, in logical pixels relative to the window's top-left.
+    ///
+    /// Answers from the layout of the most recent [`Chrome::layout`] call. Regions are
+    /// tested in the order the later ones would be drawn over the earlier ones, so a
+    /// caption button wins over the panel it floats above and a tab wins over the
+    /// settings panel it is never underneath.
+    #[must_use]
+    pub fn hit(&self, x: f32, y: f32) -> Hit {
+        self.regions
+            .iter()
+            .find_map(|region| region.hit(x, y))
+            .unwrap_or(Hit::None)
+    }
+
+    /// The layout of the most recent [`Chrome::layout`] call.
+    #[must_use]
+    pub const fn last_layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    /// Everything the last layout made hittable.
+    ///
+    /// Kept crate-private rather than exposed, because a caller that wants to know where
+    /// a tab is has [`Chrome::hit`], and a second way to ask is a second thing to keep
+    /// true. The crate's own tests use it, which is the one caller that needs the
+    /// question answered from the other direction.
+    #[cfg(test)]
+    pub(crate) fn regions(&self) -> &[Region] {
+        &self.regions
+    }
+
+    /// Draw one frame, and say what the chrome took.
+    fn plan(&mut self, input: &ChromeInput<'_>, paint: &mut paint::Painter<'_>) -> Layout {
+        let size = input.size;
+        let strip_plan = strip::plan(paint, input, self.position);
+        let top = if strip_plan.row { ROW_HEIGHT } else { 0.0 };
+        let left = if strip_plan.row && self.position == TabPosition::Left {
+            crate::geometry::RAIL_WIDTH
+        } else {
+            0.0
+        };
+        let bottom = if self.find_open {
+            overlays::find_bar_height()
+        } else {
+            0.0
+        };
+
+        // The indicator's motion is settled before anything is drawn, because the
+        // indicator is what reads it.
+        self.retarget(input, &strip_plan);
+        let fade = self
+            .travel
+            .as_ref()
+            .map(|travel| (travel.from_index, strip::progress(self.now - travel.start)));
+
+        strip::draw(paint, &strip_plan, input, fade);
+        if let Some((rect, color)) =
+            strip::indicator(&strip_plan, input, self.travel.as_ref(), self.now)
+        {
+            paint.fill(rect, color);
+            self.indicator = Some(rect);
+        } else {
+            self.indicator = None;
+        }
+        if let Some(rect) = strip::hover_preview(&strip_plan, input, self.travel.is_some()) {
+            paint.fill(rect, input.palette.signal_dim);
+        }
+
+        let panel = input
+            .settings_open
+            .then(|| overlays::panel(paint, input, top, bottom));
+        if bottom > 0.0 {
+            overlays::find_bar(paint, input, bottom);
+        }
+        let scroll = overlays::scrollbar(paint, input, top, bottom, self.scroll);
+
+        // Last, because these are the window's own controls and nothing in zet may cover
+        // them: with no tabs there is no row, and they are the only thing left on the
+        // window that can be clicked.
+        strip::captions(paint, &strip_plan, input);
+
+        for (caption, rect) in &strip_plan.captions {
+            self.regions.push(Region::Caption {
+                caption: *caption,
+                rect: *rect,
+            });
+        }
+        for (index, rect) in &strip_plan.tabs {
+            self.regions.push(Region::Tab {
+                index: *index,
+                rect: *rect,
+            });
+        }
+        if let Some(rect) = strip_plan.plus {
+            self.regions.push(Region::NewTab(rect));
+        }
+        if let Some(rect) = strip_plan.drag {
+            self.regions.push(Region::Drag(rect));
+        }
+        if let Some(rect) = panel {
+            self.regions.push(Region::Settings(rect));
+        }
+        if let Some((track, thumb)) = scroll {
+            self.regions.push(Region::Scrollbar { track, thumb });
+        }
+
+        let grid = Rect::between(left, top, size.width, size.height - bottom);
+        self.layout = Layout {
+            top,
+            left,
+            bottom,
+            grid,
+        };
+        self.layout
+    }
+
+    /// Notice a change of active tab, and start the indicator moving if it is one.
+    fn retarget(&mut self, input: &ChromeInput<'_>, strip_plan: &strip::Strip) {
+        // A travel that has arrived, or that belongs to the other position of the strip,
+        // is over.
+        if self.travel.as_ref().is_some_and(|travel| {
+            travel.position != self.position || self.now - travel.start >= crate::geometry::TRAVEL
+        }) {
+            self.travel = None;
+        }
+
+        if input.active == self.active {
+            return;
+        }
+        let previous = self.active;
+        self.active = input.active;
+
+        // A bar travelling from nowhere is a bar appearing, and one that cannot arrive is
+        // a bar that would have to leave the screen to get there. Neither is the motion
+        // DESIGN.md asks for, so neither starts a travel.
+        let Some(from) = self.indicator else {
+            self.travel = None;
+            return;
+        };
+        let Some(previous) = previous else {
+            self.travel = None;
+            return;
+        };
+        let arrives = strip_plan
+            .tabs
+            .iter()
+            .any(|(index, _)| Some(*index) == input.active);
+        let leaves = strip_plan.tabs.iter().any(|(index, _)| *index == previous);
+        if input.reduce_motion || !arrives || !leaves {
+            self.travel = None;
+            return;
+        }
+
+        self.travel = Some(strip::Travel {
+            position: self.position,
+            start: self.now,
+            from,
+            from_index: previous,
+        });
+    }
+}

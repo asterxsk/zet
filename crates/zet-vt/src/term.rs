@@ -317,6 +317,12 @@ impl Term {
         // double-width character that cannot fit in what is left of the line and so
         // moves to the next one whole rather than being split or dropped.
         if self.modes.autowrap && (self.pending_wrap || self.cursor.col + width > cols) {
+            // The row being left is half of a longer logical line, and this is the only
+            // moment that knows it: a wrap the terminal performs leaves no trace on the
+            // wire, unlike the newline a program sends. Marking it before the feed rather
+            // than after is what makes this survive a scroll, where the row moves up
+            // underneath the cursor but keeps its flags.
+            self.grid.row_mut(self.cursor.row).set_wrapped(true);
             self.line_feed();
             self.carriage_return();
         }
@@ -1219,6 +1225,52 @@ mod tests {
         feed(&mut t, b"abcde\rX");
         assert_eq!(trimmed(&t, 0), "Xbcde");
         assert_eq!(trimmed(&t, 1), "");
+    }
+
+    #[test]
+    fn a_row_the_terminal_wrapped_is_marked_as_wrapped() {
+        // Nothing on the wire distinguishes a wrap the terminal performed from one the
+        // program typed, so this flag is the whole record of it. Copying a line and
+        // reflowing one on a resize both read it, and both are wrong without it.
+        let mut t = open(5, 3);
+        feed(&mut t, b"abcde");
+        assert!(!t.grid().row(0).is_wrapped(), "nothing has wrapped yet");
+        feed(&mut t, b"f");
+        assert!(t.grid().row(0).is_wrapped(), "the row the cursor left");
+        assert!(!t.grid().row(1).is_wrapped(), "the row it moved to");
+    }
+
+    #[test]
+    fn a_newline_the_program_sent_is_not_a_wrap() {
+        let mut t = open(5, 3);
+        feed(&mut t, b"abc\r\ndef");
+        assert!(!t.grid().row(0).is_wrapped());
+    }
+
+    #[test]
+    fn a_wide_character_that_does_not_fit_wraps_and_marks_the_row() {
+        // The other way into the wrap branch: nothing is pending, but two columns will
+        // not fit in the one that is left.
+        let mut t = open(5, 3);
+        feed(&mut t, "abcd\u{4e2d}".as_bytes());
+        assert!(t.grid().row(0).is_wrapped());
+        assert_eq!(t.cursor(), Pos::new(1, 2));
+    }
+
+    #[test]
+    fn a_wrapped_row_keeps_its_mark_when_the_screen_scrolls() {
+        let mut t = open(5, 2);
+        feed(&mut t, b"abcde");
+        feed(&mut t, b"f");
+        assert!(t.grid().row(0).is_wrapped());
+        // Two more wraps fill what is left of a two-row screen, so the first one scrolls
+        // off the top and the rest move up. The mark has to move with its row.
+        feed(&mut t, b"\r\nghijkl");
+        assert!(t.grid().row(0).is_wrapped(), "rode up with its row");
+        assert!(
+            !t.grid().row(1).is_wrapped(),
+            "and did not spread to the next"
+        );
     }
 
     #[test]

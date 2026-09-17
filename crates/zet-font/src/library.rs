@@ -10,6 +10,7 @@
 //! than one per frame.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use fontique::{
     Attributes, Blob, Collection, CollectionOptions, FallbackKey, FamilyId, FontStyle, FontWeight,
@@ -250,6 +251,21 @@ impl FontLibrary {
         self.collection.family_id(family).is_some()
     }
 
+    /// Register a face that ships inside the binary rather than with the system.
+    ///
+    /// The chrome's typeface is self-hosted, so it can never be looked up in the system
+    /// database: a machine without IBM Plex Sans installed would otherwise draw the
+    /// titlebar in whatever it had. A `&'static [u8]` rather than an owned buffer
+    /// because what arrives here is always an `include_bytes!` slice, and the blob
+    /// reference-counts it rather than copying it — a second copy of a font file that is
+    /// already in the binary is the one cost this path cannot justify.
+    pub fn register(&mut self, data: &'static [u8]) {
+        self.collection
+            .register_fonts(Blob::new(Arc::new(data)), None);
+        // The family list is a memo of what the database held, and it now holds more.
+        self.names = None;
+    }
+
     /// Whether a family is a monospaced face.
     ///
     /// Read from the font's own `post` table rather than by comparing the advance of
@@ -468,6 +484,34 @@ mod tests {
         let before = library.faces.len();
         let _ = library.resolve("Marlett", Weight::BOLD, false);
         assert_eq!(library.faces.len(), before);
+    }
+
+    #[test]
+    fn a_face_can_arrive_as_bytes_rather_than_from_the_system() {
+        // The path the chrome's self-hosted typeface takes. The bytes here happen to be
+        // a face the system database already knows, so what is asserted is the path and
+        // not the family: a registered blob has to be parsed, indexed, and findable
+        // afterwards, and a `register` that quietly dropped it would leave a stack that
+        // could not resolve the family it was handed.
+        let mut library = FontLibrary::new();
+        let face = library
+            .resolve(UBIQUITOUS, Weight::NORMAL, false)
+            .expect("a face");
+        let bytes: &'static [u8] = Box::leak(face.data().to_vec().into_boxed_slice());
+
+        let mut fresh = FontLibrary::new();
+        fresh.register(bytes);
+        assert!(fresh.has_family(UBIQUITOUS));
+        assert!(
+            fresh.families().iter().any(|name| name == UBIQUITOUS),
+            "the family list is a memo of what the database held"
+        );
+        assert!(
+            fresh
+                .resolve(UBIQUITOUS, Weight::NORMAL, false)
+                .is_some_and(|face| face.covers('A')),
+            "the registered bytes did not come back as a usable face"
+        );
     }
 
     #[test]

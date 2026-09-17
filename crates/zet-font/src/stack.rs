@@ -78,12 +78,45 @@ impl FontStack {
     /// can open. Both are worth stopping for rather than silently substituting a font
     /// the user did not ask for.
     pub fn load(settings: &FontSettings, scale: f32) -> Result<Self, FontError> {
+        Self::build(FontLibrary::new(), settings, scale)
+    }
+
+    /// Resolve a font configuration against the system database plus faces carried in
+    /// the binary.
+    ///
+    /// The chrome's face is one the machine is not expected to have, so it is handed in
+    /// here and registered before anything is resolved. Registration and the system
+    /// database are the same database on purpose: a family installed on the machine and
+    /// the same family shipped in the binary are one family, and the face the user's own
+    /// installation supplies is the one they chose.
+    ///
+    /// # Errors
+    ///
+    /// The same as [`FontStack::load`]. A family that is neither embedded nor installed
+    /// is still [`FontError::NoSuchFamily`].
+    pub fn load_embedded(
+        settings: &FontSettings,
+        scale: f32,
+        faces: &[&'static [u8]],
+    ) -> Result<Self, FontError> {
+        let mut library = FontLibrary::new();
+        for face in faces {
+            library.register(face);
+        }
+        Self::build(library, settings, scale)
+    }
+
+    /// The body of both constructors, once the database is assembled.
+    fn build(
+        mut library: FontLibrary,
+        settings: &FontSettings,
+        scale: f32,
+    ) -> Result<Self, FontError> {
         if !settings.size.is_finite() || settings.size <= 0.0 {
             return Err(FontError::BadSize(settings.size));
         }
         let ppem = settings.size * scale;
 
-        let mut library = FontLibrary::new();
         let primary = library
             .family_id(&settings.family)
             .ok_or_else(|| FontError::NoSuchFamily(settings.family.clone()))?;

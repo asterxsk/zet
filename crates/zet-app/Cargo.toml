@@ -1,0 +1,26 @@
+[package]
+name = "zet-app"
+description = "What a terminal does when you press a key, with no window in sight"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+zet-vt.workspace = true
+zet-pty.workspace = true
+zet-config.workspace = true
+zet-input.workspace = true
+zet-session.workspace = true
+zet-render.workspace = true
+
+thiserror.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

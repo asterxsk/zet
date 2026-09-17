@@ -1,0 +1,27 @@
+[package]
+name = "zet-ui"
+description = "The window's chrome, laid out and hit-tested"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+zet-config.workspace = true
+# The chrome's own face. This crate asks for one glyph at a time and is told where its
+# pixels are; it never loads a font, never owns a texture, and never knows that an atlas
+# exists. Keeping the rasteriser behind that question is what lets the whole layout be
+# tested without a graphics device.
+zet-font.workspace = true
+# Where the chrome puts what it draws. The frame is two arrays of rectangles, so
+# depending on it costs this crate nothing but the two structs.
+zet-render.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

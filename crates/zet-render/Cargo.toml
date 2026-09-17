@@ -1,0 +1,38 @@
+[package]
+name = "zet-render"
+description = "Turns a terminal's grid and the app's chrome into one frame"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+zet-vt.workspace = true
+zet-config.workspace = true
+zet-font.workspace = true
+
+# The graphics API. Chosen over a higher-level renderer because the whole picture is two
+# pipelines and an atlas, and because a terminal's frame budget is entirely in deciding
+# what to draw rather than in drawing it — a scene graph would be a second thing to keep
+# in sync with a grid that is already the scene graph.
+wgpu.workspace = true
+# Vertex and instance structs are handed to the device as raw bytes, and `Pod` is the
+# only way to promise that the fields are where the shader thinks they are.
+bytemuck.workspace = true
+# `wgpu`'s device and adapter requests are `async`. This crate's callers are a window
+# event loop that is not, so the futures are driven to completion on the spot.
+pollster.workspace = true
+# The window is passed in as something that can hand over a native handle; this crate
+# never names a windowing library.
+raw-window-handle.workspace = true
+
+thiserror.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

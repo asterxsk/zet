@@ -42,6 +42,14 @@ pub use library::{Face, FaceKey, FontLibrary, Weight};
 pub use metrics::Metrics;
 pub use stack::FontStack;
 
+/// A font family's identifier within the system database.
+///
+/// Re-exported rather than referred to through `fontique`, because it is already part
+/// of [`FaceKey`] and therefore already part of this crate's public API. A caller that
+/// has to name the type to key a cache on a [`GlyphKey`] should not have to depend on
+/// the database crate's version to do it.
+pub use fontique::FamilyId;
+
 /// Something went wrong finding or loading a font.
 #[derive(Debug, thiserror::Error)]
 pub enum FontError {
