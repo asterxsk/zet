@@ -1055,5 +1055,28 @@ mod tests {
         let pixels = render(&mut gpu, &frame);
 
         assert_pixel(&pixels, (48, 32), [0, 0, srgb(0.5), 255]);
+
+        // A texel that is half covered draws half the tint, and this is the assertion
+        // that says so. It is here rather than only in the end-to-end test because it is
+        // the one case the two above cannot reach: both of their alpha texels are fully
+        // covered, and a shader that multiplied the tint by the whole texel instead of by
+        // its alpha draws those exactly right and every partly covered glyph as a solid
+        // rectangle. Half a texel is the smallest thing that tells the two apart.
+        gpu.upload_atlas(1, 1, &[255, 255, 255, 128]);
+
+        let mut single = GlyphQuad::alpha(
+            [0.0, 0.0, 64.0, 64.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0, 1.0],
+        );
+        single.color = [1.0, 0.0, 0.0, 1.0];
+        frame.reset();
+        frame.begin_glyphs();
+        frame.push_glyph(single);
+        frame.end_glyphs();
+        let pixels = render(&mut gpu, &frame);
+
+        let half = srgb(128.0 / 255.0);
+        assert_pixel(&pixels, (32, 32), [half, 0, 0, 255]);
     }
 }

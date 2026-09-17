@@ -76,8 +76,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // The atlas stored this glyph as white with the coverage in its alpha channel, so
-    // multiplying the premultiplied tint through it scales colour and alpha together and
-    // stays premultiplied. It is also why an antialiased edge blends correctly: at half
-    // coverage the whole glyph is half there, not half-bright.
-    return in.color * texel;
+    // scaling the premultiplied tint by that coverage scales colour and alpha together
+    // and stays premultiplied. It is also why an antialiased edge blends correctly: at
+    // half coverage the whole glyph is half there, not half-bright.
+    //
+    // The coverage is read out of the alpha channel rather than taken as the whole
+    // texel, and the difference is the whole picture. The texel's colour is white, so
+    // multiplying by all four channels scales the tint's colour by one and leaves it at
+    // full strength — which draws every glyph as a solid rectangle of its tint, in the
+    // right place and the right size and the right colour, with only the edges dimmed.
+    // A pixel that is a quarter covered is a quarter of the tint, and `texel.a` is what
+    // says so.
+    return in.color * texel.a;
 }
