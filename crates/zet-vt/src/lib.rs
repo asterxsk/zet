@@ -16,6 +16,9 @@
 //!   tab stops, SGR pen, and the operations that mutate the grid.
 //! - [`damage`] — what changed since the last frame.
 //! - [`search`] — a pure query over the grid, for the find bar to draw and scroll by.
+//! - [`keyboard`] — the kitty protocol's key-reporting flags and the stack of them a
+//!   program pushes and pops. Nothing here draws: it is what [`term`] reports about
+//!   keys, and the host is the only thing that reads it.
 //!
 //! The parser is deliberately ignorant of terminal state. Everything that can be
 //! wrong about a terminal, from reflow to erase semantics, lives in [`term`], where
@@ -47,6 +50,7 @@ pub mod cell;
 pub mod color;
 pub mod damage;
 pub mod grid;
+pub mod keyboard;
 pub mod parser;
 pub mod row;
 pub mod search;
@@ -57,6 +61,7 @@ pub use cell::{Cell, CellFlags};
 pub use color::{Color, ColorSpec, NamedColor};
 pub use damage::Damage;
 pub use grid::{Grid, Pos};
+pub use keyboard::{Apply, Keyboard, KeyboardFlags};
 pub use parser::{Params, Parser, Perform, Private};
 pub use row::Row;
 pub use search::Match;

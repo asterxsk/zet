@@ -30,6 +30,7 @@ use crate::attrs::Attrs;
 use crate::cell::Cell;
 use crate::color::{Color, ColorSpec, NamedColor};
 use crate::grid::{Grid, Pos};
+use crate::keyboard::{Apply, Keyboard, KeyboardFlags};
 use crate::parser::{Params, Perform, Private};
 
 /// How the terminal should report mouse events.
@@ -94,6 +95,15 @@ pub struct Modes {
     pub mouse_encoding: MouseEncoding,
     /// Whether the alternate screen is active.
     pub alt_screen: bool,
+    /// What the kitty keyboard protocol says keys should report, as the encoder reads
+    /// it.
+    ///
+    /// **Derived, not stored.** The flags live on [`Term`]'s [`Keyboard`], which also
+    /// holds the stack a program pushes and pops; this copy is filled in by
+    /// [`Term::modes`] and is always [`KeyboardFlags::NONE`] on the field inside
+    /// `Term`. Read it from a value `modes()` returned, never from `term.modes.keyboard`
+    /// within this crate, where it would quietly mean "no program asked for anything".
+    pub keyboard: KeyboardFlags,
 }
 
 impl Default for Modes {
@@ -113,6 +123,7 @@ impl Default for Modes {
             mouse: MouseMode::None,
             mouse_encoding: MouseEncoding::X10,
             alt_screen: false,
+            keyboard: KeyboardFlags::NONE,
         }
     }
 }
@@ -136,6 +147,13 @@ struct AltScreen {
     cursor: Pos,
     pen: Pen,
     cursor_visible: bool,
+    /// The main screen's keyboard flags and stack.
+    ///
+    /// The protocol asks for a separate stack per screen by name, and this is what
+    /// that costs: a full-screen editor starts from the legacy encoding instead of
+    /// inheriting whatever mode the shell negotiated, and the shell gets its mode back
+    /// when the editor exits whether or not the editor remembered to pop.
+    keyboard: Keyboard,
 }
 
 /// A cursor position remembered by `DECSC`.
@@ -167,6 +185,12 @@ pub struct Term {
     links: Vec<String>,
     /// The title the program set.
     title: String,
+    /// How the program has asked for keys to be reported, and what it saved.
+    ///
+    /// It is a whole [`Keyboard`] rather than a flag field like the mouse's, because
+    /// the protocol's state is a stack and not a value. The flags reach the encoder
+    /// through [`Term::modes`], which is the only public door they leave by.
+    keyboard: Keyboard,
 }
 
 impl Term {
@@ -185,6 +209,7 @@ impl Term {
             responses: Vec::new(),
             links: Vec::new(),
             title: String::new(),
+            keyboard: Keyboard::default(),
         }
     }
 
@@ -209,8 +234,17 @@ impl Term {
     }
 
     /// The current modes.
+    ///
+    /// The keyboard flags are taken from the keyboard stack on the way out rather than
+    /// read off `self.modes`, which holds [`KeyboardFlags::NONE`] and always will: the
+    /// protocol's flags are per-screen state that moves with the alternate screen, and
+    /// a copy left lying in `Modes` would be a copy that goes stale the moment a
+    /// program pushes one.
     pub fn modes(&self) -> Modes {
-        self.modes
+        Modes {
+            keyboard: self.keyboard.flags(),
+            ..self.modes
+        }
     }
 
     /// The title the program asked for, or an empty string.
@@ -278,6 +312,10 @@ impl Term {
         self.last_print = None;
         self.clusters.clear();
         self.links.clear();
+        // `ESC c` is the hard reset and undoes everything a program asked for, the
+        // keyboard flags included. `DECSTR` is not: it is the soft reset and it leaves
+        // the mouse mode, the alternate screen, and these alone.
+        self.keyboard = Keyboard::default();
     }
 
     /// Drop every remembered cluster. Called by anything that moves cells around.
@@ -566,6 +604,7 @@ impl Term {
             cursor: self.cursor,
             pen: self.pen,
             cursor_visible: self.modes.cursor_visible,
+            keyboard: std::mem::take(&mut self.keyboard),
         });
         self.modes.alt_screen = true;
         self.cursor = Pos::new(0, 0);
@@ -582,6 +621,7 @@ impl Term {
         self.cursor = alt.cursor;
         self.pen = alt.pen;
         self.modes.cursor_visible = alt.cursor_visible;
+        self.keyboard = alt.keyboard;
         self.modes.alt_screen = false;
         self.pending_wrap = false;
         self.last_print = None;
@@ -735,6 +775,16 @@ impl Term {
             self.pen.link = u16::try_from(self.links.len()).unwrap_or(u16::MAX);
         }
     }
+}
+
+/// The `i`th parameter as the byte the kitty flags are carried in.
+///
+/// A parameter is a `u16` and the flags are five bits, so a value above 255 is not a
+/// flag set at all. It is saturated rather than wrapped: [`KeyboardFlags::from_bits`]
+/// drops the bits this terminal does not implement, and wrapping a large number would
+/// turn it back into bits that look like flags.
+fn param_at(params: &Params, i: usize) -> u8 {
+    u8::try_from(params.value_or(i, 0)).unwrap_or(u8::MAX)
 }
 
 /// Read the extended colour form beginning at parameter `i`, after `38`, `48`, or `58`.
@@ -891,6 +941,47 @@ impl Perform for Term {
                 }
                 // `DA2`: the secondary device attributes, which report a version.
                 (Private::Greater, 'c') => self.respond(b"\x1b[>0;1;0c"),
+
+                // The kitty keyboard protocol's four sequences. All four end in `u`,
+                // and the private marker is the whole of what tells them apart, so
+                // they are one arm each rather than a shared body with a match inside.
+                //
+                // `CSI > flags u` pushes and installs; `CSI < n u` restores. The two
+                // are what a program that wants enhanced keys uses to leave the
+                // terminal as it found it, and the reason the flags are a stack rather
+                // than a field: a program that forgets to pop has still not lost the
+                // mode that was in force before it started.
+                (Private::Greater, 'u') => {
+                    self.keyboard
+                        .push(KeyboardFlags::from_bits(param_at(params, 0)));
+                }
+                (Private::Less, 'u') => {
+                    self.keyboard.pop(params.value_or(0, 1) as usize);
+                }
+                // `CSI = flags ; mode u` changes the flags without touching the stack,
+                // which is how a program turns one enhancement on or off without
+                // disturbing the rest. The mode is optional and defaults to 1, so an
+                // absent second parameter is `Set`; a present one that is not 1, 2, or
+                // 3 is not something to guess at.
+                (Private::Equals, 'u') => {
+                    let flags = KeyboardFlags::from_bits(param_at(params, 0));
+                    let mode = if params.len() > 1 {
+                        Apply::from_param(params.value_or(1, 0))
+                    } else {
+                        Some(Apply::Set)
+                    };
+                    if let Some(mode) = mode {
+                        self.keyboard.apply(flags, mode);
+                    }
+                }
+                // `CSI ? u` asks what is in force, which is how a program discovers
+                // whether it is running under a terminal that speaks this protocol at
+                // all. A terminal that does not answers with `CSI ? 0 u` or not at all,
+                // so a reply that names the flags is the whole of the handshake.
+                (Private::Question, 'u') => {
+                    let report = format!("\x1b[?{}u", self.keyboard.flags().bits());
+                    self.respond(report.as_bytes());
+                }
                 _ => {}
             }
             return;
@@ -1868,6 +1959,200 @@ mod tests {
         assert_eq!(t.take_responses(), b"\x1b[3;7R");
         feed(&mut t, b"\x1b[5n");
         assert_eq!(t.take_responses(), b"\x1b[0n");
+    }
+
+    #[test]
+    fn a_terminal_no_program_has_asked_anything_of_reports_legacy_keys() {
+        let t = open(10, 4);
+        assert_eq!(t.modes().keyboard, KeyboardFlags::NONE);
+    }
+
+    #[test]
+    fn csi_equals_sets_the_flags_and_the_encoder_can_see_them() {
+        // The whole point of the flags is that they leave this crate, and the only door
+        // they leave by is `modes()`. A test that read `Term`'s private field would
+        // pass while the encoder saw nothing.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=1u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::DISAMBIGUATE);
+
+        // `Set` clears what is not named, so the second call replaces rather than adds.
+        feed(&mut t, b"\x1b[=8;1u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::ALL_KEYS);
+
+        // `2` is Or: it adds to what is already in force.
+        feed(&mut t, b"\x1b[=2;2u");
+        assert_eq!(
+            t.modes().keyboard,
+            KeyboardFlags::ALL_KEYS.with(KeyboardFlags::EVENT_TYPES)
+        );
+
+        // `3` is And-not: it takes away what is named and leaves the rest.
+        feed(&mut t, b"\x1b[=8;3u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::EVENT_TYPES);
+    }
+
+    #[test]
+    fn the_apply_mode_may_be_left_out_and_then_means_set() {
+        // The spec makes the second parameter optional and gives it a default of 1. A
+        // program that sends only the flags is asking for exactly those flags, not for
+        // them to be added to whatever was there.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=1;2u");
+        feed(&mut t, b"\x1b[=2u");
+        assert_eq!(
+            t.modes().keyboard,
+            KeyboardFlags::EVENT_TYPES,
+            "a missing mode is Set, which drops the disambiguation bit"
+        );
+    }
+
+    #[test]
+    fn an_apply_mode_that_is_not_one_of_the_three_changes_nothing() {
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=1u");
+        feed(&mut t, b"\x1b[=8;4u");
+        feed(&mut t, b"\x1b[=8;0u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::DISAMBIGUATE);
+    }
+
+    #[test]
+    fn a_push_and_a_pop_put_the_flags_back_where_they_were() {
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=1u");
+
+        feed(&mut t, b"\x1b[>8u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::ALL_KEYS);
+
+        // A push with no flags at all means zero, which is what a program that only
+        // wants to save the current state sends.
+        feed(&mut t, b"\x1b[>u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::NONE);
+
+        feed(&mut t, b"\x1b[<u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::ALL_KEYS);
+        feed(&mut t, b"\x1b[<u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::DISAMBIGUATE);
+    }
+
+    #[test]
+    fn popping_past_the_bottom_of_the_stack_resets_the_flags() {
+        // What a program that pushed once and popped twice leaves behind. The spec asks
+        // for a reset here by name, and the alternative — keeping the last thing that
+        // was in force — is a terminal stuck in a mode nothing will turn off.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=8u");
+        feed(&mut t, b"\x1b[>1u");
+        feed(&mut t, b"\x1b[<5u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::NONE);
+    }
+
+    #[test]
+    fn a_query_is_answered_with_the_flags_in_force() {
+        // This reply is the entire handshake: a program that asks and gets a number
+        // back knows it is running under a terminal that speaks the protocol, and one
+        // that gets nothing knows it is not.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[?u");
+        assert_eq!(t.take_responses(), b"\x1b[?0u");
+
+        feed(&mut t, b"\x1b[=5u");
+        feed(&mut t, b"\x1b[?u");
+        assert_eq!(t.take_responses(), b"\x1b[?5u");
+    }
+
+    #[test]
+    fn a_query_answers_with_the_flags_and_not_with_the_stack() {
+        // The reply is a report of what the encoder will do, so it names the flags in
+        // force. Replying with the stack would tell the program about state it cannot
+        // see and did not ask about.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=1u");
+        feed(&mut t, b"\x1b[>8u");
+        feed(&mut t, b"\x1b[?u");
+        assert_eq!(t.take_responses(), b"\x1b[?8u");
+    }
+
+    #[test]
+    fn a_bit_this_terminal_does_not_implement_is_not_reported_back() {
+        // `CSI ? u` is a promise. A program that reads back bit 32 will rely on whatever
+        // it means, and nothing here acts on it, so the bit is cleared rather than
+        // echoed.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=255u");
+        feed(&mut t, b"\x1b[?u");
+        assert_eq!(t.take_responses(), b"\x1b[?31u");
+    }
+
+    #[test]
+    fn the_two_screens_do_not_share_a_keyboard_stack() {
+        // The spec asks for a separate stack per screen by name. Without it, a
+        // full-screen editor inherits the shell's mode, and the shell inherits the
+        // editor's when it exits — including the mode of an editor that crashed.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=1u");
+
+        feed(&mut t, b"\x1b[?1049h");
+        assert_eq!(
+            t.modes().keyboard,
+            KeyboardFlags::NONE,
+            "the alternate screen starts from the legacy encoding"
+        );
+
+        feed(&mut t, b"\x1b[=8u");
+        feed(&mut t, b"\x1b[?1049l");
+        assert_eq!(
+            t.modes().keyboard,
+            KeyboardFlags::DISAMBIGUATE,
+            "and the shell gets its own mode back"
+        );
+    }
+
+    #[test]
+    fn a_crash_inside_the_alternate_screen_does_not_leak_its_flags() {
+        // The same fact from the other side, and the one that matters in practice: a
+        // program that set the flags and exited without popping them is why the stack
+        // belongs to the screen. It cannot be tested by crashing, so it is tested by
+        // leaving the alternate screen without a pop.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[?1049h");
+        feed(&mut t, b"\x1b[>8;1u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::ALL_KEYS);
+        feed(&mut t, b"\x1b[?1049l");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::NONE);
+    }
+
+    #[test]
+    fn a_full_reset_clears_the_stack_and_a_soft_one_leaves_it() {
+        // `ESC c` undoes everything a program asked for. `DECSTR` is the soft reset and
+        // does not touch the mouse mode or the alternate screen, so it does not touch
+        // this either — a program that has set the flags is still running after it.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=1u");
+        feed(&mut t, b"\x1b[>8u");
+        feed(&mut t, b"\x1b[!p");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::ALL_KEYS);
+
+        feed(&mut t, b"\x1bc");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::NONE);
+        feed(&mut t, b"\x1b[<u");
+        assert_eq!(
+            t.modes().keyboard,
+            KeyboardFlags::NONE,
+            "and the stack the hard reset cleared is not restored by a pop"
+        );
+    }
+
+    #[test]
+    fn a_sequence_that_looks_like_the_protocol_but_is_not_changes_nothing() {
+        // The four sequences are told apart by their private marker and nothing else,
+        // so the ones that are not this protocol have to be checked to leave the flags
+        // alone: `CSI u` is `SCORC`, the standard form of "restore the cursor".
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[3;5H\x1b7\x1b[=1u");
+        feed(&mut t, b"\x1b[9;9H\x1b[u");
+        assert_eq!(t.modes().keyboard, KeyboardFlags::DISAMBIGUATE);
+        assert_eq!(t.cursor(), Pos::new(2, 4), "and it still restored the cursor");
     }
 
     #[test]
