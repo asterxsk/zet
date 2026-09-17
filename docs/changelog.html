@@ -127,6 +127,44 @@
       walk and a face load per family, so it happens on its own thread during startup and arrives as a
       user event rather than being paid for on the frame that draws.</p>
 
+      <h4>zet-vt / zet-app / zet-render / zet-ui / zet — the find bar</h4>
+
+      <p>It was a picture of a find bar until now. <code>Action::Find</code> returned an empty command
+      list and nothing ever called <code>Chrome::set_find_open</code>, so the binding drew a row and
+      did nothing. <code>Ctrl+Shift+F</code> now opens a 32px row above the grid's bottom edge, and
+      the row's height comes off the grid rather than drawing over it.</p>
+
+      <p>A match is a <em>logical</em> line, not a row: a row that wrapped is joined to the one below
+      it, so a word broken across the fold is found and a match can straddle the two rows it covers.
+      A row the program ended with a newline is its own line and stops there. Case is insensitive
+      unless the needle has a capital anywhere in it — <code>usb</code> finds <code>USB</code>,
+      and <code>uSb</code> finds nothing — and a wide character is matched as the character it
+      is, with its match covering both of the columns it draws in.</p>
+
+      <p>The search is anchored where the last match was rather than where the view happens to be
+      scrolled, so typing <code>beta</code> one character at a time narrows around the <code>b</code>
+      it already found instead of chasing <code>b</code> down the scrollback. <code>Enter</code> steps
+      to the next match and <code>Shift+Enter</code> to the previous, wrapping at both ends, and a
+      match that was off screen is scrolled the smallest distance that puts it on it: one that is
+      already visible does not move the viewport.</p>
+
+      <p>A match is the theme's <code>selection</code> colour laid over the cell at half alpha, and the
+      one the arrows are on at all of it. A theme has one selection colour and no second highlight
+      colour, which is what two weights of one colour are for; a cell a program gave a background
+      keeps it. While the bar is open it owns typing, because it is a text field, and only
+      <code>Backspace</code>, <code>Enter</code>, <code>Shift+Enter</code>, <code>Escape</code>, and
+      the toggling chord are its own. The caret does not blink — the tab indicator's travel is
+      the app's one authored moment — a query longer than the field shows its tail rather than
+      its head, because the caret is where the next character goes, and past a thousand matches the
+      count reads <code>1000+</code> rather than spending the frame counting.</p>
+
+      <h4>zet — a key that runs a bound action redraws the window</h4>
+
+      <p>The host only ever redrew when the pty echoed something, so <code>Find</code>,
+      <code>FontLarger</code>, <code>ScrollPageUp</code>, and <code>ToggleTabPosition</code> all
+      changed state invisibly. Typing still costs one frame rather than two, because the redraw is
+      asked for only when the key ran a binding rather than being sent to the shell.</p>
+
       <h4>zet-app — a key bound to a chord fires on the press and on every auto-repeat, and not on the release</h4>
 
       <p><code>bound</code> answers for a chord rather than for an event, so a release that reached it

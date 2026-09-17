@@ -160,7 +160,7 @@ check-on-launch = false</code></pre>
         <p>The policy describes a manual check as <code>zet --check-update</code>. That option does
         not exist: the binary accepts <code>-d</code>/<code>--directory</code>, <code>-h</code>/<code>--help</code>,
         and <code>-V</code>/<code>--version</code>, and refuses any other argument by name. There is
-        no menu item either, because there is no settings panel or menu. The behaviour described
+        no menu item either, and the settings panel does not offer one. The behaviour described
         above is the intent for when the updater is wired in, not something this build can do.</p>
       </div>
 
@@ -178,10 +178,10 @@ check-on-launch = false</code></pre>
         </tbody>
       </table>
 
-      <p>Only the first row is in use so far, and the current build only reads it: there is no settings
-      panel to write <code>config.toml</code> back yet, and no log or update code wired in. The other
-      two rows are what the finished program will use, listed here so that the directories are known
-      before they appear.</p>
+      <p>Only the first two rows are in use so far: the settings panel writes
+      <code>config.toml</code> back as you change a setting, and no log or update code is wired in.
+      The cache row is what the finished program will use, listed here so that the directory is
+      known before it appears.</p>
 
       <p>zet does not read files outside those directories and the ones you point it at — for example
       a theme file you choose, or a working directory you open.</p>

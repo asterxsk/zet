@@ -77,10 +77,9 @@ check runs only when you run `zet --check-update` or choose the menu item.
 | `%LOCALAPPDATA%\zet\logs\` | Diagnostic logs, if you enable them. Off by default | To help you diagnose a problem you report |
 | `%LOCALAPPDATA%\zet\cache\` | Downloaded update archives before they are applied | To stage an update |
 
-Only the first row is in use so far, and the current build only reads it: there is no settings
-panel to write `config.toml` back yet, and no log or update code wired in. The other two rows
-are what the finished program will use, listed here so that the directories are known before
-they appear.
+Only the first two rows are in use so far: the settings panel writes `config.toml` back as you
+change a setting, and no log or update code is wired in. The cache row is what the finished
+program will use, listed here so that the directory is known before it appears.
 
 zet does not read files outside those directories and the ones you point it at — for example a
 theme file you choose, or a working directory you open.

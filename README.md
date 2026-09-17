@@ -5,9 +5,8 @@ renderer.
 
 > **Status: pre-alpha.** zet builds and runs: it opens a window, starts a shell, and draws it
 > with its own VT engine and its own GPU renderer. What is missing is the depth around that —
-> the settings file is read but there is no settings panel, `zet-update` is written but not
-> wired to the binary, and the kitty keyboard protocol is not implemented. Nothing here is
-> usable as a daily driver, and nothing here is worth installing.
+> `zet-update` is written but not wired to the binary, and the kitty keyboard protocol is not
+> implemented. Nothing here is usable as a daily driver, and nothing here is worth installing.
 
 ## Why
 

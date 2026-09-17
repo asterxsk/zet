@@ -183,8 +183,8 @@ ISCC.exe /DVersion=0.1.0 /O"dist" packaging\zet.iss</code></pre>
       <h2>Where it looks for configuration</h2>
 
       <p><code>%APPDATA%\zet\config.toml</code>. A missing file is not an error; zet starts with
-      its defaults. The current build only reads that file — there is no settings panel to write it
-      back, so nothing creates it. See <a href="configuration.html">Configuration</a>.</p>
+      its defaults. The settings panel writes to that file as you change a setting, and keeps its
+      comments when it does. See <a href="configuration.html">Configuration</a>.</p>
 
       <h2>The tests that need the network</h2>
 

@@ -42,6 +42,37 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
   - Only those keys are the panel's. A letter, and any chord with a modifier on it, still goes
     to the shell: the terminal behind the panel is live, and typing into it is the reason the
     panel does not cover it.
+- **`zet-vt` / `zet-app` / `zet-render` / `zet-ui` / `zet`** — the find bar, which was a picture of
+  a find bar until now. `Action::Find` returned an empty command list and nothing ever called
+  `Chrome::set_find_open`, so the binding drew a row and did nothing.
+  - `Ctrl+Shift+F` opens a 32px row above the grid's bottom edge. The row's height comes off the
+    grid rather than drawing over it, so opening the bar costs the terminal a row.
+  - A match is a *logical* line, not a row: a row that wrapped is joined to the one below it, so a
+    word broken across the fold is found and a match can straddle the two rows it covers. A row
+    the program ended with a newline is its own line and stops there.
+  - Case is insensitive unless the needle has a capital anywhere in it — `usb` finds `USB`, and
+    `uSb` finds nothing. A wide character is matched as the character it is, and its match covers
+    both of the columns it draws in.
+  - The search is anchored where the last match was rather than where the view happens to be
+    scrolled, so typing `beta` one character at a time narrows around the `b` it already found
+    instead of chasing `b` down the scrollback.
+  - `Enter` steps to the next match and `Shift+Enter` to the previous, wrapping at both ends, and
+    a match that was off screen is scrolled the smallest distance that puts it on it. A match
+    already visible does not move the viewport.
+  - A match is the theme's `selection` colour laid over the cell at half alpha, and the one the
+    arrows are on at all of it: a theme has one selection colour and no second highlight colour,
+    which is what two weights of one colour are for. A cell a program gave a background keeps it.
+  - While the bar is open it owns typing, because it is a text field, and only `Backspace`,
+    `Enter`, `Shift+Enter`, `Escape`, and the toggling chord are its own.
+  - The caret does not blink — the tab indicator's travel is the app's one authored moment. A
+    query longer than the field shows its tail rather than its head, because the caret is where
+    the next character goes. Past a thousand matches the count reads `1000+` rather than
+    spending the frame counting.
+- **`zet`** — a key that runs a bound action redraws the window.
+  - The host only ever redrew when the pty echoed something, so `Find`, `FontLarger`,
+    `ScrollPageUp`, and `ToggleTabPosition` all changed state invisibly. Typing still costs one
+    frame rather than two, because the redraw is asked for only when the key ran a binding
+    rather than being sent to the shell.
 - **`zet-app`** — a key bound to a chord fires on the press and on every auto-repeat, and not on
   the release.
   - `bound` answers for a chord rather than for an event, so a release that reached it ran the

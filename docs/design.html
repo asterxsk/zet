@@ -430,6 +430,82 @@
       panel does not cover it. That is what "it does not steal focus from the prompt" has to
       mean.</p>
 
+      <h2 id="find">Find</h2>
+
+      <p>A 32px row pinned above the grid's bottom edge, on <code>surface-raised</code>, with a
+      <code>hairline</code> between it and the terminal. It is not part of the grid and does not
+      overlap it: the row's height comes off the grid's area before the grid is told how big it is,
+      so opening the bar costs the terminal a row rather than drawing over one.</p>
+
+      <p>Inside it: the word <code>Find</code> in <code>ink-dim</code>, a field of <code>ground</code>
+      behind a <code>hairline-strong</code> edge, the query in <code>ink</code>, a caret, and a count.
+      The field says what it is for even when it is empty, which is the whole job of the label — an
+      empty rectangle at the bottom of a terminal could be anything.</p>
+
+      <p>The caret does not blink. Motion is a budget, and this app spends it in one place: the tab
+      indicator's travel. A second thing moving on screen is a second thing to look at, and the caret
+      is already the brightest hairline in the row. It is drawn as <code>ink</code> at one pixel,
+      standing a little inside the field.</p>
+
+      <p>A query longer than the field is shown from its <strong>end</strong> rather than its
+      beginning. The caret is where the next character goes, and a caret clipped off the right edge is
+      a field that looks broken at exactly the moment it is being typed into. The left side is what
+      gets cut, and it is cut by <code>char</code> rather than by byte, because a slice in the middle
+      of a character is a panic in a paint loop.</p>
+
+      <p>The count sits to the right of the field: <code>3 of 17</code> in <code>ink-mid</code>, or
+      <code>No results</code> in <code>ink-dim</code> when there are none. Past a thousand matches it
+      says <code>1000+</code> instead of spending the frame counting to forty thousand — a single
+      letter in a full scrollback is a number nobody reads and a screen nobody can see through.</p>
+
+      <h3>What a match looks like</h3>
+
+      <p>A match is the theme's <code>selection</code> colour laid <strong>over</strong> the cell
+      rather than replacing it, at half alpha, and the match the arrows are on at all of it. There is
+      one selection colour in a theme and there is no second highlight colour, which is exactly what
+      two weights of one colour are for. A cell that a program gave a background keeps it: the mark
+      tints, it does not paint out.</p>
+
+      <p>The grid plane's rule holds throughout — a match is drawn in the theme's colours and never in
+      the chrome's, even though the bar that found it is chrome. The two planes meet in the window and
+      nowhere else.</p>
+
+      <h3>What a match is</h3>
+
+      <p>A match is a <strong>logical line</strong>, not a row. A row that wrapped is joined to the one
+      below it before it is searched, so a word broken across the fold is found, and a match can
+      straddle the two rows it covers. A row the program ended with a newline is its own line and
+      stops there — the two look identical on screen and are not the same thing.</p>
+
+      <p>Case is insensitive unless the needle has a capital letter in it, anywhere rather than only at
+      the front: <code>usb</code> finds <code>USB</code>, and <code>uSb</code> finds nothing. A wide
+      character is matched as the character it is, and its match covers both of the columns it draws
+      in.</p>
+
+      <h3>Keys</h3>
+
+      <p>While the bar is open it owns typing, because it is a text field: every printable character
+      goes into the query rather than to the shell. Only these keys are its own:</p>
+
+      <table>
+        <caption>Find bar keys</caption>
+        <thead>
+          <tr><th scope="col">Key</th><th scope="col">Does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Any text</td><td>Appends to the query and searches again</td></tr>
+          <tr><td class="k">Backspace</td><td>Removes the last character</td></tr>
+          <tr><td class="k">Enter</td><td>Next match</td></tr>
+          <tr><td class="k">Shift+Enter</td><td>Previous match</td></tr>
+          <tr><td class="k">Escape</td><td>Closes the bar and returns the keyboard to the shell</td></tr>
+          <tr><td class="k">Ctrl+Shift+F</td><td>Toggles it</td></tr>
+        </tbody>
+      </table>
+
+      <p>The next match scrolls into view if it was not already there, and it is scrolled the smallest
+      distance that puts it on screen — a match already visible does not move the viewport under the
+      user. The search wraps at both ends rather than stopping.</p>
+
       <h2>Surfaces the framework gave us</h2>
 
       <p>These ship with defaults that belong to no design system, and they get themed from the
@@ -444,7 +520,7 @@
         <code>signal</code> is the app's one lamp and a ring around a control spends its whole budget
         several times over; the brightest hairline says "here" without saying "look at me".</li>
         <li>The find bar is a 32px row pinned above the grid, <code>surface-raised</code>, using the
-        same hairline language.</li>
+        same hairline language. It is described in <a href="#find">Find</a>.</li>
         <li>The window resize cursor, the IME candidate window anchor, and the drag-and-drop overlay
         all follow the same palette.</li>
       </ul>

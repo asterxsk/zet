@@ -315,7 +315,76 @@ to the shell, because the terminal behind the panel is live and typing into it i
 reason the panel does not cover it. That is what "it does not steal focus from the prompt"
 has to mean.
 
-## Surfaces the framework gave us
+## Find
+
+A 32px row pinned above the grid's bottom edge, on `surface-raised`, with a `hairline`
+between it and the terminal. It is not part of the grid and does not overlap it: the row's
+height comes off the grid's area before the grid is told how big it is, so opening the bar
+costs the terminal a row rather than drawing over one.
+
+Inside it: the word `Find` in `ink-dim`, a field of `ground` behind a `hairline-strong`
+edge, the query in `ink`, a caret, and a count. The field says what it is for even when it
+is empty, which is the whole job of the label — an empty rectangle at the bottom of a
+terminal could be anything.
+
+The caret does not blink. Motion is a budget, and this app spends it in one place: the tab
+indicator's travel. A second thing moving on screen is a second thing to look at, and the
+caret is already the brightest hairline in the row. It is drawn as `ink` at one pixel,
+standing a little inside the field.
+
+A query longer than the field is shown from its **end** rather than its beginning. The
+caret is where the next character goes, and a caret clipped off the right edge is a field
+that looks broken at exactly the moment it is being typed into. The left side is what gets
+cut, and it is cut by `char` rather than by byte, because a slice in the middle of a
+character is a panic in a paint loop.
+
+The count sits to the right of the field: `3 of 17` in `ink-mid`, or `No results` in
+`ink-dim` when there are none. Past a thousand matches it says `1000+` instead of spending
+the frame counting to forty thousand — a single letter in a full scrollback is a number
+nobody reads and a screen nobody can see through.
+
+### What a match looks like
+
+A match is the theme's `selection` colour laid **over** the cell rather than replacing it,
+at half alpha, and the match the arrows are on at all of it. There is one selection colour
+in a theme and there is no second highlight colour, which is exactly what two weights of
+one colour are for. A cell that a program gave a background keeps it: the mark tints, it
+does not paint out.
+
+The grid plane's rule holds throughout — a match is drawn in the theme's colours and never
+in the chrome's, even though the bar that found it is chrome. The two planes meet in the
+window and nowhere else.
+
+### What a match is
+
+A match is a **logical line**, not a row. A row that wrapped is joined to the one below it
+before it is searched, so a word broken across the fold is found, and a match can straddle
+the two rows it covers. A row the program ended with a newline is its own line and stops
+there — the two look identical on screen and are not the same thing.
+
+Case is insensitive unless the needle has a capital letter in it, anywhere rather than only
+at the front: `usb` finds `USB`, and `uSb` finds nothing. A wide character is matched as the
+character it is, and its match covers both of the columns it draws in.
+
+### Keys
+
+While the bar is open it owns typing, because it is a text field: every printable character
+goes into the query rather than to the shell. Only these keys are its own:
+
+| Key | Does |
+|---|---|
+| Any text | Appends to the query and searches again |
+| `Backspace` | Removes the last character |
+| `Enter` | Next match |
+| `Shift+Enter` | Previous match |
+| `Escape` | Closes the bar and returns the keyboard to the shell |
+| `Ctrl+Shift+F` | Toggles it |
+
+The next match scrolls into view if it was not already there, and it is scrolled the
+smallest distance that puts it on screen — a match already visible does not move the
+viewport under the user. The search wraps at both ends rather than stopping.
+
+## ## Surfaces the framework gave us
 
 These ship with defaults that belong to no design system, and they get themed from
 the palette like everything else:
@@ -328,7 +397,7 @@ the palette like everything else:
   lamp and a ring around a control spends its whole budget several times over; the
   brightest hairline says "here" without saying "look at me".
 - The find bar is a 32px row pinned above the grid, `surface-raised`, using the same
-  hairline language.
+  hairline language. It is described in [Find](#find).
 - The window resize cursor, the IME candidate window anchor, and the drag-and-drop
   overlay all follow the same palette.
 

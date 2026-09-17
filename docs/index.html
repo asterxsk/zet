@@ -76,10 +76,10 @@
       <div class="callout">
         <span class="callout__label">Status — pre-alpha</span>
         <p>zet builds and runs: it opens a window, starts a shell, and draws it with its own VT
-        engine and its own GPU renderer. What is missing is the depth around that — the settings
-        file is read but there is no settings panel, <code>zet-update</code> is written but not
-        wired to the binary, and the kitty keyboard protocol is not implemented. Nothing here is
-        usable as a daily driver, and nothing here is worth installing.</p>
+        engine and its own GPU renderer. What is missing is the depth around that —
+        <code>zet-update</code> is written but not wired to the binary, and the kitty keyboard
+        protocol is not implemented. Nothing here is usable as a daily driver, and nothing here is
+        worth installing.</p>
       </div>
 
       <h2>Why</h2>
@@ -163,10 +163,8 @@
       honest description of the code and a page that rounded it up would be worse than no page.</p>
 
       <ul>
-        <li>No settings panel. The configuration file is read at launch; nothing in the binary writes it back.</li>
         <li>No update checking. <code>zet-update</code> implements the whole path and nothing calls it, so the current build makes no network requests at all.</li>
         <li>No kitty keyboard protocol. Key release and repeat are answered with nothing, because the legacy encoding has no byte for either.</li>
-        <li>No find bar and no settings screen behind the <code>find</code> and <code>settings</code> bindings, so those two keys currently do nothing.</li>
         <li>No published installer and no published release. The Inno Setup script in <code>packaging/</code> builds one; nothing has shipped it.</li>
       </ul>
     </article>
