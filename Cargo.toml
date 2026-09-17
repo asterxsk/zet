@@ -11,15 +11,41 @@ repository = "https://github.com/asterxsk/zet"
 authors = ["asterxsk"]
 
 [workspace.dependencies]
+# In-tree crates. Listed here in dependency order so that the layering is readable
+# without opening a single manifest: nothing above may be used by anything below.
 zet-vt = { path = "crates/zet-vt" }
-zet-config = { path = "crates/zet-config" }
 zet-pty = { path = "crates/zet-pty" }
+zet-config = { path = "crates/zet-config" }
+zet-font = { path = "crates/zet-font" }
+zet-input = { path = "crates/zet-input" }
+zet-session = { path = "crates/zet-session" }
 zet-render = { path = "crates/zet-render" }
+zet-ui = { path = "crates/zet-ui" }
+zet-app = { path = "crates/zet-app" }
+zet-update = { path = "crates/zet-update" }
 
 bitflags = "2.13"
 thiserror = "2.0"
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
+
+# The GPU stack. `wgpu` is the renderer; `winit` owns the window and the event loop.
+bytemuck = { version = "1.24", features = ["derive"] }
+pollster = "1.0"
+raw-window-handle = "0.6"
+wgpu = "30.0"
+winit = "0.30"
+
+# The font stack. `fontique` enumerates the system's families and answers "which face
+# covers this character"; `swash` turns a face into metrics and pixels. They are split
+# because that is the seam that matters: one is a database, the other is a rasteriser,
+# and only the second one has to be fast.
+fontique = "0.11"
+swash = "0.2"
+
+# Configuration.
+serde = { version = "1.0", features = ["derive"] }
+toml_edit = "0.25"
 
 # A terminal is a latency-sensitive interactive program, so the release profile is
 # tuned for throughput rather than for compile time. panic = "abort" plus fat LTO

@@ -1,0 +1,27 @@
+[package]
+name = "zet-config"
+description = "zet's configuration file, its shipped themes, and the chrome palette"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+zet-vt.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+# `toml_edit` rather than `toml`, and with serde on. The plain `toml` crate
+# round-trips through a `Value` and throws away everything it did not understand,
+# which includes every comment a user wrote. `toml_edit` keeps the document and
+# lets a save change only the leaves that moved — see `config::render`.
+toml_edit = { workspace = true, features = ["serde"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

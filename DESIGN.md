@@ -42,7 +42,7 @@ The signal color appears in the chrome and stops at the grid boundary.
 | `hairline-strong` | `#333941` | Focused input borders, drag targets |
 | `ink` | `#e7e9ec` | Primary chrome text, active tab index |
 | `ink-mid` | `#99a0a8` | Secondary text, hovered tab index |
-| `ink-dim` | `#5a626b` | Inactive tab index, disabled controls |
+| `ink-dim` | `#7b838d` | Inactive tab index, disabled controls |
 | `signal` | `#ffa62b` | The active marker. Indicators and focus rings only |
 | `signal-dim` | `#8a5a17` | Signal at rest, for hover preview of an indicator |
 | `danger` | `#ff6b5e` | Destructive confirmations, error text |
@@ -69,6 +69,19 @@ Rules that keep the palette honest:
 
 Imported palettes ship unmodified so they look like themselves, and the theme picker
 labels them "as published" rather than implying they were checked.
+
+These floors are asserted in tests, and that has already changed one value: `ink-dim`
+was first drafted as `#5a626b`, which measures 3.06:1 on `surface` and fails the row
+directly above it. The floor is the requirement and the hex was a guess, so the hex
+moved to `#7b838d` — the same grey, lighter. A palette edit that dims the chrome text
+should fail a test rather than a review.
+
+Two theme colours are exempt from the ANSI floor, and the exemption is deliberate:
+indices 0 and 8 are a palette's "black" and "bright black", which programs use as
+backgrounds. Requiring them to be legible against a near-black ground would force them
+to be light, at which point they stop being black and the programs that rely on that
+stop looking right. The other fourteen are colours text is printed in, and they all
+clear 4.5:1.
 
 ## Type
 

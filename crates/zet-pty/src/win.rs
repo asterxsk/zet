@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Duration;
 
@@ -102,14 +103,25 @@ pub struct Pty {
     process: Option<OwnedHandle>,
     job: OwnedHandle,
     pid: u32,
-    events: Receiver<Vec<u8>>,
+    // Behind a mutex so that the session can be shared. `Receiver` is `Send` but not
+    // `Sync`, and a terminal host needs both: the thread that owns the window writes
+    // keystrokes and resizes, while a second thread blocks on the child's output. The
+    // lock is only ever taken by `next_chunk` and `release`, both of which are the sole
+    // consumer of this channel, so there is nothing for it to contend with.
+    events: Mutex<Receiver<Vec<u8>>>,
     reader: Option<std::thread::JoinHandle<()>>,
 }
 
 // SAFETY: every field is a handle, a channel, or a join handle. The handles are only
-// ever used through `&self` methods, which Windows serialises internally, and the one
-// method that consumes the value takes it by value.
+// ever used through `&self` methods, which Windows serialises internally — `WriteFile`
+// on a pipe and `ResizePseudoConsole` are both safe to call from two threads at once —
+// and the one method that consumes the value takes it by value. The receiver, which is
+// the only field that is not already `Sync`, is behind a mutex.
 unsafe impl Send for Pty {}
+// SAFETY: as above. This is what lets one thread read the child while another writes to
+// it, which is the only arrangement that keeps typing responsive while a program is
+// printing.
+unsafe impl Sync for Pty {}
 
 impl Pty {
     /// Start `config` attached to a new pseudoconsole.
@@ -163,7 +175,7 @@ impl Pty {
             process: Some(process.0),
             job,
             pid: process.1,
-            events,
+            events: Mutex::new(events),
             reader: Some(reader),
         })
     }
@@ -180,7 +192,7 @@ impl Pty {
     /// when the session has ended.
     #[must_use]
     pub fn next_chunk(&self, timeout: Duration) -> Option<Result<Vec<u8>, PtyError>> {
-        match self.events.recv_timeout(timeout) {
+        match self.receiver().recv_timeout(timeout) {
             Ok(chunk) => Some(Ok(chunk)),
             Err(RecvTimeoutError::Timeout) => None,
             Err(RecvTimeoutError::Disconnected) => Some(Err(PtyError::Io {
@@ -195,22 +207,43 @@ impl Pty {
     /// These are keystrokes or a bracketed paste, already encoded. This crate does not
     /// turn key events into bytes; that belongs to whatever owns the keymap.
     ///
+    /// Takes `&self` rather than `&mut self` so that keystrokes can be written while
+    /// another thread is blocked reading the child's output. Nothing here mutates: the
+    /// write end of a pipe is safe to write to from two threads, and the only reason
+    /// this once needed `&mut` is that `std::fs::File` happens to implement `Write` for
+    /// `&File` rather than for `File`.
+    ///
     /// # Errors
     ///
     /// Fails if the child has gone away.
-    pub fn write(&mut self, bytes: &[u8]) -> Result<(), PtyError> {
-        let input = self.input.as_mut().ok_or_else(|| PtyError::Io {
+    pub fn write(&self, bytes: &[u8]) -> Result<(), PtyError> {
+        let input = self.input.as_ref().ok_or_else(|| PtyError::Io {
             what: "writing to the child",
             message: "the session has ended".into(),
         })?;
-        input.write_all(bytes).map_err(|error| PtyError::Io {
+        // The by-reference implementation of `Write`, which is what lets the file stay
+        // borrowed rather than owned mutably.
+        let mut handle = input;
+        handle.write_all(bytes).map_err(|error| PtyError::Io {
             what: "writing to the child",
             message: error.to_string(),
         })?;
-        input.flush().map_err(|error| PtyError::Io {
+        handle.flush().map_err(|error| PtyError::Io {
             what: "flushing to the child",
             message: error.to_string(),
         })
+    }
+
+    /// The output channel, ignoring whether a previous holder panicked.
+    ///
+    /// A poisoned mutex would mean some other thread panicked while reading the child,
+    /// which leaves the channel exactly as usable as it was before. Recovering is the
+    /// right call here: refusing to read a live process's output because an unrelated
+    /// thread once panicked would turn a crash into a hang.
+    fn receiver(&self) -> std::sync::MutexGuard<'_, Receiver<Vec<u8>>> {
+        self.events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Tell the child its window changed size.
@@ -313,7 +346,7 @@ impl Pty {
             console.close_pipes();
         }
 
-        while self.events.recv_timeout(Duration::from_millis(20)).is_ok() {}
+        while self.receiver().recv_timeout(Duration::from_millis(20)).is_ok() {}
 
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();

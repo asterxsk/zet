@@ -1,0 +1,203 @@
+//! The parts of the configuration that touch a real file.
+//!
+//! These are integration tests rather than unit tests for one reason: they need a
+//! scratch directory, and `CARGO_TARGET_TMPDIR` — the directory cargo hands out for
+//! exactly this — is only defined for integration tests. It lives under `target/`
+//! inside the repository, which is the only place these may write. The last test in
+//! this file is the assertion that keeps that true.
+
+use std::path::{Path, PathBuf};
+
+use zet_config::{Background, Config, CursorShape, TabPosition, load, save};
+
+/// A clean directory for one test.
+fn scratch(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("the scratch directory should be creatable");
+    dir
+}
+
+fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, contents).expect("the file should be writable");
+    path
+}
+
+fn read(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+}
+
+#[test]
+fn a_config_written_out_reads_back_identically() {
+    let dir = scratch("round-trip");
+    let path = dir.join("config.toml");
+
+    let mut config = Config {
+        theme: "gruvbox-dark".to_owned(),
+        ..Config::default()
+    };
+    config.cursor.shape = CursorShape::Bar;
+    config.tabs.position = TabPosition::Left;
+    config.font.size = 15.0;
+    config.keys.insert("find".to_owned(), "Ctrl+F".to_owned());
+
+    save(&config, &path).expect("saves");
+    let back = load(&path).expect("loads");
+
+    assert!(back.diagnostics.is_empty(), "{:?}", back.diagnostics);
+    assert_eq!(back.config, config);
+    assert!(back.existed);
+}
+
+#[test]
+fn every_default_setting_survives_being_written_and_read() {
+    // The list of keys the app can change is the list of keys that has to round-trip.
+    // A default that does not is a setting that silently resets on restart.
+    let dir = scratch("defaults");
+    let path = dir.join("config.toml");
+    save(&Config::default(), &path).expect("saves");
+    let back = load(&path).expect("loads");
+    assert!(back.diagnostics.is_empty(), "{:?}", back.diagnostics);
+    assert_eq!(back.config, Config::default());
+}
+
+#[test]
+fn saving_over_a_hand_written_file_keeps_its_comments() {
+    // PRODUCT.md's sixth success criterion. The file a user has annotated is the one
+    // they care about, and a settings-panel edit that strips the annotations is a
+    // settings-panel edit they will stop making.
+    let dir = scratch("comments");
+    let path = write(
+        &dir,
+        "config.toml",
+        "\
+# zet, configured by hand.
+theme = \"nord\" # the blue one
+
+[font]
+# I like it big
+size = 13.0
+",
+    );
+
+    let mut config = load(&path).expect("loads").config;
+    config.font.size = 16.0;
+    save(&config, &path).expect("saves");
+
+    let written = read(&path);
+    assert!(
+        written.contains("# zet, configured by hand."),
+        "the leading comment was lost:\n{written}"
+    );
+    assert!(
+        written.contains("# the blue one"),
+        "the trailing comment was lost:\n{written}"
+    );
+    assert!(
+        written.contains("# I like it big"),
+        "a comment above a value was lost:\n{written}"
+    );
+    assert!(
+        written.contains("16.0"),
+        "the edit was not written:\n{written}"
+    );
+    assert!(
+        written.contains("theme = \"nord\""),
+        "an untouched key changed:\n{written}"
+    );
+}
+
+#[test]
+fn saving_twice_writes_the_same_bytes_the_second_time() {
+    // Idempotence, which is the property that actually matters. A save writes out every
+    // key, so the first one on a hand-written three-line file produces a complete file
+    // — that is deliberate, and it is how a user discovers what else there is to set.
+    // What must not happen is the file drifting a little on every save, because that
+    // turns a config file under version control into noise.
+    let dir = scratch("idempotent");
+    let path = write(
+        &dir,
+        "config.toml",
+        "# a comment\ntheme = \"nord\"\n\n[font]\nsize = 15.0\n",
+    );
+    let config = load(&path).expect("loads").config;
+
+    save(&config, &path).expect("saves");
+    let first = read(&path);
+    save(&config, &path).expect("saves again");
+    let second = read(&path);
+
+    assert_eq!(first, second, "a second save changed the file");
+    assert!(first.contains("# a comment"), "the comment was lost");
+    assert!(first.contains("size = 15.0"), "the user's value was lost");
+}
+
+#[test]
+fn a_hand_written_file_applies_without_being_rewritten_first() {
+    let dir = scratch("hand-written");
+    let path = write(
+        &dir,
+        "config.toml",
+        "\
+theme = \"tokyo-night\"
+
+[window]
+opacity = 0.9
+
+[window.background]
+kind = \"gradient\"
+from = \"#0a0b0d\"
+to = \"#1a1030\"
+angle = 90.0
+
+[tabs]
+position = \"left\"
+",
+    );
+
+    let loaded = load(&path).expect("loads");
+    assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+    assert_eq!(loaded.config.theme, "tokyo-night");
+    assert!((loaded.config.window.opacity - 0.9).abs() < f32::EPSILON);
+    assert_eq!(loaded.config.tabs.position, TabPosition::Left);
+    assert!(matches!(
+        loaded.config.window.background,
+        Background::Gradient { angle, .. } if (angle - 90.0).abs() < f32::EPSILON
+    ));
+}
+
+#[test]
+fn a_missing_file_loads_as_defaults_without_complaining() {
+    let dir = scratch("missing");
+    let loaded = load(&dir.join("config.toml")).expect("loads");
+    assert!(!loaded.existed);
+    assert!(loaded.diagnostics.is_empty());
+    assert_eq!(loaded.config, Config::default());
+}
+
+#[test]
+fn a_file_that_is_not_toml_at_all_is_reported_rather_than_replaced_silently() {
+    let dir = scratch("garbage");
+    let path = write(&dir, "config.toml", "this is not = = toml [[[\n");
+    let error = load(&path).expect_err("garbage must be reported");
+    let message = error.to_string();
+    assert!(message.contains("config.toml"), "{message}");
+}
+
+#[test]
+fn the_scratch_directory_is_inside_the_repository() {
+    // The guard on the harness itself. If cargo ever moves `CARGO_TARGET_TMPDIR`
+    // outside the checkout, every test above starts writing into a user profile
+    // directory, and this is the assertion that notices.
+    let tmp = Path::new(env!("CARGO_TARGET_TMPDIR"));
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let repository = manifest
+        .parent()
+        .and_then(Path::parent)
+        .expect("the repository root");
+    assert!(
+        tmp.starts_with(repository),
+        "{tmp:?} is not inside {repository:?}"
+    );
+}
