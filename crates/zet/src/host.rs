@@ -49,10 +49,10 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::ModifiersState;
 use winit::window::{CursorIcon, Window, WindowId};
 
-use zet_app::{App, AppError, Command};
-use zet_config::{FontSettings, Palette, TabSettings};
+use zet_app::{Action, App, AppError, Command};
+use zet_config::{Config, FontSettings, Palette, TabSettings};
 use zet_font::{FontError, FontStack};
-use zet_input::{MouseEvent, encode_mouse};
+use zet_input::{Chord, Key, MouseEvent, encode_mouse};
 use zet_render::{Frame, Renderer, RendererError, View};
 use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabInfo};
 
@@ -83,6 +83,16 @@ const OPEN_SIZE: LogicalSize<f64> = LogicalSize::new(1100.0, 720.0);
 
 /// Lines a page of scrolling covers, for the scrollbar's bands.
 const SCROLL_PAGE: i32 = 20;
+
+/// What a binding row says while it is waiting for the user to press something.
+const PRESS_A_KEY: &str = "Press a key";
+
+/// How far one wheel notch moves the settings panel, in logical pixels.
+///
+/// The panel answers in pixels and is the only thing that knows how tall its own rows
+/// are, so the host scrolls in pixels too. A little under two rows, so that a notch
+/// always visibly moves the list and never skips past a row the user was aiming at.
+const PANEL_WHEEL: f32 = 48.0;
 
 /// The terminal, attached to a window.
 pub struct Host {
@@ -136,6 +146,22 @@ pub struct Host {
     /// The grid size the sessions were last told about, so that a frame which did not
     /// change it does not resize every one of them again.
     fitted: (u16, u16),
+
+    /// Whether the settings panel is open.
+    ///
+    /// The window's state rather than the app's, because an overlay is something the
+    /// window draws and the app is the thing that draws nothing. The app already says as
+    /// much where it declines to act on the binding.
+    settings_open: bool,
+    /// How far the panel is scrolled, in logical pixels from the top of its list.
+    ///
+    /// The number the caller asks for; the panel answers each frame with the number it
+    /// actually used, clamped to what overflows, and that answer is what is kept. A
+    /// window that grows therefore pulls the list back up on its own instead of leaving
+    /// it scrolled past the end of a list that now fits.
+    settings_scroll: f32,
+    /// The action waiting for the user to press a key, if the panel asked for one.
+    capturing: Option<Action>,
 }
 
 impl Host {
@@ -151,7 +177,7 @@ impl Host {
         let palette = zet_config::palette_for(app.config(), settings.highlight);
         let chrome = Chrome::new(&app.config().tabs, &app.config().window);
         let tabbed = app.config().tabs.clone();
-        let styled = grid_settings(&app, settings.text_scale);
+        let styled = grid_settings(&app, text_scale(app.config(), settings.text_scale));
         let now = Instant::now();
         Self {
             app,
@@ -176,6 +202,9 @@ impl Host {
             // What `resumed` opens the first tab at, before any frame has been laid out
             // and therefore before anything knows how big the window really is.
             fitted: EMPTY_GRID,
+            settings_open: false,
+            settings_scroll: 0.0,
+            capturing: None,
         }
     }
 
@@ -187,6 +216,11 @@ impl Host {
     /// The current window scale, or one before there is a window.
     fn scale(&self) -> f32 {
         self.window().map_or(1.0, |w| w.scale_factor() as f32)
+    }
+
+    /// The text scale the chrome and the grid are drawn at.
+    fn text_scale(&self) -> f32 {
+        text_scale(self.app.config(), self.settings.text_scale)
     }
 
     /// The window's size in logical pixels.
@@ -221,7 +255,7 @@ impl Host {
 
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
-        let grid = grid_settings(&self.app, self.settings.text_scale);
+        let grid = grid_settings(&self.app, self.text_scale());
         let renderer = Renderer::new(
             Arc::clone(&window),
             size.width,
@@ -245,7 +279,7 @@ impl Host {
     /// text is asking about the titlebar as much as about anything else.
     fn chrome_face(&self, scale: f32) -> Result<FontStack, FontError> {
         let mut settings = zet_ui::fonts::settings();
-        settings.size *= self.settings.text_scale;
+        settings.size *= self.text_scale();
         FontStack::load_embedded(
             &settings,
             scale,
@@ -261,7 +295,7 @@ impl Host {
     /// used is cheaper than a change notification and cannot drift out of sync with what
     /// was actually applied.
     fn reconcile(&mut self) {
-        let wanted = grid_settings(&self.app, self.settings.text_scale);
+        let wanted = grid_settings(&self.app, self.text_scale());
         if wanted != self.styled {
             // The scale comes from the live window rather than from a remembered copy,
             // so a frame drawn while the window is moving between monitors cannot
@@ -286,21 +320,24 @@ impl Host {
 
     /// Re-read the system's accessibility settings and apply them.
     ///
-    /// The app is told about forced contrast because the *grid's* theme changes; the
-    /// chrome's palette is derived here because the chrome is this file's business. The
-    /// text scale is part of the font size, so a change to it invalidates the loaded
-    /// faces — which is expressed by making `reconcile` see a different size.
+    /// The app is told, because the grid's theme and the cursor's blink are its
+    /// business; the chrome's palette is derived here because the chrome is this file's
+    /// business. The app applies the configuration's own switches on top of what the
+    /// system said, so a user who has turned one of them off keeps it off. The text scale
+    /// is part of the font size, so a change to it invalidates the loaded faces — which
+    /// is expressed by making `reconcile` see a different size.
     fn reread_system(&mut self) {
         let settings = SystemSettings::read();
         if settings == self.settings {
             return;
         }
         self.settings = settings;
-        self.app.force_contrast(settings.high_contrast);
+        self.app
+            .system_accessibility(settings.reduce_motion, settings.high_contrast);
         self.palette = zet_config::palette_for(self.app.config(), settings.highlight);
-        // Nothing to invalidate by hand: `reconcile` derives the wanted size from
-        // `settings.text_scale` every time it runs, so the change is picked up on the
-        // next frame without a flag to keep true.
+        // Nothing to invalidate by hand: `reconcile` derives the wanted size from the
+        // text scale every time it runs, so the change is picked up on the next frame
+        // without a flag to keep true.
     }
 
     /// Draw everything and put it on screen.
@@ -343,11 +380,37 @@ impl Host {
             self.os_title = title;
         }
 
+        // The rows and the strings they borrow, both alive until the frame is done with
+        // them. `ChromeInput` is a view rather than an owner, so something has to outlive
+        // it, and this pair is that something.
+        let lines = self.settings_open.then(|| self.app.settings());
+        let capturing = self.capturing;
+        let panel: Vec<zet_ui::SettingLine<'_>> = lines.as_ref().map_or_else(Vec::new, |lines| {
+            lines
+                .iter()
+                .map(|line| {
+                    // The row that is waiting for a key says so. Without this it would go
+                    // on showing the chord it is about to lose, and the user would have
+                    // no way to tell that the next key they press is not going to the
+                    // shell — which, with the panel over a live terminal, is exactly the
+                    // mistake worth designing out.
+                    let waiting = capturing.is_some_and(|action| line.id() == Some(zet_app::Id::Binding(action)));
+                    zet_ui::SettingLine {
+                        text: line.text(),
+                        control: line.kind().map(control_of),
+                        value: if waiting { PRESS_A_KEY } else { line.value() },
+                    }
+                })
+                .collect()
+        });
+
         let input = ChromeInput {
             palette: &self.palette,
             tabs: &tabs,
             active,
-            settings_open: false,
+            settings_open: self.settings_open,
+            settings: &panel,
+            settings_scroll: self.settings_scroll,
             window_title: APP_NAME,
             size: Size {
                 width: width as f32,
@@ -355,7 +418,7 @@ impl Host {
             },
             scale,
             maximized: window.is_maximized(),
-            reduce_motion: self.settings.reduce_motion,
+            reduce_motion: self.app.reduce_motion(),
             pointer: self.pointer.map(|(x, y)| (x as f32, y as f32)),
         };
 
@@ -404,6 +467,11 @@ impl Host {
         // one more frame puts it right — and because the comparison is against the
         // fresh layout, the second frame agrees with itself and the loop stops there.
         let moved = fresh.grid != placed;
+        // The panel answers with the scroll it actually used rather than the one it was
+        // asked for, and that answer is kept: a window that grows then pulls a scrolled
+        // list back up on its own, instead of leaving it parked past the end of a list
+        // that now fits.
+        self.settings_scroll = fresh.settings_scroll;
         self.placed = fresh;
         if moved {
             window.request_redraw();
@@ -562,8 +630,80 @@ impl Host {
         let Some(translated) = keys::translate(event, self.held) else {
             return;
         };
+
+        // A row that asked for a key takes the next one whatever it is, because that is
+        // what the user is looking at and the shell is not. `Escape` is the way out, and
+        // it is spent rather than bound: a binding that cannot be undone without editing
+        // the file is a binding that has to be got right first time.
+        if let Some(action) = self.capturing.take() {
+            if translated.key != Key::Escape {
+                self.app.bind(
+                    action,
+                    Chord {
+                        mods: translated.mods,
+                        key: translated.key,
+                    },
+                );
+                self.saved();
+            }
+            self.redraw();
+            return;
+        }
+
+        // The two overlays belong to the window, which is where they are drawn, so the
+        // binding is read here rather than left to the app. Nothing else is intercepted:
+        // a key with no binding is a key for the shell, and that is the whole of the
+        // keymap's design.
+        if self.app.bound(translated.mods, translated.key) == Some(Action::Settings) {
+            self.settings_open = !self.settings_open;
+            self.settings_scroll = 0.0;
+            self.capturing = None;
+            self.redraw();
+            return;
+        }
+
+        // DESIGN.md: the panel never traps focus, and a way out that does not depend on
+        // remembering the chord you opened it with is the whole of that promise. Bare
+        // `Escape` only — a modified one is somebody else's key, and the shell may well
+        // be waiting for it.
+        if self.settings_open && translated.key == Key::Escape && translated.mods.is_empty() {
+            self.settings_open = false;
+            self.capturing = None;
+            self.redraw();
+            return;
+        }
+
         let commands = self.app.key(&translated);
         self.carry_out(loop_, commands);
+    }
+
+    /// Write the configuration back, and say so when it could not be.
+    ///
+    /// A terminal that silently discards a setting the user just chose is worse than one
+    /// that never offered it, so a failure is reported on stderr where a user who
+    /// launched zet from a shell will see it. It is not fatal: the change is live either
+    /// way, and losing it at exit is a smaller loss than losing the window.
+    fn saved(&mut self) {
+        let path = self.app.config_path().to_path_buf();
+        if let Err(error) = zet_config::save(self.app.config(), &path) {
+            eprintln!("zet: could not write {}: {error}", path.display());
+        }
+    }
+
+    /// Carry out a click on a settings row.
+    fn adjust(&mut self, id: zet_app::Id, back: bool) {
+        match self.app.adjust(id, back) {
+            zet_app::Effect::Capture(action) => self.capturing = Some(action),
+            zet_app::Effect::Changed => {
+                self.saved();
+                // The chrome reads the panel's settings too, and the panel can change
+                // them: a strip moved to the rail from inside the panel has to rebuild
+                // the chrome, which `reconcile` notices on the next frame because the
+                // config no longer matches what was built.
+                self.redraw();
+            }
+            zet_app::Effect::None => {}
+        }
     }
 
     /// The pointer moved.
@@ -696,9 +836,24 @@ impl Host {
                 let _ = self.app.close_tab(number);
                 true
             }
-            // A point inside the settings panel is a click on a control this version
-            // does not have. Swallowing it keeps it away from the shell, which is the
-            // right answer while the panel is deferred.
+            Hit::Setting { line, part } => {
+                // The list drawn this frame and the list read here are the same function
+                // of the same configuration, so the index names the same row. A row that
+                // is not there is not reachable — the chrome hit-tests what it drew.
+                if let Some(id) = self
+                    .app
+                    .settings()
+                    .get(line)
+                    .and_then(zet_app::Line::id)
+                {
+                    self.adjust(id, part == zet_ui::SettingPart::Less);
+                }
+                true
+            }
+            // The panel's own surface, between and around its controls. Swallowed
+            // rather than passed on: the terminal behind it stays visible, which
+            // DESIGN.md gives as the reason the panel exists at all, but a click on a
+            // surface is a click on the surface and not on what shows through it.
             Hit::Settings => true,
             Hit::None => false,
         }
@@ -751,6 +906,18 @@ impl Host {
             return;
         }
 
+        // The panel is a list that can be longer than the window, and a list with no
+        // wheel is a list whose last rows are unreachable on a laptop with no End key.
+        // The pointer decides, because both surfaces are on screen at once and the one
+        // under the cursor is the one the user is looking at.
+        if self.settings_open && self.pointer.is_some_and(|(x, y)| self.over_panel(x, y)) {
+            self.settings_scroll = (self.settings_scroll - lines as f32 * PANEL_WHEEL).max(0.0);
+            if let Some(window) = self.window.clone() {
+                window.request_redraw();
+            }
+            return;
+        }
+
         if self.wheel_to_program(lines) {
             return;
         }
@@ -797,6 +964,19 @@ impl Host {
         true
     }
 
+    /// Whether a point is inside the settings panel.
+    ///
+    /// Asked of the chrome rather than worked out from the panel's width, because the
+    /// width is the chrome's business and a second copy of it here is a second place for
+    /// it to be wrong. The chrome hit-tests what it actually drew, which is also what
+    /// the user is looking at.
+    fn over_panel(&self, x: f64, y: f64) -> bool {
+        matches!(
+            self.chrome.hit(x as f32, y as f32),
+            Hit::Settings | Hit::Setting { .. }
+        )
+    }
+
     /// The window changed size.
     fn resized(&mut self) {
         let Some(window) = self.window.clone() else {
@@ -835,11 +1015,40 @@ impl Host {
     }
 }
 
-/// The grid's face settings, with the system's text scale applied.
+/// The text scale the chrome and the grid are drawn at.
+///
+/// Windows' own text-size slider and the panel's row answer the same question, and the
+/// configuration decides which of them is speaking: `0.0` is "follow the system", which
+/// is the default and is what makes the system slider work without zet having to be told
+/// about it twice. Any other value is the user overruling it.
+fn text_scale(config: &Config, system: f32) -> f32 {
+    match config.appearance.text_scale {
+        0.0 => system,
+        scale => scale,
+    }
+}
+
+/// The grid's face settings, with the text scale applied.
 fn grid_settings(app: &App, text_scale: f32) -> FontSettings {
     FontSettings {
         size: app.font_size() * text_scale,
         ..app.config().font.clone()
+    }
+}
+
+/// The chrome's spelling of a settings row's control.
+///
+/// The same four things under two names, and this is the only place they meet: the app
+/// decides what a row *does* and knows nothing about how it looks, the chrome decides
+/// how it looks and is told nothing about what it means, and neither crate can see the
+/// other. Two enums with four variants each is the whole of the price, and it is the
+/// price of the app being testable without a window.
+const fn control_of(kind: zet_app::Kind) -> zet_ui::Control {
+    match kind {
+        zet_app::Kind::Choice => zet_ui::Control::Choice,
+        zet_app::Kind::Toggle => zet_ui::Control::Toggle,
+        zet_app::Kind::Step => zet_ui::Control::Step,
+        zet_app::Kind::Chord => zet_ui::Control::Chord,
     }
 }
 
@@ -906,11 +1115,22 @@ impl ApplicationHandler<Wake> for Host {
     }
 
     fn user_event(&mut self, loop_: &ActiveEventLoop, wake: Wake) {
+        // The font database is the one wake that is not about a session, and it is
+        // handled and done with rather than falling through: there is no output to drain
+        // and no tab that could have closed.
+        if let Wake::Families(families) = wake {
+            self.app.set_families(families);
+            // The panel is the only thing that reads them, and a panel that is not open
+            // does not need the frame.
+            if self.settings_open && let Some(window) = self.window.clone() {
+                window.request_redraw();
+            }
+            return;
+        }
+
         // The session that woke us is not named and does not need to be: draining walks
         // every open session, which is a handful of non-blocking reads and therefore
-        // cheaper than tracking which one moved. The `let` is exhaustive because there
-        // is one thing the loop can be woken for.
-        let Wake::Output = wake;
+        // cheaper than tracking which one moved.
         self.app.pump();
 
         // A tab whose shell exited is closed by the app, and the last one closing is
@@ -1063,5 +1283,21 @@ mod tests {
         let doubled = grid_settings(&app, 2.0);
         assert_eq!(plain.family, doubled.family);
         assert_eq!(doubled.size, plain.size * 2.0);
+    }
+
+    #[test]
+    fn a_text_scale_of_zero_means_the_system_and_anything_else_means_the_user() {
+        // The panel's row and Windows' own text-size slider answer the same question, and
+        // this is the whole of who wins: the default defers, and every other value is
+        // somebody having overruled it.
+        let mut config = Config::default();
+        assert!(config.appearance.text_scale.abs() < f32::EPSILON);
+        assert!((text_scale(&config, 1.25) - 1.25).abs() < f32::EPSILON);
+        config.appearance.text_scale = 2.0;
+        assert!((text_scale(&config, 1.25) - 2.0).abs() < f32::EPSILON);
+        assert!(
+            (text_scale(&config, 3.0) - 2.0).abs() < f32::EPSILON,
+            "a value the user set is not the system's to override"
+        );
     }
 }

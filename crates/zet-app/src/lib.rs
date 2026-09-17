@@ -45,8 +45,10 @@
 
 pub mod action;
 pub mod app;
+pub mod settings;
 pub mod text;
 
 pub use action::Action;
 pub use app::{App, AppError, BLINK_INTERVAL, Command};
+pub use settings::{Effect, Id, Kind, Line};
 pub use text::selection_text;

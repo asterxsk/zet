@@ -18,13 +18,14 @@ use std::time::{Duration, Instant};
 use zet_config::{
     Config, Diagnostic, Severity, Theme, by_slug, contrast_theme, default_path, load,
 };
-use zet_input::{Chord, KeyEvent, encode_key, encode_paste};
+use zet_input::{Chord, KeyEvent, KeyKind, encode_key, encode_paste};
 use zet_pty::discovery::{self, Profile};
 use zet_render::Selection;
 use zet_session::{Session, SessionError, Sessions, Waker};
 use zet_vt::{Modes, Pos};
 
 use crate::action::Action;
+use crate::settings;
 use crate::text::selection_text;
 
 /// How long each half of a cursor blink lasts.
@@ -125,10 +126,24 @@ pub struct App {
     forced_contrast: bool,
     /// The system has asked for as little movement as possible, which stops the blink.
     reduce_motion: bool,
+    /// What the system last reported about accessibility, before the configuration had
+    /// its say: whether motion should be reduced, and whether colours are forced.
+    ///
+    /// Kept rather than folded in because both answers are re-gated every time the
+    /// configuration changes. A user who turns "Reduce motion" off in the panel is
+    /// changing their mind about a system setting zet already knows, and re-reading the
+    /// system to find that out again would be a second source of truth about it.
+    reported: (bool, bool),
     /// How much the font size has been nudged from the configured one, in points.
     font_nudge: f32,
     /// The directory every tab in this window starts in, if the command line named one.
     start_directory: Option<PathBuf>,
+    /// Every family the settings panel may offer for the grid, as the host found them.
+    ///
+    /// Empty until the host has looked, which is why the panel's font row falls back to
+    /// the family the file names: a row offering one choice is a row that says the truth
+    /// about the file and nothing about the machine.
+    families: Vec<String>,
 }
 
 impl App {
@@ -167,8 +182,10 @@ impl App {
             blink: Blink::new(now),
             forced_contrast: false,
             reduce_motion: false,
+            reported: (false, false),
             font_nudge: 0.0,
             start_directory: None,
+            families: Vec::new(),
         })
     }
 
@@ -324,7 +341,69 @@ impl App {
     /// The size the grid font should be drawn at, including any keyboard nudge.
     #[must_use]
     pub fn font_size(&self) -> f32 {
-        (self.config.font.size + self.font_nudge).clamp(4.0, 72.0)
+        (self.config.font.size + self.font_nudge)
+            .clamp(settings::MIN_SIZE, settings::MAX_SIZE)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Settings
+    // ---------------------------------------------------------------------------
+
+    /// Tell the app which families the machine has, so the font row can offer them.
+    ///
+    /// The host owns this because the app depends on no font library and rasterises
+    /// nothing; enumerating what is installed is a question for the layer that already
+    /// reads font files.
+    pub fn set_families(&mut self, families: Vec<String>) {
+        self.families = families;
+    }
+
+    /// The rows the settings panel draws.
+    #[must_use]
+    pub fn settings(&self) -> Vec<settings::Line> {
+        settings::lines(&self.config, &self.bindings)
+    }
+
+    /// Carry out a click on a settings row.
+    ///
+    /// The panel is a view of the configuration and never a copy of it, so this is the
+    /// whole of the round trip: read the rows, click one, and the file changes. What the
+    /// caller does with the answer is write it back and rebuild whatever reads it.
+    pub fn adjust(&mut self, id: settings::Id, back: bool) -> settings::Effect {
+        let effect = settings::adjust(&mut self.config, id, back, &self.families);
+        if effect == settings::Effect::Changed {
+            // The panel's size is the configured size, so a nudge from the keyboard is
+            // dropped the moment the panel is used: two numbers for one thing would
+            // otherwise leave the row reading 14 pt while the grid drew 16.
+            if id == settings::Id::FontSize {
+                self.font_nudge = 0.0;
+            }
+            self.apply();
+        }
+        effect
+    }
+
+    /// Bind a chord to an action, replacing whatever ran it before.
+    pub fn bind(&mut self, action: Action, chord: Chord) {
+        settings::bind(&mut self.config, action, chord);
+        self.bindings = parse_bindings(&self.config);
+    }
+
+    /// Re-derive everything the configuration decides.
+    ///
+    /// Called after a settings change rather than by the host, because the theme and the
+    /// keymap are this crate's own reading of the file and nothing outside it can put
+    /// them back in step.
+    fn apply(&mut self) {
+        let (reduce_motion, high_contrast) = self.reported;
+        self.reduce_motion = reduce_motion && self.config.appearance.follow_reduce_motion;
+        self.forced_contrast = high_contrast && self.config.appearance.follow_forced_colors;
+        self.theme = if self.forced_contrast {
+            contrast_theme()
+        } else {
+            by_slug(&self.config.theme).unwrap_or_else(|| zet_config::default_theme())
+        };
+        self.bindings = parse_bindings(&self.config);
     }
 
     // ---------------------------------------------------------------------------
@@ -410,7 +489,17 @@ impl App {
     /// terminal, which is the default and the reason the keymap is a short list rather
     /// than a complete description of the keyboard.
     pub fn key(&mut self, event: &KeyEvent) -> Vec<Command> {
-        if let Some(action) = self.bound(event.mods, event.key) {
+        // A binding runs on the way down and on every auto-repeat, and never on the way
+        // up. `bound` answers for a chord and not for an event, so asking it directly
+        // would run the action twice for one press — once when the key went down and
+        // again when it came up, which is two tabs for one `Ctrl+Shift+T`.
+        //
+        // Holding a bound chord down therefore repeats it, which is what a user holding
+        // `Ctrl+Shift+T` is asking for. `encode_key` already answers `None` for a
+        // release, so the two halves of this agree about what a release is.
+        if event.kind != KeyKind::Release
+            && let Some(action) = self.bound(event.mods, event.key)
+        {
             return self.run(action);
         }
         self.type_into_session(event);
@@ -618,18 +707,21 @@ impl App {
             .map_or((80, 24), |session| (session.cols(), session.rows()))
     }
 
-    /// Switch to the contrast theme and stay there, because the system asked for it.
+    /// Apply what the system reports about accessibility, as far as the configuration
+    /// lets it.
     ///
-    /// Forced colours are an accessibility requirement rather than a preference, so this
-    /// is not a setting the user can have set against them at runtime: it overrides
-    /// whatever the config says for as long as it is on.
-    pub fn force_contrast(&mut self, forced: bool) {
-        self.forced_contrast = forced;
-        self.theme = if forced {
-            contrast_theme()
-        } else {
-            by_slug(&self.config.theme).unwrap_or_else(|| zet_config::default_theme())
-        };
+    /// Both of these are the system's news and the user's decision. Windows says whether
+    /// motion should be reduced and whether colours are forced; `[appearance]` says
+    /// whether zet acts on either, and both default to yes because a machine that has
+    /// asked for less movement has asked for a reason.
+    ///
+    /// Called again whenever the configuration changes, because the two switches behind
+    /// it are rows in the settings panel: a user turning "Reduce motion" off is changing
+    /// their mind about exactly this, and a decision read once at startup would leave the
+    /// row doing nothing until the next launch.
+    pub fn system_accessibility(&mut self, reduce_motion: bool, high_contrast: bool) {
+        self.reported = (reduce_motion, high_contrast);
+        self.apply();
     }
 }
 
@@ -638,7 +730,7 @@ impl App {
 /// An entry that cannot be parsed is dropped rather than fatal. The config loader has
 /// already reported the ones it could see, and a keybinding is not worth refusing to
 /// start over.
-fn parse_bindings(config: &Config) -> Vec<(Chord, Action)> {
+pub(crate) fn parse_bindings(config: &Config) -> Vec<(Chord, Action)> {
     config
         .keys
         .iter()
@@ -732,6 +824,33 @@ mod tests {
         let _ = app.key(&key(Key::Char('T'), Modifiers::CTRL | Modifiers::SHIFT));
         assert_eq!(app.tab_numbers().len(), 2);
         assert_eq!(app.active_number(), Some(2));
+    }
+
+    #[test]
+    fn a_binding_runs_on_the_way_down_and_not_on_the_way_up() {
+        // The failure this prevents is quiet and doubled: `bound` answers for a chord,
+        // not for an event, so a release that reached it would run the action a second
+        // time and one press of `Ctrl+Shift+T` would open two tabs.
+        let mut app = app();
+        let _ = app.open_tab(80, 24).expect("a shell starts");
+        let chord = Modifiers::CTRL | Modifiers::SHIFT;
+        let _ = app.key(&KeyEvent {
+            kind: KeyKind::Release,
+            ..key(Key::Char('T'), chord)
+        });
+        assert_eq!(app.tab_numbers().len(), 1, "letting go opened a tab");
+
+        let _ = app.key(&key(Key::Char('T'), chord));
+        assert_eq!(app.tab_numbers().len(), 2);
+        let _ = app.key(&KeyEvent {
+            kind: KeyKind::Repeat,
+            ..key(Key::Char('T'), chord)
+        });
+        assert_eq!(
+            app.tab_numbers().len(),
+            3,
+            "holding a bound chord should repeat it, which is the whole point of holding it"
+        );
     }
 
     #[test]
@@ -851,16 +970,41 @@ mod tests {
     fn forced_contrast_overrides_the_configured_theme_and_can_be_turned_off_again() {
         let mut app = app();
         assert_eq!(app.theme().slug, "zet-dark");
-        app.force_contrast(true);
+        app.system_accessibility(false, true);
         assert_eq!(app.theme().slug, "zet-contrast");
-        app.force_contrast(false);
+        app.system_accessibility(false, false);
+        assert_eq!(app.theme().slug, "zet-dark");
+    }
+
+    #[test]
+    fn the_two_appearance_switches_are_what_stops_the_system_having_its_way() {
+        // Each row in the panel that covers a system setting has to actually cover it,
+        // or the panel is offering a choice it does not honour.
+        let mut app = app();
+        app.system_accessibility(true, true);
+        assert!(app.reduce_motion(), "reduce motion is honoured by default");
+        assert_eq!(app.theme().slug, "zet-contrast");
+
+        app.adjust(settings::Id::ReduceMotion, false);
+        assert!(!app.reduce_motion(), "the row turned it off");
+        app.adjust(settings::Id::ForcedColors, false);
+        assert_eq!(
+            app.theme().slug,
+            "zet-dark",
+            "with forced colours switched off the user's theme comes back"
+        );
+
+        // And they stay off when the system reports the same thing again, which is the
+        // case a value read once and cached would get wrong.
+        app.system_accessibility(true, true);
+        assert!(!app.reduce_motion());
         assert_eq!(app.theme().slug, "zet-dark");
     }
 
     #[test]
     fn the_contrast_floor_of_the_forced_theme_is_the_reason_it_exists() {
         let mut app = app();
-        app.force_contrast(true);
+        app.system_accessibility(false, true);
         let theme = app.theme();
         assert!(
             theme

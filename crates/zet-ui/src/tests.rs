@@ -20,7 +20,8 @@ use zet_render::{Frame, Placement, Quad};
 use crate::fonts::GlyphSource;
 use crate::geometry::ROW_HEIGHT;
 use crate::{
-    Caption, Chrome, ChromeInput, Hit, Layout, Rect, ScrollState, Scrollbar, Size, TabInfo,
+    Caption, Chrome, ChromeInput, Control, Hit, Layout, Rect, ScrollState, Scrollbar, SettingLine,
+    SettingPart, Size, TabInfo,
 };
 
 /// A font source with no font in it.
@@ -160,6 +161,8 @@ fn input<'a>(palette: &'a Palette, tabs: &'a [TabInfo], size: Size) -> ChromeInp
         tabs,
         active: tabs.first().map(|tab| tab.index),
         settings_open: false,
+        settings: &[],
+        settings_scroll: 0.0,
         window_title: "zet",
         size,
         scale: 1.0,
@@ -894,7 +897,7 @@ fn the_settings_panel_is_anchored_to_the_right_and_hit_tests_as_settings() {
         "the grid is not the chrome's"
     );
 
-    // The panel's own surface is in the frame, and every heading is drawn.
+    // The panel's own surface is in the frame.
     let raised = color(palette.surface_raised);
     assert!(
         drawn
@@ -903,12 +906,247 @@ fn the_settings_panel_is_anchored_to_the_right_and_hit_tests_as_settings() {
             .iter()
             .any(|quad| quad.color.map(f32::to_bits) == raised)
     );
-    let headings: Vec<char> = drawn_at(&drawn.frame, Weight::MEDIUM);
-    for expected in ["APPEARANCE", "TABS", "TERMINAL", "KEYS"] {
-        for letter in expected.chars() {
-            assert!(headings.contains(&letter), "{expected} was not drawn");
+}
+
+/// The lines a test panel is built from: two sections, a heading and rows of each
+/// control kind.
+fn settings_lines() -> Vec<SettingLine<'static>> {
+    vec![
+        SettingLine {
+            text: "APPEARANCE",
+            control: None,
+            value: "",
+        },
+        SettingLine {
+            text: "Theme",
+            control: Some(Control::Choice),
+            value: "zet dark",
+        },
+        SettingLine {
+            text: "Reduce motion",
+            control: Some(Control::Toggle),
+            value: "Off",
+        },
+        SettingLine {
+            text: "TERMINAL",
+            control: None,
+            value: "",
+        },
+        SettingLine {
+            text: "Size",
+            control: Some(Control::Step),
+            value: "13",
+        },
+        SettingLine {
+            text: "New tab",
+            control: Some(Control::Chord),
+            value: "Ctrl+Shift+T",
+        },
+    ]
+}
+
+/// The panel, open on a test window, drawn once.
+fn open_panel(palette: &Palette, lines: &[SettingLine<'_>]) -> (Chrome, Drawn) {
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let mut input = input(palette, &tabs, window());
+    input.settings_open = true;
+    input.settings = lines;
+    let drawn = draw(&mut chrome, &input);
+    (chrome, drawn)
+}
+
+#[test]
+fn the_panel_draws_the_lines_it_is_given() {
+    // The panel is handed words and values; it draws them and nothing of its own. The
+    // skeleton it used to draw said "Theme" and then left a grey box where the theme
+    // would go, which is a settings panel that cannot set anything.
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (_, drawn) = open_panel(&palette, &lines);
+
+    let heading: Vec<char> = drawn_at(&drawn.frame, Weight::MEDIUM);
+    for letter in "APPEARANCE".chars() {
+        assert!(heading.contains(&letter), "the heading was not drawn");
+    }
+    let body: Vec<char> = drawn_at(&drawn.frame, Weight::NORMAL);
+    for expected in ["Theme", "zet dark", "Reduce motion", "Off", "Ctrl+Shift+T"] {
+        for letter in expected.chars().filter(|ch| !ch.is_whitespace()) {
+            assert!(body.contains(&letter), "{expected} was not drawn");
         }
     }
+}
+
+#[test]
+fn every_control_is_a_region_that_names_its_line() {
+    // What makes the panel a control rather than a picture. A click has to come back
+    // naming the line it landed on, or the caller has nothing to apply it to.
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, _) = open_panel(&palette, &lines);
+
+    // Lines 1, 2, 4 and 5 have controls; 0 and 3 are headings.
+    for line in [1_usize, 2, 4, 5] {
+        let (part, rect) = chrome
+            .regions()
+            .iter()
+            .find_map(|region| match region {
+                crate::Region::Setting {
+                    line: at, part, rect,
+                } if *at == line => Some((*part, *rect)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("line {line} has no control"));
+        let (x, y) = rect.center();
+        assert_eq!(
+            chrome.hit(x, y),
+            Hit::Setting { line, part },
+            "line {line} does not hit-test as itself"
+        );
+    }
+}
+
+#[test]
+fn a_stepper_answers_twice_and_everything_else_once() {
+    // A stepper is two controls wearing one rectangle: its halves mean opposite things,
+    // and a caller that only learned "the size row was clicked" would have to guess which
+    // way the user meant.
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, _) = open_panel(&palette, &lines);
+
+    let halves: Vec<(SettingPart, Rect)> = chrome
+        .regions()
+        .iter()
+        .filter_map(|region| match region {
+            crate::Region::Setting {
+                line: 4, part, rect, ..
+            } => Some((*part, *rect)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(halves.len(), 2, "the size row is not two halves");
+    let (left, right) = (halves[0].1, halves[1].1);
+    assert!((left.width - right.width).abs() < f32::EPSILON);
+    assert!((left.right() - right.x).abs() < f32::EPSILON, "the halves meet");
+    assert_eq!(
+        chrome.hit(left.x + 2.0, left.y + 2.0),
+        Hit::Setting {
+            line: 4,
+            part: SettingPart::Less
+        }
+    );
+    assert_eq!(
+        chrome.hit(right.x + 2.0, right.y + 2.0),
+        Hit::Setting {
+            line: 4,
+            part: SettingPart::More
+        }
+    );
+
+    // A toggle is one control, not two.
+    let toggles = chrome
+        .regions()
+        .iter()
+        .filter(|region| {
+            matches!(
+                region,
+                crate::Region::Setting {
+                    line: 2,
+                    part: SettingPart::Whole,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(toggles, 1);
+}
+
+#[test]
+fn a_row_that_does_not_fit_is_scrolled_to_rather_than_dropped() {
+    // A panel that silently stops listing settings once the window is short is a panel
+    // where the user cannot find a setting and has no way to tell that it is there. The
+    // list scrolls, and the scroll is clamped to the overflow rather than to whatever
+    // the caller last asked for.
+    let palette = Palette::instrument();
+    let lines: Vec<SettingLine<'static>> = (0..40)
+        .map(|_| SettingLine {
+            text: "Size",
+            control: Some(Control::Step),
+            value: "13",
+        })
+        .collect();
+
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let short = Size {
+        width: 1200.0,
+        height: 200.0,
+    };
+    let mut input = input(&palette, &tabs, short);
+    input.settings_open = true;
+    input.settings = &lines;
+
+    // Unscrolled, the list starts at the top and the first row is on screen.
+    let top = draw(&mut chrome, &input);
+    assert!((top.layout.settings_scroll).abs() < f32::EPSILON);
+    let first = |chrome: &Chrome| {
+        chrome.regions().iter().any(|region| {
+            matches!(
+                region,
+                crate::Region::Setting {
+                    line: 0,
+                    part: SettingPart::Less,
+                    ..
+                }
+            )
+        })
+    };
+    assert!(first(&chrome), "row 0 should be on screen at the top");
+
+    // Ask for more scroll than there is. The answer comes back clamped to the overflow,
+    // so the wheel does not spend a second doing nothing while the content catches up.
+    let mut far = input;
+    far.settings_scroll = 100_000.0;
+    let clamped = draw(&mut chrome, &far);
+    let content = 40.0 * 28.0;
+    let viewport = short.height - top.layout.top - 2.0 * 16.0;
+    let overflow = content - viewport;
+    assert!(overflow > 0.0, "forty rows should not fit in 200 pixels");
+    assert!(
+        (clamped.layout.settings_scroll - overflow).abs() < 1.0e-3,
+        "the scroll stopped at {} rather than at the end of the content, {overflow}",
+        clamped.layout.settings_scroll
+    );
+    assert!(!first(&chrome), "row 0 should have scrolled off");
+}
+
+#[test]
+fn clicking_the_panel_is_not_clicking_the_grid() {
+    // The panel floats over the terminal, so a click on its surface must stop there. A
+    // click that fell through would type into a program the user was not looking at.
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, drawn) = open_panel(&palette, &lines);
+    let panel = chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Settings(rect) => Some(*rect),
+            _ => None,
+        })
+        .expect("the panel is open");
+
+    // A pixel inside the panel but not on any control: the gutter below the last row.
+    let gutter = (panel.x + 10.0, panel.bottom() - 4.0);
+    assert_eq!(
+        chrome.hit(gutter.0, gutter.1),
+        Hit::Settings,
+        "the panel's own surface is not hit-testable"
+    );
+    // And the grid is still the grid outside it.
+    assert_eq!(chrome.hit(panel.x - 10.0, 400.0), Hit::None);
+    let _ = drawn;
 }
 
 #[test]

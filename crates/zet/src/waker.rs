@@ -11,14 +11,17 @@ use zet_session::Waker;
 
 /// Something for the event loop to do that did not come from the window.
 ///
-/// One variant, because there is one thing: a session has output to drain, or has exited.
-/// The session that woke us is not named, and does not need to be — draining walks every
-/// open session, which is a handful of non-blocking reads and therefore cheaper than
-/// tracking which one moved.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// Two things, and they have nothing in common but the mechanism: a session has output
+/// to drain, and a background thread has finished a job the loop asked for. The session
+/// that woke us is not named, and does not need to be — draining walks every open
+/// session, which is a handful of non-blocking reads and therefore cheaper than tracking
+/// which one moved.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Wake {
     /// Drain the sessions.
     Output,
+    /// The font database has been walked, and these are the families it found.
+    Families(Vec<String>),
 }
 
 /// A [`Waker`] that posts to the event loop.

@@ -14,6 +14,34 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Added
 
+- **`zet-app` / `zet-ui` / `zet`** — the settings panel, which is the config file with a face on it.
+  - `Ctrl+Shift+Comma` opens a 380px panel over the right edge of the grid. The terminal stays
+    visible behind it and keeps updating: the preview is not a preview.
+  - Rows are Appearance (theme, text scale, reduce motion, forced colours), Tabs (position),
+    Terminal (font, size, cursor shape, blink, and thickness when the shape has one), and Keys
+    (one row per action). Every row writes straight through to `config.toml` as it changes, and
+    the file keeps its comments — `toml_edit` round-trips, so a note you wrote beside a setting
+    survives being set from the panel.
+  - Four controls: a choice steps through an enum, a stepper moves a number and stops at the
+    ends rather than wrapping, a toggle flips, and a chord row asks for the next key you press
+    and says `Press a key` until you press it. `Escape` cancels; `Escape` with nothing pending
+    closes the panel.
+  - The font row offers every monospaced family the machine has. Enumerating them is a registry
+    walk and a face load per family, so it happens on its own thread during startup and arrives
+    as a user event rather than being paid for on the frame that draws.
+  - Binding a chord that something else already had leaves the other action `Unbound` and says
+    so on its own row, rather than leaving the two of them to be resolved by whichever the map
+    happened to yield first.
+- **`zet-app`** — a key bound to a chord fires on the press and on every auto-repeat, and not on
+  the release.
+  - `bound` answers for a chord rather than for an event, so a release that reached it ran the
+    action a second time: one press of `Ctrl+Shift+T` opened two tabs. Holding a bound chord down
+    now repeats it, which is what holding it is asking for.
+- **`zet-app`** — `[appearance]` is honoured, and each of its rows does what it says.
+  - `text_scale` of `0.0` follows the system; anything else overrules it, and the chrome's type
+    scales with the grid's. The field was stored and never read until now.
+  - `follow_reduce_motion` and `follow_forced_colors` gate what the system reports. Reduce motion
+    reaches the cursor blink for the first time: `App` had the flag and no way to set it.
 - **`zet-ui`** — a tab shows its name after its number, and the window shows the active tab's.
   - `#3  PowerShell`: the number is the tab's identity and the name is what is running on it.
     The name is what the program set with `OSC 0`/`OSC 2`, or the profile's name when it set

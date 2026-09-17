@@ -28,6 +28,7 @@ use std::sync::Arc;
 use winit::event_loop::{ControlFlow, EventLoop};
 
 use zet_app::App;
+use zet_font::FontLibrary;
 use zet_session::Waker;
 
 use crate::host::Host;
@@ -49,10 +50,11 @@ OPTIONS:
     -V, --version             Print the version
 
 `--directory` is not a setting and nothing else here is one either. Everything zet can
-be configured to do is in its config file, which it writes on first run; the key
-bindings, the theme, the font, and the window are all there. The directory is not a
-setting, it is where you were standing when you typed the command — it is what the
-folder right-click menu passes, and it applies to every tab the window opens.";
+be configured to do is in its config file — the key bindings, the theme, the font, and
+the window — and the settings panel (Ctrl+Shift+Comma) edits the same file in place,
+comment by comment, so the two can never disagree. The directory is not a setting, it
+is where you were standing when you typed the command: it is what the folder right-click
+menu passes, and it applies to every tab the window opens.";
 
 fn main() -> ExitCode {
     match parse(std::env::args().skip(1)) {
@@ -144,6 +146,28 @@ fn run(directory: Option<PathBuf>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    // The settings panel offers every monospaced family the machine has, and finding out
+    // which ones those are means resolving all of them — a registry walk and a face load
+    // per family, which is longer than a frame and would be felt on every launch. It gets
+    // its own thread, and the list arrives as a user event; a window opened before the
+    // thread has finished simply has a font row that names the configured family and
+    // nothing else, which is the truth until the machine has been asked.
+    //
+    // The library lives and dies on that thread. What crosses back is a list of names,
+    // not the blobs it had to materialise to produce it.
+    {
+        let proxy = loop_.create_proxy();
+        std::thread::spawn(move || {
+            let mut library = FontLibrary::new();
+            let installed = library.families().to_vec();
+            let families: Vec<String> = installed
+                .into_iter()
+                .filter(|family| library.is_monospace(family))
+                .collect();
+            let _ = proxy.send_event(Wake::Families(families));
+        });
+    }
 
     let mut host = Host::new(app);
     match loop_.run_app(&mut host) {

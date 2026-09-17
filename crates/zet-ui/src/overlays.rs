@@ -9,32 +9,14 @@
 use zet_font::Weight;
 
 use crate::ChromeInput;
+use crate::Control;
 use crate::ScrollState;
+use crate::SettingLine;
+use crate::SettingPart;
 use crate::geometry::{
     FIND_BAR_HEIGHT, PANEL_WIDTH, Rect, SCROLLBAR, SCROLLBAR_HOVER, SCROLLBAR_MIN_THUMB,
 };
 use crate::paint::{Painter, TextStyle};
-
-/// The panel's skeleton.
-///
-/// DESIGN.md fixes the four sections and their order, and a heading is a heading. The
-/// rows under each name a setting; what the settings *are* belongs to the configuration,
-/// which this crate is not given, and inventing a second copy of it here is exactly how
-/// a panel and a file start disagreeing. So a row is a label and a control-shaped
-/// rectangle, which is the whole of what a layout can honestly draw until it is handed
-/// values.
-///
-/// The headings are written in upper case rather than converted, because the conversion
-/// would allocate four strings every frame to say the same thing.
-const SECTIONS: [(&str, &[&str]); 4] = [
-    ("APPEARANCE", &["Theme", "Text scale", "Reduce motion"]),
-    ("TABS", &["Position", "Open default"]),
-    (
-        "TERMINAL",
-        &["Font", "Size", "Cursor shape", "Cursor blink"],
-    ),
-    ("KEYS", &["New tab", "Close tab", "Find", "Settings"]),
-];
 
 /// The gap between the panel's edge and its content.
 const PAD: f32 = 16.0;
@@ -42,15 +24,22 @@ const PAD: f32 = 16.0;
 /// The space a heading occupies, including the hairline under it.
 const HEADING_BOX: f32 = 22.0;
 
-/// The space under a section's last row and above the next heading.
+/// The space above the first heading of a section, after the last row of the one before.
 const SECTION_GAP: f32 = 18.0;
 
 /// A settings row's height.
 const ROW: f32 = 28.0;
 
-/// The placeholder a row's control is drawn as.
-const CONTROL_WIDTH: f32 = 108.0;
+/// A row's control.
+///
+/// Wide enough for `Cascadia Mono`, wide enough for a chord like `Ctrl+Shift+T`, and no
+/// wider: the label needs the rest, and a control that takes half the panel is a control
+/// that does not look like something you click once.
+const CONTROL_WIDTH: f32 = 118.0;
 const CONTROL_HEIGHT: f32 = 20.0;
+
+/// The gap between a row's label and its control.
+const LABEL_GAP: f32 = 12.0;
 
 /// The find bar's own padding, and the field inside it.
 const FIND_PAD: f32 = 8.0;
@@ -63,18 +52,32 @@ const HEADING_TRACKING: f32 = 0.08;
 const LABEL_SIZE: f32 = 13.0;
 const HINT_SIZE: f32 = 12.0;
 
+/// What the panel drew, so the caller can hit-test it and keep its scroll honest.
+pub(crate) struct Panel {
+    /// The panel itself.
+    pub rect: Rect,
+    /// Every control that was on screen, and which line it belongs to.
+    pub controls: Vec<(usize, SettingPart, Rect)>,
+    /// The scroll this frame was drawn at, clamped to what actually overflows.
+    pub scroll: f32,
+}
+
 /// Draw the settings panel and answer where it went.
 ///
 /// A 380-pixel panel against the right edge, on `surface-raised`, with a hairline
 /// between it and anything behind it. It does not resize the grid: the terminal stays
 /// visible behind it and keeps updating, which DESIGN.md says is the reason the panel
 /// exists at all rather than a config file alone.
-pub(crate) fn panel(
-    paint: &mut Painter<'_>,
-    input: &ChromeInput<'_>,
-    top: f32,
-    bottom: f32,
-) -> Rect {
+///
+/// The lines come from the caller. What a setting *is* belongs to the configuration,
+/// which this crate is not given, and a second copy of it living next to the painter is
+/// exactly how a panel and a file start disagreeing — so the panel owns the geometry,
+/// the type, and the hit regions, and the caller owns the words and the values.
+///
+/// Lines that do not fit are scrolled rather than dropped. A panel that silently stops
+/// listing settings once the window is short is a panel where the user cannot find a
+/// setting and has no way to tell that it is there.
+pub(crate) fn panel(paint: &mut Painter<'_>, input: &ChromeInput<'_>, top: f32, bottom: f32) -> Panel {
     let palette = *input.palette;
     // Narrower than 380 pixels of window means the panel is the window. Letting it hang
     // off the left edge would put the heading of a section nobody can read behind the
@@ -92,44 +95,146 @@ pub(crate) fn panel(
         palette.hairline,
     );
 
-    let mut y = rect.y + PAD;
-    for (heading, rows) in SECTIONS {
-        let heading_box = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, HEADING_BOX);
-        if heading_box.y > rect.bottom() {
-            break;
-        }
-        let style =
-            TextStyle::new(heading_size(), Weight::MEDIUM, palette.ink).tracking(HEADING_TRACKING);
-        paint.centered(heading, heading_box, style);
-        y += HEADING_BOX;
-        paint.fill(Rect::new(rect.x, y, rect.width, 1.0), palette.hairline);
-        y += 1.0 + PAD / 2.0;
+    // What the whole list would take, so the scroll can be clamped to the overflow
+    // rather than to a number the caller guessed. This walks the lines twice, and the
+    // second walk is the one that draws.
+    let content = list_height(input.settings);
+    let viewport = (rect.height - 2.0 * PAD).max(0.0);
+    let scroll = input.settings_scroll.clamp(0.0, (content - viewport).max(0.0));
 
-        for row in rows {
-            if y > rect.bottom() {
-                break;
+    let mut controls = Vec::new();
+    let mut y = rect.y + PAD - scroll;
+    for (line, setting) in input.settings.iter().enumerate() {
+        let Some(control) = setting.control else {
+            // A section heading, and the rule under it. The gap above it belongs to the
+            // heading, so the first heading of the panel is not pushed down by it.
+            y += if line == 0 { 0.0 } else { SECTION_GAP };
+            let heading_box = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, HEADING_BOX);
+            if visible(heading_box, rect) {
+                let style = TextStyle::new(HEADING_SIZE, Weight::MEDIUM, palette.ink)
+                    .tracking(HEADING_TRACKING);
+                paint.centered(setting.text, heading_box, style);
             }
-            let row_box = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, ROW);
-            let label = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
-            paint.centered(row, row_box, label);
-            let control = Rect::new(
-                row_box.right() - CONTROL_WIDTH,
-                y + (ROW - CONTROL_HEIGHT) / 2.0,
-                CONTROL_WIDTH,
-                CONTROL_HEIGHT,
-            );
-            paint.fill(control, palette.hairline);
-            y += ROW;
+            y += HEADING_BOX;
+            if visible(Rect::new(rect.x, y, rect.width, 1.0), rect) {
+                paint.fill(Rect::new(rect.x, y, rect.width, 1.0), palette.hairline);
+            }
+            y += 1.0 + PAD / 2.0;
+            continue;
+        };
+
+        let row = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, ROW);
+        let control_rect = Rect::new(
+            row.right() - CONTROL_WIDTH,
+            y + (ROW - CONTROL_HEIGHT) / 2.0,
+            CONTROL_WIDTH,
+            CONTROL_HEIGHT,
+        );
+        if visible(row, rect) {
+            // The label grows into whatever the control does not take, which is what
+            // keeps a long family name from running under its own value.
+            let label_box = Rect::new(row.x, y, (row.width - CONTROL_WIDTH - LABEL_GAP).max(0.0), ROW);
+            let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
+            paint.centered(setting.text, label_box, style);
+            draw_control(paint, input, control, control_rect, setting.value);
+            for (part, rect) in parts(control, control_rect) {
+                controls.push((line, part, rect));
+            }
         }
-        y += SECTION_GAP;
+        y += ROW;
     }
-    rect
+
+    Panel {
+        rect,
+        controls,
+        scroll,
+    }
 }
 
-/// The heading size, which is a constant rather than a literal so the type table reads
-/// as one place.
-const fn heading_size() -> f32 {
-    HEADING_SIZE
+/// Whether a box is worth drawing: it intersects the panel at all.
+fn visible(box_: Rect, panel: Rect) -> bool {
+    box_.bottom() > panel.y && box_.y < panel.bottom()
+}
+
+/// The eight pixels either side of a control that a hover reads as "on this one".
+fn draw_control(
+    paint: &mut Painter<'_>,
+    input: &ChromeInput<'_>,
+    control: Control,
+    rect: Rect,
+    value: &str,
+) {
+    let palette = *input.palette;
+    // A control is the ground behind a hairline, which is DESIGN.md's one depth
+    // mechanism applied to something that is not a surface: the panel is raised, so the
+    // thing you can press is recessed into it.
+    paint.fill(rect, palette.ground);
+    let hovered = match (control, input.pointer) {
+        (Control::Step, Some((x, y))) if rect.contains(x, y) => Some(x >= rect.center().0),
+        (_, Some((x, y))) if rect.contains(x, y) => Some(false),
+        _ => None,
+    };
+    if let Some(half) = hovered {
+        // A stepper is two controls wearing one rectangle, so hovering one half fills
+        // that half: with no glyphs to read, the fill is the only thing that says which
+        // half a click is about to take.
+        let lit = if half {
+            Rect::new(rect.center().0, rect.y, rect.width / 2.0, rect.height)
+        } else {
+            Rect::new(rect.x, rect.y, rect.width / 2.0, rect.height)
+        };
+        paint.fill(lit, palette.hairline);
+    }
+    border(
+        paint,
+        rect,
+        if hovered.is_some() {
+            palette.hairline_strong
+        } else {
+            palette.hairline
+        },
+    );
+    let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
+    paint.centered(value, rect, style);
+}
+
+/// The parts of a control a click can land on.
+///
+/// A stepper answers twice, because its two halves mean opposite things; everything else
+/// answers once. Returned as a list rather than matched on at the call site so that "how
+/// many ways can this be clicked" has exactly one answer in the crate.
+fn parts(control: Control, rect: Rect) -> Vec<(SettingPart, Rect)> {
+    match control {
+        Control::Step => vec![
+            (
+                SettingPart::Less,
+                Rect::new(rect.x, rect.y, rect.width / 2.0, rect.height),
+            ),
+            (
+                SettingPart::More,
+                Rect::new(rect.center().0, rect.y, rect.width / 2.0, rect.height),
+            ),
+        ],
+        _ => vec![(SettingPart::Whole, rect)],
+    }
+}
+
+/// How tall the whole list would be, drawn from the top.
+///
+/// The one place the panel's vertical rhythm is written down, so that the scroll the
+/// caller asked for can be clamped to what actually overflows rather than to a number it
+/// guessed at. The walk in [`panel`] uses the same constants, and the two are checked
+/// against each other by a test rather than by hope.
+fn list_height(lines: &[SettingLine<'_>]) -> f32 {
+    let mut y = 0.0;
+    for (line, setting) in lines.iter().enumerate() {
+        y += if setting.control.is_none() {
+            (if line == 0 { 0.0 } else { SECTION_GAP }) + HEADING_BOX + 1.0 + PAD / 2.0
+        } else {
+            ROW
+        };
+    }
+    y
 }
 
 /// Draw the find bar and answer where it went.

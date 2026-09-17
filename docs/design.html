@@ -378,21 +378,42 @@
       <p>Sections, in order: Appearance, Tabs, Terminal, Keys. Each is a heading at 12px uppercase
       with a <code>hairline</code> under it, then rows.</p>
 
-      <p>Row anatomy: label on the left, control on the right, current value in tabular figures.
-      Controls are segmented buttons for enums, a hairline-bordered stepper plus a numeric readout
-      for sizes, a slider with a numeric readout for opacity, and a swatch grid for colours. Every
-      control reports its value as a number, so the panel can be read as a spec sheet.</p>
+      <p>Row anatomy: label on the left, control on the right, current value in tabular figures. The
+      control is a 118&times;20 rectangle of <code>ground</code> behind a <code>hairline</code> —
+      recessed into the panel rather than raised off it, because <code>hairline</code> is the only depth
+      mechanism there is. Its whole face is the click target, so the value readout is also the button.</p>
 
-      <p>Keyboard: the panel is fully reachable with Tab, arrow keys adjust values, Escape closes. It
-      never traps focus.</p>
+      <p>Four kinds of control, and no more:</p>
 
-      <div class="callout callout--note">
-        <span class="callout__label">The panel is not built</span>
-        <p><code>zet-ui</code> draws the panel's skeleton — the four headings and their rows, each row
-        a label and a control-shaped rectangle — and that is all a layout can honestly draw until it
-        is handed the configuration's values. Nothing opens it: the <code>settings</code> binding is
-        a no-op, and there is no code that writes <code>config.toml</code> back.</p>
-      </div>
+      <ul>
+        <li><strong>Choice</strong> — an enum. Either half steps through the list, wrapping. Both
+        halves of a two-value choice flip it.</li>
+        <li><strong>Step</strong> — a number. Left goes down, right goes up, and it stops at the end
+        rather than wrapping: a font size that jumps from 4 to 72 is worse than one that refuses.</li>
+        <li><strong>Toggle</strong> — a boolean. Both halves flip it; a two-state row has no
+        direction.</li>
+        <li><strong>Chord</strong> — a key binding. Clicking asks for the next key you press, and the
+        row says <code>Press a key</code> until you press it. <code>Escape</code> cancels. If the chord was
+        already spoken for, the action that had it goes back to <code>Unbound</code>, and the row that
+        lost says so.</li>
+      </ul>
+
+      <p>Hover fills the half a click will take. With no glyphs to read, that fill is the only thing
+      that says which half is which — and it is why a stepper is two controls wearing one rectangle
+      rather than one control with two arrows drawn on it.</p>
+
+      <p>Rows are scrolled rather than dropped. A panel that stops listing settings once the window is
+      short is a panel where a setting cannot be found and nothing says so. A thickness row appears
+      beside the cursor shape only when the shape has one: a block is the whole cell and a hollow block
+      is a border on it, so neither has anything for the number to change.</p>
+
+      <p>Every row writes through to the config file as it changes, and the file keeps its comments
+      — <code>toml_edit</code> round-trips, so a hand-written note beside a setting survives being
+      set from the panel.</p>
+
+      <p>Keyboard: <code>Escape</code> closes the panel and the chord that opened it toggles it. The
+      panel is not reachable with <code>Tab</code> and the arrow keys, which is a gap rather than a
+      decision. It is the one thing in the panel that is mouse-only, and it is next.</p>
 
       <h2>Surfaces the framework gave us</h2>
 
@@ -437,7 +458,15 @@
       <p>High contrast mode is not a theme. When Windows reports forced colours, zet switches to
       <code>zet contrast</code> and overrides the chrome palette to pure black, pure white ink, and
       the system highlight colour, ignoring your theme until forced colours turn off. Themes are the
-      user's choice; forced colours is not.</p>
+      user's choice; forced colours is not — which is why the switch in the settings panel defaults
+      to on and is the only thing that can turn it off, and why the same is true of reduce motion: a
+      machine that has asked for less movement has asked for a reason, and the panel is where you
+      disagree with it rather than the absence of a way to.</p>
+
+      <p>Text scaling works the same way round. A <code>text_scale</code> of <code>0.0</code> means
+      "follow the system", which is what makes Windows' own text-size slider work without zet having
+      to be told about it twice; any other value is you overruling it, and the chrome's own type
+      scales with the grid's.</p>
     </article>
   </main>
 </div>

@@ -94,6 +94,23 @@ pub struct ChromeInput<'a> {
     pub active: Option<u32>,
     /// Whether the settings panel is open.
     pub settings_open: bool,
+    /// What the settings panel shows: headings and rows, in order.
+    ///
+    /// Supplied by the caller rather than decided here, and that is the crate's rule
+    /// about the configuration — this crate is not given it, and a second copy of what a
+    /// setting *is* living next to the painter is exactly how a panel and a file start
+    /// disagreeing. The panel owns the geometry and the chrome's type; the caller owns
+    /// the words and the values.
+    ///
+    /// Ignored unless [`ChromeInput::settings_open`].
+    pub settings: &'a [SettingLine<'a>],
+    /// How far the settings panel is scrolled, in logical pixels.
+    ///
+    /// The caller owns it for the same reason it owns the rows: a wheel over the panel
+    /// arrives at the window, and the window is not this crate's. The panel clamps it to
+    /// what actually overflows and reports the clamped value back through
+    /// [`Layout::settings_scroll`].
+    pub settings_scroll: f32,
     /// The text in the titlebar's name slot, which the app name goes in.
     pub window_title: &'a str,
     /// The whole window's size in logical pixels.
@@ -109,6 +126,48 @@ pub struct ChromeInput<'a> {
     /// A tab's own hover is [`TabInfo::hovered`], because the caller has already asked
     /// [`Chrome::hit`] and knows the answer better than a rectangle comparison does.
     pub pointer: Option<(f32, f32)>,
+}
+
+/// One line of the settings panel: a section heading, or a setting.
+///
+/// A flat list rather than sections of rows, because the panel draws it as a flat list —
+/// headings are a type size and a rule, not a container — and a nested shape would make
+/// the caller build two levels of vectors to say what one already did. The caller says
+/// which line is which by its position in the slice, and gets that position back in
+/// [`Hit::Setting`].
+pub struct SettingLine<'a> {
+    /// The heading's name, or the row's label.
+    pub text: &'a str,
+    /// The row's control, or `None` on a section heading.
+    pub control: Option<Control>,
+    /// What the control shows. Ignored on a heading.
+    pub value: &'a str,
+}
+
+/// What a settings row's control does when it is clicked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Control {
+    /// One of a fixed list of values. A click takes the next one.
+    Choice,
+    /// Yes or no. A click flips it.
+    Toggle,
+    /// A number, or anything else with an order. The left half lowers it and the right
+    /// half raises it.
+    Step,
+    /// A key binding. A click starts recording one.
+    Chord,
+}
+
+/// Which part of a settings row's control a click landed on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SettingPart {
+    /// The whole control: a choice takes its next value, a toggle flips, a chord starts
+    /// recording.
+    Whole,
+    /// The left half of a stepper, which lowers the value.
+    Less,
+    /// The right half of a stepper, which raises it.
+    More,
 }
 
 /// One tab, as the strip needs to know it.
@@ -142,6 +201,13 @@ pub struct Layout {
     pub bottom: f32,
     /// The rect the terminal grid occupies, in logical pixels.
     pub grid: Rect,
+    /// How far the settings panel is actually scrolled, after clamping.
+    ///
+    /// Reported back because the panel is the only thing that knows how tall its content
+    /// is: a caller that kept its own scroll would let the user scroll past the end of a
+    /// list it cannot measure, and the wheel would then do nothing for a while before
+    /// the content caught up.
+    pub settings_scroll: f32,
 }
 
 /// What the user hit.
@@ -165,8 +231,15 @@ pub enum Hit {
     Caption(Caption),
     /// The draggable region between the last tab and the caption buttons.
     Drag,
-    /// The settings panel is open and the point is inside it.
+    /// The settings panel is open and the point is inside it, but not on a control.
     Settings,
+    /// A settings row's control, by the line it is on and the part of it that was hit.
+    Setting {
+        /// Which line of [`ChromeInput::settings`] it is on.
+        line: usize,
+        /// Which part of that line's control.
+        part: SettingPart,
+    },
     /// The scrollbar.
     Scrollbar(Scrollbar),
     /// Nothing the chrome owns.
@@ -232,6 +305,11 @@ enum Region {
     Caption { caption: Caption, rect: Rect },
     Drag(Rect),
     Settings(Rect),
+    Setting {
+        line: usize,
+        part: SettingPart,
+        rect: Rect,
+    },
     Scrollbar { track: Rect, thumb: Rect },
 }
 
@@ -244,6 +322,10 @@ impl Region {
             Self::Caption { caption, rect } if rect.contains(x, y) => Some(Hit::Caption(*caption)),
             Self::Drag(rect) if rect.contains(x, y) => Some(Hit::Drag),
             Self::Settings(rect) if rect.contains(x, y) => Some(Hit::Settings),
+            Self::Setting { line, part, rect } if rect.contains(x, y) => Some(Hit::Setting {
+                line: *line,
+                part: *part,
+            }),
             Self::Scrollbar { track, thumb } if track.contains(x, y) => {
                 Some(Hit::Scrollbar(if thumb.contains(x, y) {
                     Scrollbar::Thumb
@@ -457,6 +539,7 @@ impl Chrome {
         let panel = input
             .settings_open
             .then(|| overlays::panel(paint, input, top, bottom));
+        let settings_scroll = panel.as_ref().map_or(0.0, |panel| panel.scroll);
         if bottom > 0.0 {
             overlays::find_bar(paint, input, bottom);
         }
@@ -485,8 +568,19 @@ impl Chrome {
         if let Some(rect) = strip_plan.drag {
             self.regions.push(Region::Drag(rect));
         }
-        if let Some(rect) = panel {
-            self.regions.push(Region::Settings(rect));
+        // The controls before the panel that contains them, because `Chrome::hit` answers
+        // with the first region that holds the point: pushed the other way round, every
+        // control would be shadowed by the surface it sits on and no setting would ever
+        // be clicked.
+        if let Some(panel) = &panel {
+            for (line, part, rect) in &panel.controls {
+                self.regions.push(Region::Setting {
+                    line: *line,
+                    part: *part,
+                    rect: *rect,
+                });
+            }
+            self.regions.push(Region::Settings(panel.rect));
         }
         if let Some((track, thumb)) = scroll {
             self.regions.push(Region::Scrollbar { track, thumb });
@@ -498,6 +592,7 @@ impl Chrome {
             left,
             bottom,
             grid,
+            settings_scroll,
         };
         self.layout
     }

@@ -268,13 +268,39 @@ Sections, in order: Appearance, Tabs, Terminal, Keys. Each is a heading at 12px
 uppercase with a `hairline` under it, then rows.
 
 Row anatomy: label on the left, control on the right, current value in tabular
-figures. Controls are segmented buttons for enums, a hairline-bordered stepper plus
-a numeric readout for sizes, a slider with a numeric readout for opacity, and a
-swatch grid for colors. Every control reports its value as a number, so the panel
-can be read as a spec sheet.
+figures. The control is a 118x20 rectangle of `ground` behind a `hairline` — recessed
+into the panel rather than raised off it, because `hairline` is the only depth
+mechanism there is. Its whole face is the click target, so the value readout is also
+the button.
 
-Keyboard: the panel is fully reachable with Tab, arrow keys adjust values, Escape
-closes. It never traps focus.
+Four kinds of control, and no more:
+
+- **Choice** — an enum. Either half steps through the list, wrapping. Both halves of a
+  two-value choice flip it.
+- **Step** — a number. Left goes down, right goes up, and it stops at the end rather
+  than wrapping: a font size that jumps from 4 to 72 is worse than one that refuses.
+- **Toggle** — a boolean. Both halves flip it; a two-state row has no direction.
+- **Chord** — a key binding. Clicking asks for the next key you press, and the row says
+  `Press a key` until you press it. `Escape` cancels. If the chord was already spoken
+  for, the action that had it goes back to `Unbound` and the row that lost says so.
+
+Hover fills the half a click will take. With no glyphs to read, that fill is the only
+thing that says which half is which — and it is why a stepper is two controls wearing
+one rectangle rather than one control with two arrows drawn on it.
+
+Rows are scrolled rather than dropped. A panel that stops listing settings once the
+window is short is a panel where a setting cannot be found and nothing says so. A
+thickness row appears beside the cursor shape only when the shape has one: a block is
+the whole cell and a hollow block is a border on it, so neither has anything for the
+number to change.
+
+Every row writes through to the config file as it changes, and the file keeps its
+comments — `toml_edit` round-trips, so a hand-written note beside a setting survives
+being set from the panel.
+
+Keyboard: `Escape` closes the panel and the chord that opened it toggles it. The panel
+is not reachable with `Tab` and the arrow keys, which is a gap rather than a decision.
+It is the one thing in the panel that is mouse-only, and it is next.
 
 ## Surfaces the framework gave us
 
@@ -311,4 +337,13 @@ imported and ship exactly as published.
 High contrast mode is not a theme. When Windows reports forced colors, zet switches
 to `zet contrast` and overrides the chrome palette to pure black, pure white ink,
 and the system highlight color, ignoring the user's theme until forced colors turn
-off. Themes are the user's choice; forced colors is not.
+off. Themes are the user's choice; forced colors is not — which is why the switch in
+the settings panel defaults to on and is the only thing that can turn it off, and why
+the same is true of reduce motion: a machine that has asked for less movement has
+asked for a reason, and the panel is where you disagree with it rather than the
+absence of a way to.
+
+Text scaling works the same way round. `text_scale` of `0.0` means "follow the
+system", which is what makes Windows' own text-size slider work without zet having to
+be told about it twice; any other value is the user overruling it, and the chrome's
+own type scales with the grid's.
