@@ -165,6 +165,16 @@
       changed state invisibly. Typing still costs one frame rather than two, because the redraw is
       asked for only when the key ran a binding rather than being sent to the shell.</p>
 
+      <h4>zet — <code>--version</code> names the build it is, not just the release it is part of</h4>
+
+      <p><code>zet 0.1.0 (4eb42e4, x86_64-pc-windows-msvc)</code>. <code>zet-update</code> has had
+      <code>version_line</code>, <code>GIT_SHA</code>, and <code>TARGET</code> for a while, along
+      with tests for all three, and nothing called any of them: the binary printed
+      <code>CARGO_PKG_VERSION</code> and stopped there. A version on its own does not identify a
+      build — two binaries can both call themselves <code>0.1.0</code> and differ — and the
+      build script, the release workflow, and the security policy all assumed the commit was in
+      there.</p>
+
       <h4>zet-render — a machine with no usable GPU adapter gets a terminal rather than a dialog</h4>
 
       <p><code>request_adapter</code> was asked once, and a machine in a VM with no graphics

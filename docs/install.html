@@ -129,8 +129,12 @@ zet --version                 <span class="c"># print the version</span></code><
       what you asked. A flag with nothing after it says so by name — <code>zet --directory</code>
       reports that it needs a directory, rather than reporting an unknown argument.</p>
 
-      <p><code>zet --version</code> prints the crate version, which for this source tree is
-      <code>zet 0.1.0</code>.</p>
+      <p><code>zet --version</code> prints the version, the commit the binary was built from, and
+      the target triple: <code>zet 0.1.0 (4eb42e4, x86_64-pc-windows-msvc)</code>. Three things
+      rather than one, because a version on its own does not identify a build — two binaries can
+      both call themselves <code>0.1.0</code> and differ, and the one a bug report came from is the
+      one that matters. A build with no repository behind it, from a source tarball, says
+      <code>unknown</code> where the commit goes.</p>
 
       <h2>The installer</h2>
 

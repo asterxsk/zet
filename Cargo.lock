@@ -2943,6 +2943,7 @@ dependencies = [
  "zet-render",
  "zet-session",
  "zet-ui",
+ "zet-update",
  "zet-vt",
 ]
 

@@ -22,6 +22,11 @@ zet-session.workspace = true
 zet-render.workspace = true
 zet-ui.workspace = true
 zet-app.workspace = true
+# For `version_line`, which names the commit this binary was built from. The updater
+# itself is not wired in, so this is the only thing the binary uses out of it � but a
+# bug report that says `0.1.0` names a range of builds and one that says `0.1.0
+# (4eb42e4, x86_64-pc-windows-msvc)` names the build.
+zet-update.workspace = true
 
 # The window and the event loop. Everything below this crate is a library that has never
 # seen either, which is what lets the whole terminal be tested without a display.

@@ -73,6 +73,12 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     `ScrollPageUp`, and `ToggleTabPosition` all changed state invisibly. Typing still costs one
     frame rather than two, because the redraw is asked for only when the key ran a binding
     rather than being sent to the shell.
+- **`zet`** — `--version` names the build it is, not just the release it is part of.
+  - `zet 0.1.0 (4eb42e4, x86_64-pc-windows-msvc)`. `zet-update` has had `version_line`, `GIT_SHA`,
+    and `TARGET` for a while, along with tests for all three, and nothing called any of them: the
+    binary printed `CARGO_PKG_VERSION` and stopped there. A version on its own does not identify a
+    build — two binaries can both call themselves `0.1.0` and differ — and the build script, the
+    release workflow, and the security policy all assumed the commit was in there.
 - **`zet-render`** — a machine with no usable GPU adapter gets a terminal rather than a dialog.
   - `request_adapter` was asked once, and a machine in a VM with no graphics acceleration, or
     over remote desktop with GPU redirection off, enumerates no adapter at all — so the only

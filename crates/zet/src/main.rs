@@ -34,8 +34,6 @@ use zet_session::Waker;
 use crate::host::Host;
 use crate::waker::{ProxyWaker, Wake};
 
-/// What `zet --version` prints.
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// What `zet --help` prints.
 const USAGE: &str = "\
@@ -63,7 +61,11 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Args::Version => {
-            println!("zet {VERSION}");
+            // The commit and the target as well as the version, because a version on its
+            // own does not identify a build: two binaries can both call themselves
+            // `0.1.0` and differ, and the one a bug report came from is the one that
+            // matters.
+            println!("{}", zet_update::version_line());
             ExitCode::SUCCESS
         }
         Args::Bad(reason) => {
@@ -260,6 +262,18 @@ mod tests {
             Args::Bad(reason) => assert_eq!(reason, "unexpected argument `--maximised`"),
             _ => panic!("an unknown argument should be refused"),
         }
+    }
+
+    #[test]
+    fn the_version_line_identifies_a_build_and_not_just_a_release() {
+        // A version on its own does not identify a build, and the reason this is asserted
+        // here rather than left to `zet-update`'s own test is that the wiring is the part
+        // that was missing: `version_line` existed, was tested, and nothing called it.
+        let line = zet_update::version_line();
+        assert!(line.starts_with("zet "), "{line}");
+        assert!(line.contains(env!("CARGO_PKG_VERSION")), "{line}");
+        assert!(line.contains(zet_update::TARGET), "{line}");
+        assert_eq!(line.lines().count(), 1, "a --version that wraps gets truncated");
     }
 
     #[test]
