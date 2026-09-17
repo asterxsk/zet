@@ -306,7 +306,7 @@ impl Term {
         self.alt = None;
         self.cursor = Pos::new(0, 0);
         self.saved = None;
-        self.pen = Pen::default();
+        self.set_pen(Pen::default());
         self.modes = Modes::default();
         self.pending_wrap = false;
         self.last_print = None;
@@ -607,6 +607,11 @@ impl Term {
             keyboard: std::mem::take(&mut self.keyboard),
         });
         self.modes.alt_screen = true;
+        // The grid the screen just arrived on is new, and its erase colour has to come
+        // from the pen that is still in force rather than from the default: a program
+        // that switches screens with a background set and then clears has asked for that
+        // background to be what the clear leaves behind.
+        self.grid.set_erase_bg(self.pen.bg);
         self.cursor = Pos::new(0, 0);
         self.pending_wrap = false;
         self.last_print = None;
@@ -619,7 +624,7 @@ impl Term {
         };
         self.grid = alt.grid;
         self.cursor = alt.cursor;
-        self.pen = alt.pen;
+        self.set_pen(alt.pen);
         self.modes.cursor_visible = alt.cursor_visible;
         self.keyboard = alt.keyboard;
         self.modes.alt_screen = false;
@@ -644,7 +649,7 @@ impl Term {
                 saved.pos.row.min(self.grid.rows() - 1),
                 saved.pos.col.min(self.grid.cols() - 1),
             );
-            self.pen = saved.pen;
+            self.set_pen(saved.pen);
             self.modes.origin = saved.origin;
             self.modes.autowrap = saved.autowrap;
             self.pending_wrap = false;
@@ -654,14 +659,32 @@ impl Term {
 
     // ---- SGR -----------------------------------------------------------------
 
+    /// Put the pen into a state, and carry its background into the grid.
+    ///
+    /// `BCE` — background colour erase — says a blank cell an erase leaves behind is
+    /// filled with the *pen's* background, so after `SGR 41` clearing a line leaves red
+    /// rather than the theme's background. That makes the grid's erase colour a copy of
+    /// one field of the pen rather than a setting of its own, and a copy that ten
+    /// different call sites have to remember to update is a copy that drifts: the field
+    /// and its setter existed for a while with nothing calling either, so every erase in
+    /// the terminal painted the theme's background and no test noticed, because the
+    /// erase tests assert characters.
+    ///
+    /// Every path that replaces the pen goes through here. The one that changes only
+    /// `pen.bg` is [`Self::apply_sgr`], which writes the grid itself on the way out.
+    fn set_pen(&mut self, pen: Pen) {
+        self.pen = pen;
+        self.grid.set_erase_bg(self.pen.bg);
+    }
+
     fn apply_sgr(&mut self, params: &Params) {
         // `CSI m` with no parameters is `CSI 0 m`. The active hyperlink is not part of
         // the pen an SGR reset clears; only `OSC 8` closes it.
         if params.is_empty() {
-            self.pen = Pen {
+            self.set_pen(Pen {
                 link: self.pen.link,
                 ..Pen::default()
-            };
+            });
             return;
         }
 
@@ -671,10 +694,10 @@ impl Term {
             let param = values.first().copied().unwrap_or(0);
             match param {
                 0 => {
-                    self.pen = Pen {
+                    self.set_pen(Pen {
                         link: self.pen.link,
                         ..Pen::default()
-                    };
+                    });
                 }
                 1 => self.pen.attrs.insert(Attrs::BOLD),
                 2 => self.pen.attrs.insert(Attrs::DIM),
@@ -742,6 +765,11 @@ impl Term {
             }
             i += 1;
         }
+
+        // The loop writes `pen.bg` directly in three of its branches, so this is the one
+        // place that has to put the grid back in step with it. [`Self::set_pen`] says why
+        // the two are copies of each other at all.
+        self.grid.set_erase_bg(self.pen.bg);
     }
 
     // ---- responses -----------------------------------------------------------
@@ -991,10 +1019,10 @@ impl Perform for Term {
             // `CSI ! p` is `DECSTR`, the soft terminal reset. It puts the pen and the
             // modes back but leaves the screen and the scrollback alone.
             if intermediates == b"!" && action == 'p' {
-                self.pen = Pen {
+                self.set_pen(Pen {
                     link: self.pen.link,
                     ..Pen::default()
-                };
+                });
                 self.modes.insert = false;
                 self.modes.newline = false;
                 self.modes.origin = false;
@@ -1599,6 +1627,81 @@ mod tests {
         feed(&mut t, b"abcdef\x1b[1;2H\x1b[2X");
         assert_eq!(trimmed(&t, 0), "a  def");
         assert_eq!(t.cursor(), Pos::new(0, 1));
+    }
+
+    /// The background an erasing sequence leaves behind, column by column.
+    fn row_backgrounds(t: &Term, row: usize) -> Vec<Color> {
+        (0..t.grid().cols())
+            .map(|col| t.grid().row(row).get(col).bg)
+            .collect()
+    }
+
+    #[test]
+    fn an_erase_fills_with_the_pen_background() {
+        // `BCE`. Every one of these sequences erases cells, and every one of them has to
+        // leave the red that the pen is holding rather than the theme's background —
+        // which is what a shell's `LS_COLORS`-heavy prompt and every full-screen program
+        // with a coloured background are drawn against. They all read one field, so they
+        // are asserted together: the bug this pins was that nothing ever wrote it, and
+        // that is not a bug one sequence can have on its own.
+        let red = Color::indexed(NamedColor::Red.index());
+        let blue = Color::indexed(NamedColor::Blue.index());
+        let default = Color::DEFAULT;
+
+        // `EL` — erase to the end of the line.
+        let mut t = open(6, 2);
+        feed(&mut t, b"\x1b[41m\x1b[K");
+        assert_eq!(row_backgrounds(&t, 0), vec![red; 6]);
+
+        // `ED` — erase the whole screen.
+        let mut t = open(6, 2);
+        feed(&mut t, b"abc\x1b[44m\x1b[2J");
+        assert_eq!(row_backgrounds(&t, 0), vec![blue; 6]);
+        assert_eq!(row_backgrounds(&t, 1), vec![blue; 6]);
+
+        // `ECH` — erase characters in place. The `a` was written before the pen went
+        // red and keeps the background it was written with, which is what makes this one
+        // different from the erases above: it paints over cells rather than filling a gap.
+        let mut t = open(6, 2);
+        feed(&mut t, b"abcdef\x1b[41m\x1b[1;2H\x1b[2X");
+        assert_eq!(
+            row_backgrounds(&t, 0),
+            vec![default, red, red, default, default, default]
+        );
+
+        // `SGR 49` takes it back, which is the half of this that a fix which only ever
+        // set the field would fail.
+        let mut t = open(6, 2);
+        feed(&mut t, b"\x1b[41m\x1b[49m\x1b[K");
+        assert_eq!(row_backgrounds(&t, 0), vec![default; 6]);
+
+        // `SGR 0` is the other way back, and it is a different branch of the same loop.
+        let mut t = open(6, 2);
+        feed(&mut t, b"\x1b[41m\x1b[m\x1b[K");
+        assert_eq!(row_backgrounds(&t, 0), vec![default; 6]);
+    }
+
+    #[test]
+    fn scrolling_leaves_the_pen_background_behind_it() {
+        // The rows a scroll brings in are blanked by the grid rather than by the cursor,
+        // which is why this is a different call site from the ones above and why a fix
+        // that only reached `ED` and `EL` would pass those and fail here.
+        let mut t = open(4, 2);
+        let red = Color::indexed(NamedColor::Red.index());
+        // Two rows of text and a third newline, which is the one that scrolls: `cd`
+        // moves up and the row that arrives under it is the blank this asserts on.
+        feed(&mut t, b"\x1b[41mab\r\ncd\r\n");
+        assert_eq!(row_backgrounds(&t, 1), vec![red; 4]);
+    }
+
+    #[test]
+    fn a_restored_pen_brings_its_background_back() {
+        // `DECSC`/`DECRC` put the pen back, and a grid still holding the colour the
+        // program used in between would go on erasing in it until the next `SGR`.
+        let mut t = open(4, 2);
+        let red = Color::indexed(NamedColor::Red.index());
+        feed(&mut t, b"\x1b[41m\x1b7\x1b[44m\x1b8\x1b[K");
+        assert_eq!(row_backgrounds(&t, 0), vec![red; 4]);
     }
 
     #[test]

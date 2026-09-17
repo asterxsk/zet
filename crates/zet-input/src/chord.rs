@@ -275,45 +275,86 @@ impl Chord {
 
     /// Whether this chord is what was just pressed.
     ///
-    /// The comparison is exact, with one exception, and the exception is about which
-    /// half of a key a binding names.
+    /// A binding names a *key*, and the host that reports the press names it in its own
+    /// vocabulary. The two spellings of one keystroke differ in three ways, and each of
+    /// them is a rule here rather than an accident:
     ///
-    /// A binding names a *key*, and the twelve punctuation keys have names of their
-    /// own — `Comma`, `Period`, `Slash`. The event for `Shift+,` carries the character
-    /// the layout put there, which is `<`, and the event for a chord without shift
-    /// carries `,`. Both are the same key on the same board, so under shift a chord
-    /// matches the character its key produces as well as the key itself. Without this
-    /// `Ctrl+Shift+Comma` — which is what the shipped binding for the settings panel
-    /// is called, and what anyone would write — is a binding that can never fire.
+    /// - **The character and the name.** `[` reaches the app as [`Key::BracketLeft`] and
+    ///   is written `Ctrl+[` in a config file. They are one keystroke, so the comparison
+    ///   goes through the character both of them produce rather than through the enum
+    ///   variant, which is what makes the two spellings interchangeable rather than
+    ///   merely documented as being so.
+    /// - **Shift moves the character.** The event for `Shift+,` carries `<`, which is
+    ///   neither `,` nor the key. A chord naming [`Key::Comma`] matches the character
+    ///   shift puts above it, and without that the shipped `Ctrl+Shift+Comma` — the
+    ///   settings panel — is a binding that can never fire.
+    /// - **Case is not a letter's identity.** Caps Lock inverts the case the host
+    ///   reports, so `Ctrl+Shift+T` arrives as `Char('t')` with the lock lit and
+    ///   `Char('T')` with it dark. Both are the same keystroke, and a rule that told
+    ///   them apart would stop every `Ctrl+Shift+<letter>` binding in the default
+    ///   keymap for anyone who types in capitals.
     ///
-    /// Letters are deliberately not in that. `Ctrl+Shift+T` names
-    /// [`Key::Char`]`('T')`, because that is the character the layout produces, and
-    /// the event carries `T`; the exact comparison already gets it right. A chord
-    /// written with the wrong case is a binding that never fires, which is a better
-    /// failure than one that fires on a keystroke the user did not describe.
+    /// Shift is otherwise an exact modifier, because `Ctrl+T` must not fire on
+    /// `Ctrl+Shift+T`. The one key it is not exact for is a key that shift is
+    /// *required* to produce: no US keyboard can hold down `Ctrl` and the `+` key
+    /// without shift, so the shift that key brings with it is not held against the
+    /// chord that names it. The cost is that `Ctrl+Plus` and `Ctrl+Shift+Plus` name one
+    /// keystroke, which they do.
     #[must_use]
     pub fn matches(&self, mods: Modifiers, key: Key) -> bool {
-        if self.mods != mods {
-            return false;
-        }
-        self.key == key || (mods.contains(Modifiers::SHIFT) && self.matches_shifted(key))
+        self.same_modifiers(mods) && self.same_key(key)
     }
 
-    /// Whether `key` is the character shift puts above this chord's key.
-    fn matches_shifted(&self, key: Key) -> bool {
-        let Key::Char(ch) = key else {
+    /// Whether the modifiers held are the ones this chord asks for.
+    fn same_modifiers(&self, mods: Modifiers) -> bool {
+        if self.mods == mods {
+            return true;
+        }
+        if shift_is_in_the_key(self.key) {
+            return self.mods_without_shift() == without_shift(mods);
+        }
+        false
+    }
+
+    /// Whether `key` is the key this chord names.
+    fn same_key(&self, key: Key) -> bool {
+        if self.key == key {
+            return true;
+        }
+        // `Ctrl+[` and `Ctrl+BracketLeft` are the same keystroke, so what is compared is
+        // the character each side produces. A key that produces none — `Enter`, `F5` —
+        // has already been answered by the equality above and has nothing here to say.
+        let (Some(bound), Some(pressed)) = (character_of(self.key), character_of(key)) else {
             return false;
         };
-        // A letter is its own answer — see the rule in `matches` — and this crate has
-        // no table for the rest of the world's layouts either, so what is compared is
-        // the character with the shift taken back off it against the character the
-        // named key produces. `<` comes back as `,` and meets `Key::Comma`; `1` with
-        // shift is `!` and comes back to meet [`Key::Char`]`('1')`.
-        if ch.is_alphabetic() {
-            return false;
+        if bound.is_alphabetic() && pressed.is_alphabetic() {
+            return bound.eq_ignore_ascii_case(&pressed);
         }
-        character_of(self.key).is_some_and(|base| unshifted(ch) == base)
+        // `<` comes back as `,` and meets `Comma`; `!` comes back as `1` and meets
+        // `Char('1')`. This crate has no table for the rest of the world's layouts, so
+        // what is compared is the character with shift taken back off it against the
+        // character the key produces.
+        pressed == bound || unshifted(pressed) == bound
     }
+
+    /// The chord's modifiers with shift taken out.
+    fn mods_without_shift(&self) -> Modifiers {
+        without_shift(self.mods)
+    }
+}
+
+/// The modifiers with shift taken out, for comparing the ones shift cannot distinguish.
+fn without_shift(mods: Modifiers) -> Modifiers {
+    mods & !Modifiers::SHIFT
+}
+
+/// Whether a key's character is one that only shift produces.
+///
+/// Letters are excluded however they are cased: the shift on `Ctrl+Shift+T` is a real
+/// choice the user made, where the shift on `Ctrl+Plus` is the keyboard's, and only the
+/// second one is what this is asked about.
+fn shift_is_in_the_key(key: Key) -> bool {
+    character_of(key).is_some_and(|ch| !ch.is_alphabetic() && unshifted(ch) != ch)
 }
 
 /// The character a key produces, for the keys that produce one.
@@ -633,7 +674,7 @@ mod tests {
         let c = chord(Modifiers::CTRL, Key::Char('t'));
         assert!(c.matches(Modifiers::CTRL, Key::Char('t')));
         assert!(!c.matches(Modifiers::empty(), Key::Char('t')));
-        assert!(!c.matches(Modifiers::CTRL, Key::Char('T')));
+        assert!(!c.matches(Modifiers::CTRL, Key::Char('y')));
         assert!(!c.matches(Modifiers::CTRL, Key::Tab));
     }
 
@@ -658,13 +699,62 @@ mod tests {
     }
 
     #[test]
-    fn a_letter_is_never_matched_by_its_other_case() {
-        // `Ctrl+Shift+T` names `'T'`; `'t'` is a different chord and stays one, and
-        // the punctuation rule must not quietly widen it.
+    fn a_letter_matches_either_case_because_caps_lock_picks_one() {
+        // The host asks the layout what a key produces, and Caps Lock is part of that
+        // answer: `Ctrl+Shift+T` arrives as `'t'` with the lock lit and `'T'` with it
+        // dark. Both are one keystroke, so a binding matches either — without this,
+        // every `Ctrl+Shift+<letter>` in the default keymap stops working for anyone
+        // who types in capitals.
         let c = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('T'));
-        assert!(!c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('t')));
-        let lower = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('t'));
-        assert!(!lower.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('T')));
+        assert!(c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('t')));
+        assert!(c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('T')));
+        // Case is not what tells `Ctrl+T` from `Ctrl+Shift+T` — shift is, and it still
+        // does, in both locks.
+        let plain = chord(Modifiers::CTRL, Key::Char('T'));
+        assert!(!plain.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('T')));
+        assert!(!plain.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('t')));
+    }
+
+    #[test]
+    fn a_key_named_by_its_character_is_the_key_itself() {
+        // The config file's two spellings of one keystroke, which the docs promise are
+        // the same thing: `[` is written as a character and reported as a key.
+        let written = Chord::parse("Ctrl+[").unwrap();
+        assert!(written.matches(Modifiers::CTRL, Key::BracketLeft));
+        let named = Chord::parse("Ctrl+BracketLeft").unwrap();
+        assert!(named.matches(Modifiers::CTRL, Key::Char('[')));
+        // `+` is the one that has both spellings in the same text, and it works too.
+        assert!(
+            Chord::parse("Ctrl++")
+                .unwrap()
+                .matches(Modifiers::CTRL, Key::Plus)
+        );
+        // A character that is not one of the named keys still compares as itself.
+        assert!(
+            !Chord::parse("Ctrl+[")
+                .unwrap()
+                .matches(Modifiers::CTRL, Key::BracketRight)
+        );
+    }
+
+    #[test]
+    fn a_key_that_needs_shift_is_not_defeated_by_the_shift_it_needs() {
+        // `Ctrl+Plus`, the shipped binding for a larger font, on a US layout: the only
+        // way to press that key is `Shift+=`, so the event carries shift and an exact
+        // comparison would leave the binding dead on every keyboard without a numpad.
+        let c = Chord::parse("Ctrl+Plus").unwrap();
+        assert!(c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Plus));
+        // The numpad's `+` needs no shift, and is the same key.
+        assert!(c.matches(Modifiers::CTRL, Key::Plus));
+        // The rule is about a key that shift is *required* for, so it does not leak to
+        // the keys shift merely moves: `Ctrl+1` is not `Ctrl+Shift+1`.
+        let one = Chord::parse("Ctrl+1").unwrap();
+        assert!(!one.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('!')));
+        assert!(
+            Chord::parse("Ctrl+Shift+1")
+                .unwrap()
+                .matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('!'))
+        );
     }
 
     #[test]
