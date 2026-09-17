@@ -128,11 +128,6 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
   - Neither reads the config file, and there is nothing to read: zet makes no request on its own,
     so these two flags are the only way to make one. That also means both work on a machine whose
     config will not parse, exactly when someone might want them.
-  - The `[update] check-on-launch` key that an earlier draft reserved for an automatic launch
-    check is gone, along with the section it lived in. zet has never shipped a release, so no
-    configuration in the world contains it and nothing breaks: a config file is written by zet, and
-    this one no longer has an `[update]` section to write. A terminal that opens a socket because
-    it was launched is a terminal that has to be trusted further than this one asks to be.
 - **`packaging/`** — a per-user Windows installer and the icon it installs.
   - Inno Setup, installing to `%LOCALAPPDATA%\Programs\zet` with no elevation. Optional PATH
     entry, Start Menu shortcut, and "Open zet here" context menu.
@@ -159,8 +154,34 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     echoed back. The host does not carry the physical key, and claiming a feature that is not
     there is worse than the honest no that the protocol's set-then-query handshake exists to get.
 
+### Removed
+
+- **`zet-config`** — the `[update] check-on-launch` key, and the `[update]` section it lived in.
+  - It was reserved when the schema was written, for a check zet would make on launch, and the
+    check was never built: eight places in the docs had to say the key did nothing. Wiring it up
+    would mean a terminal that opens a socket because it was launched, on by default, with nowhere
+    to put the answer — DESIGN.md defines no notification surface, and the settings panel is the
+    config file with a face rather than a status board. `--check-update` and `--update` were
+    already the whole of the feature.
+  - Nothing breaks: no configuration in the world contains the key, because `config.toml` is
+    written by zet and zet has never published a release. A hand-written file that does contain it
+    now fails to parse, which is `deny_unknown_fields` doing its job rather than a silent no-op.
+  - The privacy claim comes out of it stronger. There is no setting to turn anything off because
+    there was never anything to turn off: the only request zet can make is one you typed.
+
 ### Fixed
 
+- **`zet-ui`** — the tabular-figures rule in DESIGN.md is met, and the note saying it was not is
+  wrong.
+  - `zet-ui` recorded that the chrome's numbers were drawn in Plex Sans's default *proportional*
+    figures, because `zet_font::GlyphSpec` has no way to ask for an OpenType feature. The premise
+    was unexamined: Plex Sans's figures are tabular by default, every digit at both weights advances
+    600/1000 of an em, and the font carries no `pnum` feature to switch away from them. There was
+    never anything to ask for, and a tab index, a font size, and a scroll position already line up.
+  - That is a property of a file rather than of the code, so it is now held down by a test rather
+    than by a paragraph: `zet-ui`'s `fonts` module rasterises all ten digits at both weights from
+    the shipped `.ttf` and fails if they ever stop agreeing, which is what swapping the face for one
+    with proportional figures would do.
 - **`zet-ui`** — the window's caption buttons are drawn as geometry, not as characters.
   - `−`, `□`, and `×` came from IBM Plex Sans, which the chrome loads with no fallback chain:
     a mark Plex does not carry draws `.notdef` — a box — in the place of a window control. The

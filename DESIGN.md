@@ -101,10 +101,12 @@ percentages, scroll positions, and row counts all align on the same column width
 which is the single detail that makes the chrome read as instrumentation rather
 than as an app.
 
-**This is not built.** `zet_font::GlyphSpec` has no way to ask for an OpenType
-feature, so the numbers are set in Plex Sans's default proportional figures and the
-digits in a font size do not line up with the digits in a tab index. Spacing them by
-hand would be a lie about the font's own metrics, so it is left and recorded here.
+This costs nothing to hold up, because the face already does it: Plex Sans's figures
+are tabular by default — every digit at both weights advances 600/1000 of an em — and
+the font carries no `pnum` feature to switch away from them. There is no OpenType
+feature for zet to ask for and no spacing to fake by hand. It is a property of a file
+rather than of the code, so `zet-ui`'s `fonts` module has a test that rasterises all
+ten digits from the shipped `.ttf` and fails if they ever stop agreeing.
 
 Scale, at 100% DPI:
 

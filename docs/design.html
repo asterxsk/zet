@@ -194,10 +194,12 @@
       scroll positions, and row counts all align on the same column width, which is the single detail
       that makes the chrome read as instrumentation rather than as an app.</p>
 
-      <p><strong>This is not built.</strong> <code>zet_font::GlyphSpec</code> has no way to ask for an
-      OpenType feature, so the numbers are set in Plex Sans's default proportional figures and the
-      digits in a font size do not line up with the digits in a tab index. Spacing them by hand would
-      be a lie about the font's own metrics, so it is left and recorded here.</p>
+      <p>This costs nothing to hold up, because the face already does it: Plex Sans's figures are
+      tabular by default — every digit at both weights advances 600/1000 of an em — and the font
+      carries no <code>pnum</code> feature to switch away from them. There is no OpenType feature for
+      zet to ask for and no spacing to fake by hand. It is a property of a file rather than of the
+      code, so <code>zet-ui</code>'s <code>fonts</code> module has a test that rasterises all ten
+      digits from the shipped <code>.ttf</code> and fails if they ever stop agreeing.</p>
 
       <table>
         <caption>Scale at 100% DPI</caption>
@@ -219,12 +221,13 @@
       and follows the Windows accessibility text size value by default.</p>
 
       <div class="callout callout--note">
-        <span class="callout__label">Known gap</span>
-        <p>The tabular-figures rule is specified here and not yet met in the code.
-        <code>zet-ui</code> records the reason: the font layer has no way to ask for an OpenType
-        feature, so the chrome's numbers are drawn in Plex Sans's default proportional figures.
-        Spacing digits by hand would be a lie about the font's own metrics, so it is left and
-        written down instead. The rule applies to everything the chrome draws, not to this page.</p>
+        <span class="callout__label">Met, and pinned by a test</span>
+        <p>The rule applies to everything the chrome draws. Plex Sans's figures are tabular by
+        default and the font has no <code>pnum</code> feature, so a <code>1</code> is exactly as wide
+        as an <code>8</code> and nothing has to be asked for or faked. <code>zet-ui</code> holds that
+        down: its <code>fonts</code> test rasterises all ten digits at both weights from the shipped
+        <code>.ttf</code> and fails if they stop agreeing — which is what would happen if the face
+        were ever swapped for one with proportional figures.</p>
       </div>
 
       <h2>The tab strip</h2>

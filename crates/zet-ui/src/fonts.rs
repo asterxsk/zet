@@ -99,3 +99,44 @@ pub fn settings() -> FontSettings {
 pub fn stack(scale: f32) -> Result<FontStack, FontError> {
     FontStack::load_embedded(&settings(), scale, &[REGULAR, MEDIUM])
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use zet_font::{GlyphSpec, Weight};
+
+    use super::*;
+
+    /// Every digit the chrome can draw has one advance, at both weights.
+    ///
+    /// DESIGN.md's type section rests on this. Tab indices, font sizes, opacity
+    /// percentages, scroll positions and row counts all have to line up in a column, and
+    /// they only line up if a `1` is exactly as wide as an `8`. Plex Sans is built that
+    /// way — its figures are tabular by default, and the font carries no `pnum` feature
+    /// to switch away from them — so there is nothing here for zet to ask a rasteriser
+    /// for, and no spacing to fake by hand.
+    ///
+    /// That is a property of a file, not of this code, so it is the one thing here that
+    /// has to be held down by a test against the real face: swapping the shipped `.ttf`
+    /// for a family with proportional figures should fail here rather than in the
+    /// titlebar, where the only sign would be a column of numbers that drifts.
+    #[test]
+    fn every_digit_in_the_chrome_face_has_the_same_advance() {
+        for weight in [Weight::NORMAL, Weight::MEDIUM] {
+            let mut stack = stack(1.0).expect("the faces this crate ships");
+            let mut advances = BTreeSet::new();
+            for ch in '0'..='9' {
+                let glyph = stack.rasterize(GlyphSpec::new(ch).with_weight(weight));
+                advances.insert(glyph.advance.to_bits());
+            }
+            assert_eq!(
+                advances.len(),
+                1,
+                "{weight:?} draws its digits at {} different widths, so no column of \
+                 numbers in the chrome can align",
+                advances.len()
+            );
+        }
+    }
+}

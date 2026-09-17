@@ -243,9 +243,6 @@
         own, so these two flags are the only way to make one. That also means both work on a machine
         whose config will not parse, exactly when someone might want them.</li>
 
-        <li>The <code>[update] check-on-launch</code> key that an earlier draft reserved for an
-        automatic launch check is gone, along with the section it lived in. No configuration in the
-        world contains it: a config file is written by zet, and zet has never shipped a release.</li>
       </ul>
 
       <h4>packaging/ — a per-user Windows installer and the icon it installs</h4>
@@ -287,7 +284,39 @@
         handshake exists to get.</li>
       </ul>
 
+      <h3>Removed</h3>
+
+      <h4>zet-config — the <code>[update] check-on-launch</code> key, and the <code>[update]</code> section it lived in</h4>
+
+      <p>It was reserved when the schema was written, for a check zet would make on launch, and the
+      check was never built: eight places in the docs had to say the key did nothing. Wiring it up
+      would mean a terminal that opens a socket because it was launched, on by default, with nowhere
+      to put the answer — DESIGN.md defines no notification surface, and the settings panel is the
+      config file with a face rather than a status board. <code>--check-update</code> and
+      <code>--update</code> were already the whole of the feature.</p>
+
+      <p>Nothing breaks: no configuration in the world contains the key, because
+      <code>config.toml</code> is written by zet and zet has never published a release. A
+      hand-written file that does contain it now fails to parse, which is
+      <code>deny_unknown_fields</code> doing its job rather than a silent no-op. The privacy claim
+      comes out of it stronger — there is no setting to turn anything off because there was never
+      anything to turn off: the only request zet can make is one you typed.</p>
+
       <h3>Fixed</h3>
+
+      <h4>zet-ui — the tabular-figures rule in DESIGN.md is met, and the note saying it was not is wrong</h4>
+
+      <p><code>zet-ui</code> recorded that the chrome's numbers were drawn in Plex Sans's default
+      <em>proportional</em> figures, because <code>zet_font::GlyphSpec</code> has no way to ask for
+      an OpenType feature. The premise was unexamined: Plex Sans's figures are tabular by default,
+      every digit at both weights advances 600/1000 of an em, and the font carries no
+      <code>pnum</code> feature to switch away from them. There was never anything to ask for, and a
+      tab index, a font size, and a scroll position already line up.</p>
+
+      <p>That is a property of a file rather than of the code, so it is now held down by a test
+      rather than by a paragraph: <code>zet-ui</code>'s <code>fonts</code> module rasterises all ten
+      digits at both weights from the shipped <code>.ttf</code> and fails if they ever stop
+      agreeing, which is what swapping the face for one with proportional figures would do.</p>
 
       <h4>zet-ui — the window's caption buttons are drawn as geometry, not as characters</h4>
 

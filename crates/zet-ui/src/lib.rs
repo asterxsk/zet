@@ -42,10 +42,13 @@
 //! is the renderer's, shared with the grid: one texture, two faces, told apart by the
 //! face in each glyph's key.
 //!
-//! **Known gap:** DESIGN.md asks for tabular figures in every number the chrome draws,
-//! and `zet_font::GlyphSpec` has no way to ask for an OpenType feature. The numbers are
-//! set in Plex Sans's default (proportional) figures. Faking it by spacing digits by hand
-//! would be a lie about the font's own metrics, so it is left as it is and recorded here.
+//! DESIGN.md asks for tabular figures in every number the chrome draws, and the face
+//! supplies them without being asked: Plex Sans's figures are tabular by default and the
+//! font has no `pnum` feature to switch away from them. Every digit at both weights
+//! advances 600/1000 of an em, which is why a tab index, a font size, and a scroll
+//! position line up in a column. That is a property of a file rather than of this code,
+//! so [`fonts`] holds it down with a test against the real face — swapping the shipped
+//! `.ttf` for a family with proportional figures fails there rather than in the titlebar.
 //!
 //! [DESIGN.md]: https://github.com/asterxsk/zet/blob/main/DESIGN.md
 
