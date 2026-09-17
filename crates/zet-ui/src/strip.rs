@@ -16,14 +16,8 @@ use crate::geometry::{
     CAPTION_WIDTH, HASH_RATIO, INDICATOR, NAME_GAP, NAME_INSET, NAME_SIZE, NAME_TRACKING,
     RAIL_CELL, RAIL_CELL_FLOOR, RAIL_WIDTH, ROW_HEIGHT, Rect, Size, TAB_PADDING, TAB_SIZE, TRAVEL,
 };
+use crate::marks::{self, Mark};
 use crate::paint::{Painter, TextStyle};
-
-/// The size of a caption button's mark.
-///
-/// DESIGN.md fixes the buttons at Windows' metrics and says nothing about the marks
-/// inside them. Twelve is the hint size from its type table, and it is the largest size
-/// that keeps a mark visibly smaller than the button it sits in at 46 by 40.
-const MARK_SIZE: f32 = 12.0;
 
 /// Where the strip's parts are.
 ///
@@ -376,10 +370,29 @@ pub(crate) fn captions(paint: &mut Painter<'_>, strip: &Strip, input: &ChromeInp
             (_, true) => palette.ink,
             (_, false) => palette.ink_mid,
         };
-        let mut buffer = [0u8; 4];
-        let mark = caption.mark().encode_utf8(&mut buffer);
-        let style = TextStyle::new(MARK_SIZE, Weight::NORMAL, color);
-        paint.centered(mark, *rect, style);
+        marks::draw(
+            paint,
+            mark_of(*caption, input.maximized),
+            *rect,
+            color,
+            input.scale,
+        );
+    }
+}
+
+/// Which mark a caption button shows.
+///
+/// The middle button is one control with two shapes rather than two controls: it is the
+/// same click either way, and which square it draws is the only thing the window's state
+/// changes. Windows draws the restore glyph — two overlapping squares — on a window that
+/// is already maximized, and a user who has maximized a window is looking for exactly
+/// that difference.
+const fn mark_of(caption: Caption, maximized: bool) -> Mark {
+    match caption {
+        Caption::Minimize => Mark::Minimize,
+        Caption::Maximize if maximized => Mark::Restore,
+        Caption::Maximize => Mark::Maximize,
+        Caption::Close => Mark::Close,
     }
 }
 

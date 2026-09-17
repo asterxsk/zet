@@ -62,6 +62,7 @@
 
 pub mod fonts;
 mod geometry;
+mod marks;
 mod overlays;
 mod paint;
 mod strip;
@@ -169,31 +170,18 @@ pub enum Hit {
 }
 
 /// A caption button.
+///
+/// The button, not the mark on it: [`Caption::Maximize`] is one control whose shape
+/// changes with the window's state, so which of the two squares it draws is the layout's
+/// decision and not the caller's. See [`crate::marks`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Caption {
     /// Minimize.
     Minimize,
-    /// Maximize or restore.
+    /// Maximize, or restore a window that is already maximized.
     Maximize,
     /// Close.
     Close,
-}
-
-impl Caption {
-    /// The character the mark is drawn as.
-    ///
-    /// Chosen from what the chrome's own face certainly has rather than from a symbol
-    /// font: a minus sign, a multiplication sign, and a white square. The first and last
-    /// are the shapes Windows draws anyway; the middle one is the square-alike, and it
-    /// is the reason a caption is drawn from text rather than from four rectangles.
-    #[must_use]
-    pub const fn mark(self) -> char {
-        match self {
-            Self::Minimize => '\u{2212}',
-            Self::Maximize => '\u{25a1}',
-            Self::Close => '\u{00d7}',
-        }
-    }
 }
 
 /// Where on the scrollbar the point fell.

@@ -11,6 +11,8 @@
 // per field in a test fixture, which is noise that would hide the numbers it is made of.
 #![allow(clippy::cast_sign_loss)]
 
+use std::collections::BTreeMap;
+
 use zet_config::{Palette, TabPosition, TabSettings, WindowSettings};
 use zet_font::{GlyphSpec, Metrics, Weight};
 use zet_render::{Frame, Placement, Quad};
@@ -442,16 +444,23 @@ fn zero_tabs_removes_the_row() {
             "x = {x} hit {hit:?} with no tabs open"
         );
     }
-    // No surface and no hairline. What is left is the caption marks, which are glyphs.
+    // No surface and no hairline. What is left is the caption marks, and asserting that
+    // they are the *only* thing left is stronger than asserting the row drew nothing:
+    // every quad has to be inside one of the three button boxes, so a surface that came
+    // back would be caught by where it is rather than by how many there are.
+    assert!(!drawn.frame.quads.is_empty(), "the captions are gone");
     assert!(
-        drawn.frame.quads.is_empty(),
-        "an absent row still drew {:?}",
-        drawn.frame.quads
+        drawn.frame.glyphs.is_empty(),
+        "an absent row still drew text"
     );
-    assert!(
-        !drawn.frame.glyphs.is_empty(),
-        "the captions are still there"
-    );
+    for quad in &drawn.frame.quads {
+        let [x, y, w, h] = quad.rect;
+        let inside = (1200.0 - 3.0 * 46.0..1200.0).contains(&x)
+            && (0.0..40.0).contains(&y)
+            && (1200.0 - 3.0 * 46.0..1200.0).contains(&(x + w - 1.0))
+            && (0.0..40.0).contains(&(y + h - 1.0));
+        assert!(inside, "{:?} is not one of the caption marks", quad.rect);
+    }
 }
 
 // ---------------------------------------------------------------------------------
@@ -849,6 +858,29 @@ fn the_scrollbar_appears_only_when_there_is_something_to_scroll() {
 // The two planes
 // ---------------------------------------------------------------------------------
 
+/// A colour with its alpha divided back out.
+///
+/// The blend is premultiplied, so a quad drawn at a coverage carries the colour already
+/// multiplied by it — which is how the caption marks are antialiased, one pixel at a
+/// time. Undoing that multiplication is what recovers the colour the call site asked
+/// for, and the colour the call site asked for is the thing the palette rule is about.
+/// Without this the marks would have to be drawn opaque to pass, which is the same as
+/// saying they could not be antialiased at all.
+fn stripped(color: [f32; 4]) -> [f32; 4] {
+    let alpha = color[3];
+    if alpha <= 0.0 {
+        return color;
+    }
+    // Alpha 1, not the coverage: the palette holds opaque colours, and the coverage was
+    // never part of what was asked for.
+    [color[0] / alpha, color[1] / alpha, color[2] / alpha, 1.0]
+}
+
+/// Whether two colours are the same one, allowing for the division above.
+fn same(a: [f32; 4], b: [f32; 4]) -> bool {
+    a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-4)
+}
+
 #[test]
 fn the_chrome_only_ever_draws_the_chrome_palette() {
     // The test that catches a grid colour leaking into the chrome, or a colour invented
@@ -872,22 +904,24 @@ fn the_chrome_only_ever_draws_the_chrome_palette() {
             input.settings_open = settings_open;
             let drawn = draw(&mut chrome, &input);
 
-            let allowed: Vec<[u32; 4]> = palette
+            let allowed: Vec<[f32; 4]> = palette
                 .all()
                 .iter()
-                .map(|(_, color)| color.to_linear().map(f32::to_bits))
+                .map(|(_, color)| color.to_linear())
                 .collect();
             assert!(!drawn.frame.quads.is_empty(), "nothing was drawn");
             for quad in &drawn.frame.quads {
+                let colour = stripped(quad.color);
                 assert!(
-                    allowed.contains(&quad.color.map(f32::to_bits)),
+                    allowed.iter().any(|one| same(colour, *one)),
                     "{:?} is not a chrome colour",
                     quad.color
                 );
             }
             for glyph in &drawn.frame.glyphs {
+                let colour = stripped(glyph.color);
                 assert!(
-                    allowed.contains(&glyph.color.map(f32::to_bits)),
+                    allowed.iter().any(|one| same(colour, *one)),
                     "{:?} is not a chrome colour",
                     glyph.color
                 );
@@ -1057,4 +1091,230 @@ fn the_scale_is_applied_once_and_only_to_what_is_emitted() {
     assert!((scaled_glyph[2] - plain_glyph[2] * 2.0).abs() < f32::EPSILON);
     assert!((scaled_glyph[0] - plain_glyph[0] * 2.0).abs() < f32::EPSILON);
     assert!((scaled_glyph[1] - plain_glyph[1] * 2.0).abs() < f32::EPSILON);
+}
+
+// ---------------------------------------------------------------------------------
+// The caption marks
+// ---------------------------------------------------------------------------------
+
+/// One caption button's box, in logical pixels, for the 1200-wide test window.
+fn caption_box(caption: Caption) -> Rect {
+    let index = match caption {
+        Caption::Minimize => 0.0,
+        Caption::Maximize => 1.0,
+        Caption::Close => 2.0,
+    };
+    Rect::new(1200.0 - 3.0 * 46.0 + index * 46.0, 0.0, 46.0, 40.0)
+}
+
+/// The ink one caption mark drew: coverage by pixel, keyed by that pixel's offset from
+/// the mark's centre.
+///
+/// The marks are the only quads the chrome puts down at physical coordinates and the
+/// only ones whose colour carries a coverage rather than a full alpha, so they can be
+/// read back out of the frame — and a question about a *shape* becomes answerable here
+/// ("the square is hollow", "the cross leaves the middle of its edges empty") rather
+/// than only a question about a rectangle.
+///
+/// A mark's quad is a whole rectangle, not a pixel: the minimise bar is one quad ten
+/// pixels wide. So each quad is expanded back into the pixels it covers, which is also
+/// what makes the antialiased cross and the hinted bars comparable — both arrive here as
+/// coverage per pixel.
+///
+/// Quads are kept only when the button's own box contains them. The chrome fills the
+/// strip's surface behind the buttons with a quad that covers the whole window's width,
+/// and that one is not a mark.
+fn mark_ink(caption: Caption, scale: f32, maximized: bool) -> BTreeMap<(i32, i32), f32> {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    input.scale = scale;
+    input.maximized = maximized;
+    let drawn = draw(&mut chrome, &input);
+
+    let button = caption_box(caption);
+    let (cx, cy) = button.center();
+    let (cx, cy) = ((cx * scale).round() as i32, (cy * scale).round() as i32);
+    let box_ = Rect::new(
+        button.x * scale,
+        button.y * scale,
+        button.width * scale,
+        button.height * scale,
+    );
+
+    let mut ink = BTreeMap::new();
+    for quad in &drawn.frame.quads {
+        let [x, y, width, height] = quad.rect;
+        if !box_.contains(x, y) || !box_.contains(x + width - 1.0, y + height - 1.0) {
+            continue;
+        }
+        for row in y as i32..(y + height) as i32 {
+            for column in x as i32..(x + width) as i32 {
+                ink.insert((column - cx, row - cy), quad.color[3]);
+            }
+        }
+    }
+    ink
+}
+
+/// Whether anything was inked within `radius` pixels of `at`.
+fn inked_near(ink: &BTreeMap<(i32, i32), f32>, at: (i32, i32), radius: i32) -> bool {
+    ink.keys()
+        .any(|(x, y)| (x - at.0).abs() <= radius && (y - at.1).abs() <= radius)
+}
+
+/// The rows and columns the ink occupies, as half-open ranges of pixel offsets.
+fn ink_extent(ink: &BTreeMap<(i32, i32), f32>) -> ((i32, i32), (i32, i32)) {
+    let xs = ink.keys().map(|(x, _)| *x);
+    let ys = ink.keys().map(|(_, y)| *y);
+    (
+        (xs.clone().min().unwrap_or(0), xs.max().unwrap_or(0) + 1),
+        (ys.clone().min().unwrap_or(0), ys.max().unwrap_or(0) + 1),
+    )
+}
+
+#[test]
+fn every_caption_draws_a_mark_and_no_mark_is_a_filled_block() {
+    // The failure this is really about is a mark that is not there. The old ones were
+    // characters from the chrome's face, and that face is loaded with no fallback chain —
+    // so a character Plex does not carry draws `.notdef`, which is a box, in the place of
+    // a window control. Geometry cannot go missing that way, and this says so.
+    for caption in [Caption::Minimize, Caption::Maximize, Caption::Close] {
+        for scale in [1.0_f32, 1.5, 2.0] {
+            let ink = mark_ink(caption, scale, false);
+            assert!(!ink.is_empty(), "{caption:?} at {scale} drew nothing");
+
+            // Measured against the mark's own box and not against the extent of its ink,
+            // because a bar ten pixels wide and one tall *is* its bounding box in full.
+            // The claim is about the box the mark is drawn in: a control fills a
+            // fraction of it, and a block fills all of it.
+            let box_area = (10.0 * scale).powi(2);
+            let inked = ink.values().sum::<f32>();
+            assert!(
+                inked < box_area * 0.75,
+                "{caption:?} at {scale} inks {inked} of a possible {box_area} pixels, which \
+                 is a filled block rather than a mark"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_maximize_mark_is_a_hollow_square() {
+    // A square drawn as an outline, not as a filled box and not as a character.
+    for scale in [1.0_f32, 2.0] {
+        let ink = mark_ink(Caption::Maximize, scale, false);
+        assert!(
+            !inked_near(&ink, (0, 0), scale.round() as i32 - 1),
+            "the middle of the square is filled at {scale}"
+        );
+        // All four corners are inked: an outline with a corner missing is an outline
+        // drawn from four segments that do not meet.
+        let edge = (5.0 * scale).round() as i32;
+        for corner in [
+            (-edge + 1, -edge + 1),
+            (edge - 2, -edge + 1),
+            (-edge + 1, edge - 2),
+            (edge - 2, edge - 2),
+        ] {
+            assert!(
+                inked_near(&ink, corner, 2),
+                "the corner at {corner:?} is missing at {scale}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_minimize_mark_is_one_bar_across_the_middle() {
+    let ink = mark_ink(Caption::Minimize, 1.0, false);
+    let ((x0, x1), (y0, y1)) = ink_extent(&ink);
+
+    assert_eq!(y1 - y0, 1, "the bar is more than one pixel tall");
+    assert!(
+        (y0..y1).contains(&0),
+        "the bar is not on the middle row: rows {y0}..{y1}"
+    );
+    assert!(
+        x1 - x0 >= 8,
+        "the bar is {} pixels wide and should span the mark's box",
+        x1 - x0
+    );
+}
+
+#[test]
+fn the_close_mark_is_a_cross_and_not_a_diamond() {
+    // Two diagonals. The discriminator is the middle of each edge: a cross inks its
+    // corners and its centre and leaves those four points empty, while a filled square, a
+    // diamond, or a box would each ink at least one of them.
+    let ink = mark_ink(Caption::Close, 1.0, false);
+    assert!(inked_near(&ink, (0, 0), 1), "the two strokes do not cross");
+
+    for edge in [(-5, 0), (5, 0), (0, -5), (0, 5)] {
+        assert!(
+            !inked_near(&ink, edge, 0),
+            "the middle of an edge at {edge:?} is inked, so this is not a cross"
+        );
+    }
+    for corner in [(-4, -4), (4, -4), (-4, 4), (4, 4)] {
+        assert!(
+            inked_near(&ink, corner, 2),
+            "the arm at {corner:?} is missing"
+        );
+    }
+}
+
+#[test]
+fn a_maximized_window_gets_the_restore_mark() {
+    // The middle button is one control with two shapes. A window that is already
+    // maximized shows two overlapping squares, which is the only thing on the button that
+    // tells the user what clicking it will do.
+    let plain = mark_ink(Caption::Maximize, 1.0, false);
+    let restored = mark_ink(Caption::Maximize, 1.0, true);
+    assert_ne!(
+        plain, restored,
+        "the mark ignores whether the window is maximized"
+    );
+
+    let (_, (restored_top, _)) = ink_extent(&restored);
+    assert!(
+        restored_top < -4,
+        "the back square does not sit above the front one: it starts at {restored_top}"
+    );
+    assert!(
+        restored.len() > plain.len(),
+        "two squares should be more ink than one"
+    );
+}
+
+#[test]
+fn a_caption_stroke_stays_one_pixel_until_there_is_a_second_one_to_spend() {
+    // Optical sizing, and the reason the rasteriser works in physical pixels at all: a
+    // one-pixel hairline scaled to 1.25 is 1.25 pixels, which a linear coverage ramp
+    // spreads over two rows as a grey smear. A caption mark is a hard edge, so it stays
+    // one pixel until the scale offers a whole second one.
+    let rows = |scale: f32| {
+        let ink = mark_ink(Caption::Minimize, scale, false);
+        let (_, (y0, y1)) = ink_extent(&ink);
+        y1 - y0
+    };
+    // In *physical* rows, because that is what the grid the mark lands on is measured
+    // in: the claim is "one pixel of stroke", not "one logical pixel", and at 125% those
+    // are different numbers. Spending 1.25 pixels of stroke as two physical rows is the
+    // grey smear; spending it as one is the hairline Windows draws.
+    assert_eq!(rows(1.0), 1);
+    assert_eq!(rows(1.25), 1, "1.25 pixels of stroke was spent as two");
+    assert_eq!(rows(1.5), 2, "half way to a second pixel rounds to one");
+    assert_eq!(rows(2.0), 2, "a 2x window gets two pixels of stroke");
+}
+
+#[test]
+fn the_marks_grow_with_the_window_scale() {
+    let small = mark_ink(Caption::Maximize, 1.0, false);
+    let large = mark_ink(Caption::Maximize, 2.0, false);
+    let ((small_left, small_right), _) = ink_extent(&small);
+    let ((large_left, large_right), _) = ink_extent(&large);
+    assert_eq!(large_right - large_left, (small_right - small_left) * 2);
+    assert_eq!(large_left, small_left * 2);
 }

@@ -98,6 +98,36 @@ impl<'a> Painter<'a> {
         ));
     }
 
+    /// A rectangle in physical pixels, at a coverage.
+    ///
+    /// The only method here that does *not* apply the window's scale, and the exception
+    /// is the point: the caller is [`crate::marks`], which rasterises the window's
+    /// caption marks against the device grid so that a one-pixel stroke lands on exactly
+    /// one pixel rather than being smeared across two by a fractional position. Every
+    /// other caller draws in the design's own units and lets [`Painter::fill`] do the
+    /// conversion, which is what keeps the layout's arithmetic readable.
+    ///
+    /// Alpha *is* the coverage. The blend is premultiplied, so a quad at half coverage
+    /// puts half the colour on the pixel, which is antialiasing without a second
+    /// mechanism for it.
+    pub(crate) fn physical(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        color: Rgb,
+        coverage: f32,
+    ) {
+        self.quads.push(Quad::new(
+            x,
+            y,
+            width,
+            height,
+            premultiplied(color, coverage),
+        ));
+    }
+
     /// One logical pixel per pixel of the source's own raster at this role's size.
     ///
     /// The source is built at the window's scale, so its pixels are physical while a
