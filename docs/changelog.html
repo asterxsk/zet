@@ -110,6 +110,19 @@
       the other action <code>Unbound</code> and says so on its own row, rather than leaving the two of
       them to be resolved by whichever the map happened to yield first.</p>
 
+      <p>The panel is reachable from the keyboard: <code>Tab</code> or <code>Down</code> moves to the
+      next row, <code>Shift+Tab</code> or <code>Up</code> to the previous, <code>Left</code>/<code>Right</code>
+      (or <code>Enter</code>, <code>Space</code>) adjust the row the keyboard is on, and <code>Tab</code>
+      past the last row hands the keyboard back to the shell rather than wrapping. Focus is drawn as a
+      <code>hairline</code> in <code>ink</code>, not a <code>signal</code> ring &mdash; <code>signal</code>
+      is the app's one lamp with a 3px by 40px budget, which a border around a 118-pixel control would
+      spend several times over. A focused row below the fold is scrolled to, because a highlight nobody
+      can see reads as a broken panel rather than a scrolled one.</p>
+
+      <p>Only those keys are the panel's. A letter, and any chord with a modifier on it, still goes to
+      the shell: the terminal behind the panel is live, and typing into it is the reason the panel does
+      not cover it.</p>
+
       <p>The font row offers every monospaced family the machine has. Enumerating them is a registry
       walk and a face load per family, so it happens on its own thread during startup and arrives as a
       user event rather than being paid for on the frame that draws.</p>

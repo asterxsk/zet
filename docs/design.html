@@ -119,7 +119,7 @@
           <tr><td><span class="swatch" style="background:#e7e9ec"></span></td><td class="k">ink</td><td class="k">#e7e9ec</td><td>Primary chrome text, active tab index</td></tr>
           <tr><td><span class="swatch" style="background:#99a0a8"></span></td><td class="k">ink-mid</td><td class="k">#99a0a8</td><td>Secondary text, hovered tab index</td></tr>
           <tr><td><span class="swatch" style="background:#7b838d"></span></td><td class="k">ink-dim</td><td class="k">#7b838d</td><td>Inactive tab index, disabled controls</td></tr>
-          <tr><td><span class="swatch" style="background:#ffa62b"></span></td><td class="k">signal</td><td class="k">#ffa62b</td><td>The active marker. Indicators and focus rings only</td></tr>
+          <tr><td><span class="swatch" style="background:#ffa62b"></span></td><td class="k">signal</td><td class="k">#ffa62b</td><td>The active marker. Indicators only</td></tr>
           <tr><td><span class="swatch" style="background:#8a5a17"></span></td><td class="k">signal-dim</td><td class="k">#8a5a17</td><td>Signal at rest, for hover preview of an indicator</td></tr>
           <tr><td><span class="swatch" style="background:#ff6b5e"></span></td><td class="k">danger</td><td class="k">#ff6b5e</td><td>Destructive confirmations, error text</td></tr>
           <tr><td><span class="swatch" style="background:#57d9a3"></span></td><td class="k">ok</td><td class="k">#57d9a3</td><td>Success confirmations</td></tr>
@@ -411,9 +411,24 @@
       — <code>toml_edit</code> round-trips, so a hand-written note beside a setting survives being
       set from the panel.</p>
 
-      <p>Keyboard: <code>Escape</code> closes the panel and the chord that opened it toggles it. The
-      panel is not reachable with <code>Tab</code> and the arrow keys, which is a gap rather than a
-      decision. It is the one thing in the panel that is mouse-only, and it is next.</p>
+      <p>Keyboard: <code>Tab</code> or <code>Down</code> enters the panel and moves to the next row,
+      <code>Shift+Tab</code> or <code>Up</code> to the previous one, <code>Left</code> and
+      <code>Right</code> (or <code>Enter</code>, or <code>Space</code>) adjust the row the keyboard is
+      on, and <code>Tab</code> past the last row hands the keyboard back to the shell rather than
+      wrapping. <code>Escape</code> does the same, and a second <code>Escape</code> closes the panel.
+      The chord that opened it toggles it.</p>
+
+      <p>Focus is drawn as the same hairline in <code>ink</code> — the brightest edge the chrome
+      has. <code>signal</code> is the obvious colour for a focus ring and the wrong one: it is the
+      app's one lamp with a 3px by 40px budget, which a border around a 118-pixel control would spend
+      several times over. Three weights of one hairline, then, and no fourth: the row the keyboard is
+      on is <code>ink</code>, the one under the pointer is <code>hairline-strong</code>, and the rest
+      are <code>hairline</code>.</p>
+
+      <p>Only those keys are the panel's. Every letter and every chord with a modifier still goes to
+      the shell, because the terminal behind the panel is live and typing into it is the reason the
+      panel does not cover it. That is what "it does not steal focus from the prompt" has to
+      mean.</p>
 
       <h2>Surfaces the framework gave us</h2>
 
@@ -425,8 +440,9 @@
         uses <code>signal</code> at 20% alpha.</li>
         <li>The scrollbar is an 8px <code>hairline-strong</code> thumb on <code>ground</code>,
         growing to 10px on hover, with no track and no arrows.</li>
-        <li>Focus rings are a 2px <code>signal</code> outline offset by 1px, on every focusable
-        control including the tab strip and the grid itself.</li>
+        <li>Focus is a <code>hairline</code> in <code>ink</code> rather than a <code>signal</code> ring.
+        <code>signal</code> is the app's one lamp and a ring around a control spends its whole budget
+        several times over; the brightest hairline says "here" without saying "look at me".</li>
         <li>The find bar is a 32px row pinned above the grid, <code>surface-raised</code>, using the
         same hairline language.</li>
         <li>The window resize cursor, the IME candidate window anchor, and the drag-and-drop overlay

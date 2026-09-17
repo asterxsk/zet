@@ -100,26 +100,38 @@ pub(crate) fn panel(paint: &mut Painter<'_>, input: &ChromeInput<'_>, top: f32, 
     // second walk is the one that draws.
     let content = list_height(input.settings);
     let viewport = (rect.height - 2.0 * PAD).max(0.0);
-    let scroll = input.settings_scroll.clamp(0.0, (content - viewport).max(0.0));
+    let mut scroll = input.settings_scroll.clamp(0.0, (content - viewport).max(0.0));
+    // A row the keyboard is on has to be on screen, or the keys move a highlight nobody
+    // can see and the panel looks broken rather than scrolled.
+    if let Some(focus) = input.settings_focus {
+        let top = content_top(input.settings, focus);
+        if top < scroll {
+            scroll = top;
+        } else if top + ROW > scroll + viewport {
+            scroll = top + ROW - viewport;
+        }
+        scroll = scroll.clamp(0.0, (content - viewport).max(0.0));
+    }
 
     let mut controls = Vec::new();
     let mut y = rect.y + PAD - scroll;
     for (line, setting) in input.settings.iter().enumerate() {
+        let focused = input.settings_focus == Some(line);
+        let (lead, height) = block(line, setting);
+        y += lead;
         let Some(control) = setting.control else {
-            // A section heading, and the rule under it. The gap above it belongs to the
-            // heading, so the first heading of the panel is not pushed down by it.
-            y += if line == 0 { 0.0 } else { SECTION_GAP };
+            // A section heading, and the rule under it.
             let heading_box = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, HEADING_BOX);
             if visible(heading_box, rect) {
                 let style = TextStyle::new(HEADING_SIZE, Weight::MEDIUM, palette.ink)
                     .tracking(HEADING_TRACKING);
                 paint.centered(setting.text, heading_box, style);
             }
-            y += HEADING_BOX;
-            if visible(Rect::new(rect.x, y, rect.width, 1.0), rect) {
-                paint.fill(Rect::new(rect.x, y, rect.width, 1.0), palette.hairline);
+            let rule = Rect::new(rect.x, y + HEADING_BOX, rect.width, 1.0);
+            if visible(rule, rect) {
+                paint.fill(rule, palette.hairline);
             }
-            y += 1.0 + PAD / 2.0;
+            y += height;
             continue;
         };
 
@@ -136,12 +148,12 @@ pub(crate) fn panel(paint: &mut Painter<'_>, input: &ChromeInput<'_>, top: f32, 
             let label_box = Rect::new(row.x, y, (row.width - CONTROL_WIDTH - LABEL_GAP).max(0.0), ROW);
             let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
             paint.centered(setting.text, label_box, style);
-            draw_control(paint, input, control, control_rect, setting.value);
+            draw_control(paint, input, control, control_rect, setting.value, focused);
             for (part, rect) in parts(control, control_rect) {
                 controls.push((line, part, rect));
             }
         }
-        y += ROW;
+        y += height;
     }
 
     Panel {
@@ -163,6 +175,7 @@ fn draw_control(
     control: Control,
     rect: Rect,
     value: &str,
+    focused: bool,
 ) {
     let palette = *input.palette;
     // A control is the ground behind a hairline, which is DESIGN.md's one depth
@@ -185,15 +198,19 @@ fn draw_control(
         };
         paint.fill(lit, palette.hairline);
     }
-    border(
-        paint,
-        rect,
-        if hovered.is_some() {
-            palette.hairline_strong
-        } else {
-            palette.hairline
-        },
-    );
+    // Three weights of the same hairline, and no fourth: the control you are on is
+    // `ink`, the one under the pointer is `hairline-strong`, and the rest are `hairline`.
+    // `signal` is the obvious colour for a focus ring and the wrong one — DESIGN.md gives
+    // it a 3px by 40px budget and it is the app's one lamp, which a border around a
+    // 118-pixel control would spend several times over.
+    let edge = if focused {
+        palette.ink
+    } else if hovered.is_some() {
+        palette.hairline_strong
+    } else {
+        palette.hairline
+    };
+    border(paint, rect, edge);
     let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
     paint.centered(value, rect, style);
 }
@@ -219,20 +236,53 @@ fn parts(control: Control, rect: Rect) -> Vec<(SettingPart, Rect)> {
     }
 }
 
-/// How tall the whole list would be, drawn from the top.
+/// What one line of the panel takes: the gap above it, and its own height.
 ///
-/// The one place the panel's vertical rhythm is written down, so that the scroll the
-/// caller asked for can be clamped to what actually overflows rather than to a number it
-/// guessed at. The walk in [`panel`] uses the same constants, and the two are checked
-/// against each other by a test rather than by hope.
+/// The one place the panel's vertical rhythm is written down. The walk in [`panel`] and
+/// the two measurements below all go through this, so the scroll the caller asked for
+/// can be clamped to what actually overflows rather than to a number it guessed at, and
+/// the three of them cannot drift apart.
+///
+/// The gap above a section heading belongs to the heading rather than to the section
+/// before it, so the first heading of the panel is not pushed down by a gap with nothing
+/// above it to separate it from.
+fn block(line: usize, setting: &SettingLine<'_>) -> (f32, f32) {
+    if setting.control.is_none() {
+        (
+            if line == 0 { 0.0 } else { SECTION_GAP },
+            HEADING_BOX + 1.0 + PAD / 2.0,
+        )
+    } else {
+        (0.0, ROW)
+    }
+}
+
+/// How tall the whole list would be, drawn from the top.
 fn list_height(lines: &[SettingLine<'_>]) -> f32 {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(line, setting)| {
+            let (lead, height) = block(line, setting);
+            lead + height
+        })
+        .sum()
+}
+
+/// Where a line's content starts, measured from the top of the list.
+///
+/// The gap above a heading is not counted, because this answers "where would the list
+/// have to be scrolled to for this line to be visible", and scrolling to a blank gap
+/// puts nothing on screen. Every focusable line is a row, which has no gap at all.
+fn content_top(lines: &[SettingLine<'_>], index: usize) -> f32 {
     let mut y = 0.0;
-    for (line, setting) in lines.iter().enumerate() {
-        y += if setting.control.is_none() {
-            (if line == 0 { 0.0 } else { SECTION_GAP }) + HEADING_BOX + 1.0 + PAD / 2.0
-        } else {
-            ROW
-        };
+    for (line, setting) in lines.iter().enumerate().take(index + 1) {
+        let (lead, height) = block(line, setting);
+        y += lead;
+        if line == index {
+            break;
+        }
+        y += height;
     }
     y
 }

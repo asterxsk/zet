@@ -111,6 +111,14 @@ pub struct ChromeInput<'a> {
     /// what actually overflows and reports the clamped value back through
     /// [`Layout::settings_scroll`].
     pub settings_scroll: f32,
+    /// The settings row the keyboard is on, if any.
+    ///
+    /// An index into [`ChromeInput::settings`], and `None` while the panel is open but
+    /// the keyboard has not been asked for. The two are different states and the
+    /// difference is the point: a panel that took the arrow keys the moment it opened
+    /// would have stolen them from the shell, and the terminal behind it is supposed to
+    /// still be usable.
+    pub settings_focus: Option<usize>,
     /// The text in the titlebar's name slot, which the app name goes in.
     pub window_title: &'a str,
     /// The whole window's size in logical pixels.

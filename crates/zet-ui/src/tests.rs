@@ -163,6 +163,7 @@ fn input<'a>(palette: &'a Palette, tabs: &'a [TabInfo], size: Size) -> ChromeInp
         settings_open: false,
         settings: &[],
         settings_scroll: 0.0,
+        settings_focus: None,
         window_title: "zet",
         size,
         scale: 1.0,
@@ -1119,6 +1120,125 @@ fn a_row_that_does_not_fit_is_scrolled_to_rather_than_dropped() {
         clamped.layout.settings_scroll
     );
     assert!(!first(&chrome), "row 0 should have scrolled off");
+}
+
+#[test]
+#[allow(clippy::float_cmp)] // Exact on purpose: both values are the same palette entry.
+fn the_row_the_keyboard_is_on_wears_the_brightest_edge_and_the_others_do_not() {
+    // Three weights of one hairline and no fourth: focused is `ink`, hovered is
+    // `hairline-strong`, and the rest are `hairline`. `signal` is the obvious colour for
+    // a focus ring and the wrong one — it is the app's one lamp with a 3px by 40px
+    // budget, which a border around a 118-pixel control would spend several times over.
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+
+    let edge_of = |chrome: &Chrome, drawn: &Drawn, line: usize| {
+        let rect = chrome
+            .regions()
+            .iter()
+            .find_map(|region| match region {
+                crate::Region::Setting {
+                    line: at,
+                    part: SettingPart::Whole,
+                    rect,
+                } if *at == line => Some(*rect),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("row {line} has no region"));
+        // The top edge, which is the first of the four the border draws.
+        // The one-pixel strip along the top edge. The fill behind the control has the
+        // same x, y and width, so the height is what tells them apart.
+        drawn
+            .frame
+            .quads
+            .iter()
+            .find(|quad| {
+                (quad.rect[0] - rect.x).abs() < 0.5
+                    && (quad.rect[1] - rect.y).abs() < 0.5
+                    && (quad.rect[2] - rect.width).abs() < 0.5
+                    && (quad.rect[3] - 1.0).abs() < 0.5
+            })
+            .map_or_else(|| panic!("row {line} has no border"), |quad| quad.color)
+    };
+
+    let plain = {
+        let mut input = input(&palette, &tabs, window());
+        input.settings_open = true;
+        input.settings = &lines;
+        let drawn = draw(&mut chrome, &input);
+        edge_of(&chrome, &drawn, 1)
+    };
+    let focused = {
+        let mut input = input(&palette, &tabs, window());
+        input.settings_open = true;
+        input.settings = &lines;
+        input.settings_focus = Some(1);
+        let drawn = draw(&mut chrome, &input);
+        edge_of(&chrome, &drawn, 1)
+    };
+    assert_ne!(plain, focused, "the focused row looks exactly like the rest");
+
+    // And the row that is not focused is untouched by it, which is the half a test that
+    // only compared two frames would miss.
+    let mut input = input(&palette, &tabs, window());
+    input.settings_open = true;
+    input.settings = &lines;
+    input.settings_focus = Some(1);
+    let drawn = draw(&mut chrome, &input);
+    assert_eq!(edge_of(&chrome, &drawn, 2), plain);
+}
+
+#[test]
+fn a_focused_row_below_the_fold_is_scrolled_to_rather_than_hidden() {
+    // A highlight the user cannot see is a panel that looks broken rather than scrolled,
+    // which is worse than not having the key at all.
+    let palette = Palette::instrument();
+    let lines: Vec<SettingLine<'static>> = (0..40)
+        .map(|_| SettingLine {
+            text: "Size",
+            control: Some(Control::Step),
+            value: "13",
+        })
+        .collect::<Vec<_>>();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let short = Size {
+        width: 1200.0,
+        height: 200.0,
+    };
+    let mut input = input(&palette, &tabs, short);
+    input.settings_open = true;
+    input.settings = &lines;
+    input.settings_scroll = 0.0;
+    input.settings_focus = Some(39);
+
+    let drawn = draw(&mut chrome, &input);
+    let top = drawn.layout.top + 16.0;
+    let bottom = short.height - 16.0;
+    let last = chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Setting {
+                line: 39,
+                part: SettingPart::Less,
+                rect,
+            } => Some(*rect),
+            _ => None,
+        })
+        .expect("the focused row is drawn, so it is on screen");
+    assert!(
+        last.y >= top && last.bottom() <= bottom,
+        "row 39 is at {}..{} and the panel's viewport is {top}..{bottom}",
+        last.y,
+        last.bottom()
+    );
+    assert!(
+        drawn.layout.settings_scroll > 0.0,
+        "the list did not scroll to reach it"
+    );
 }
 
 #[test]

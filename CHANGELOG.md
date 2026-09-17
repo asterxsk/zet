@@ -32,6 +32,16 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
   - Binding a chord that something else already had leaves the other action `Unbound` and says
     so on its own row, rather than leaving the two of them to be resolved by whichever the map
     happened to yield first.
+  - The panel is reachable from the keyboard: `Tab` or `Down` moves to the next row, `Shift+Tab`
+    or `Up` to the previous, `Left`/`Right` (or `Enter`, `Space`) adjust the row the keyboard is
+    on, and `Tab` past the last row hands the keyboard back to the shell rather than wrapping.
+    Focus is drawn as a `hairline` in `ink`, not a `signal` ring — `signal` is the app's one lamp
+    with a 3px by 40px budget, which a border around a 118-pixel control would spend several
+    times over. A focused row below the fold is scrolled to, because a highlight nobody can see
+    reads as a broken panel rather than a scrolled one.
+  - Only those keys are the panel's. A letter, and any chord with a modifier on it, still goes
+    to the shell: the terminal behind the panel is live, and typing into it is the reason the
+    panel does not cover it.
 - **`zet-app`** — a key bound to a chord fires on the press and on every auto-repeat, and not on
   the release.
   - `bound` answers for a chord rather than for an event, so a release that reached it ran the

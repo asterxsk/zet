@@ -52,7 +52,7 @@ use winit::window::{CursorIcon, Window, WindowId};
 use zet_app::{Action, App, AppError, Command};
 use zet_config::{Config, FontSettings, Palette, TabSettings};
 use zet_font::{FontError, FontStack};
-use zet_input::{Chord, Key, MouseEvent, encode_mouse};
+use zet_input::{Chord, Key, KeyEvent, KeyKind, Modifiers, MouseEvent, encode_mouse};
 use zet_render::{Frame, Renderer, RendererError, View};
 use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabInfo};
 
@@ -162,6 +162,13 @@ pub struct Host {
     settings_scroll: f32,
     /// The action waiting for the user to press a key, if the panel asked for one.
     capturing: Option<Action>,
+    /// The settings row the keyboard is on: an index into the rows the app answers with.
+    ///
+    /// `None` while the panel is open but the keyboard has not been asked for, which is
+    /// a different state from "no row is focused" in the same way that a window with no
+    /// focus is different from a window whose focus is nowhere in particular. The arrow
+    /// keys belong to the shell until this is set.
+    settings_focus: Option<usize>,
 }
 
 impl Host {
@@ -205,6 +212,7 @@ impl Host {
             settings_open: false,
             settings_scroll: 0.0,
             capturing: None,
+            settings_focus: None,
         }
     }
 
@@ -384,24 +392,17 @@ impl Host {
         // them. `ChromeInput` is a view rather than an owner, so something has to outlive
         // it, and this pair is that something.
         let lines = self.settings_open.then(|| self.app.settings());
-        let capturing = self.capturing;
-        let panel: Vec<zet_ui::SettingLine<'_>> = lines.as_ref().map_or_else(Vec::new, |lines| {
-            lines
-                .iter()
-                .map(|line| {
-                    // The row that is waiting for a key says so. Without this it would go
-                    // on showing the chord it is about to lose, and the user would have
-                    // no way to tell that the next key they press is not going to the
-                    // shell — which, with the panel over a live terminal, is exactly the
-                    // mistake worth designing out.
-                    let waiting = capturing.is_some_and(|action| line.id() == Some(zet_app::Id::Binding(action)));
-                    zet_ui::SettingLine {
-                        text: line.text(),
-                        control: line.kind().map(control_of),
-                        value: if waiting { PRESS_A_KEY } else { line.value() },
-                    }
-                })
-                .collect()
+        let panel = lines
+            .as_ref()
+            .map_or_else(Vec::new, |lines| panel_lines(lines, self.capturing));
+        // Focus is an index into a list the app rebuilds from the file every frame, so a
+        // change made from the panel can move the row out from under it: choosing a
+        // block cursor drops the thickness row, and a highlight on the line below it
+        // would silently be a highlight on a different setting. Re-clamped here rather
+        // than remembered, because this is the only place that knows what the rows are.
+        let focused = lines.as_ref().and_then(|lines| {
+            self.settings_focus
+                .filter(|line| lines.get(*line).is_some_and(|line| line.kind().is_some()))
         });
 
         let input = ChromeInput {
@@ -411,6 +412,7 @@ impl Host {
             settings_open: self.settings_open,
             settings: &panel,
             settings_scroll: self.settings_scroll,
+            settings_focus: focused,
             window_title: APP_NAME,
             size: Size {
                 width: width as f32,
@@ -658,6 +660,15 @@ impl Host {
             self.settings_open = !self.settings_open;
             self.settings_scroll = 0.0;
             self.capturing = None;
+            self.settings_focus = None;
+            self.redraw();
+            return;
+        }
+
+        // The panel's own keys, which it only has while the panel is open and only for
+        // the ones it names. A letter is still a letter for the shell with the panel up,
+        // which is what "it does not steal focus from the prompt" has to mean.
+        if self.settings_open && self.panel_key(&translated) {
             self.redraw();
             return;
         }
@@ -668,6 +679,7 @@ impl Host {
         // be waiting for it.
         if self.settings_open && translated.key == Key::Escape && translated.mods.is_empty() {
             self.settings_open = false;
+            self.settings_focus = None;
             self.capturing = None;
             self.redraw();
             return;
@@ -675,6 +687,74 @@ impl Host {
 
         let commands = self.app.key(&translated);
         self.carry_out(loop_, commands);
+    }
+
+    /// A key aimed at the settings panel, and whether the panel took it.
+    ///
+    /// The panel's focus is entered and left with `Tab`, exactly as focus is traversed
+    /// everywhere else, and `Tab` past the last row hands the keyboard back to the shell
+    /// rather than wrapping. That is what "it never traps focus" has to mean: a panel
+    /// that kept `Tab` until you remembered the chord you opened it with would be a
+    /// panel you can get stuck in.
+    ///
+    /// Only bare `Tab`, the four arrows, `Enter`, `Space` and `Escape` are named here.
+    /// Everything else — every letter, and every chord with a modifier on it — falls
+    /// through to the shell, because the terminal behind the panel is still live and
+    /// typing into it is the reason the panel does not cover it.
+    fn panel_key(&mut self, event: &KeyEvent) -> bool {
+        // A repeat moves the highlight the way holding an arrow key should. A release is
+        // not an event the panel has an opinion about.
+        if event.kind == KeyKind::Release {
+            return false;
+        }
+        let lines = self.app.settings();
+        let rows: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.kind().is_some())
+            .map(|(line, _)| line)
+            .collect();
+        if rows.is_empty() {
+            return false;
+        }
+
+        // Where the focus is, in the list of rows rather than in the list of lines: the
+        // two differ by the section headings, and every move here is along the rows.
+        let here = self
+            .settings_focus
+            .and_then(|line| rows.iter().position(|row| *row == line));
+        let focused = self
+            .settings_focus
+            .and_then(|line| lines.get(line))
+            .and_then(zet_app::Line::id);
+
+        let plain = event.mods.is_empty();
+        match event.key {
+            Key::Tab | Key::Down if plain => self.step_focus(&rows, here, true),
+            Key::Tab if event.mods == Modifiers::SHIFT => self.step_focus(&rows, here, false),
+            Key::Up if plain => self.step_focus(&rows, here, false),
+            // `Escape` while a row is focused puts the keyboard back where it was, and
+            // only a second one closes the panel. Two stages because they are two
+            // different things to want, and the one you want first is the smaller.
+            Key::Escape if plain && here.is_some() => self.settings_focus = None,
+            Key::Left if plain && focused.is_some() => {
+                if let Some(id) = focused {
+                    self.adjust(id, true);
+                }
+            }
+            Key::Right | Key::Enter | Key::Space if plain && focused.is_some() => {
+                if let Some(id) = focused {
+                    self.adjust(id, false);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Move the panel's keyboard focus one row, or off the end of the list.
+    fn step_focus(&mut self, rows: &[usize], here: Option<usize>, forward: bool) {
+        self.settings_focus = next_focus(rows.len(), here, forward).map(|at| rows[at]);
     }
 
     /// Write the configuration back, and say so when it could not be.
@@ -846,6 +926,10 @@ impl Host {
                     .get(line)
                     .and_then(zet_app::Line::id)
                 {
+                    // Clicking a row is also how the keyboard gets there: the pointer and
+                    // the keyboard are two ways to the same highlight, and a panel where
+                    // they were two different states would need two of everything.
+                    self.settings_focus = Some(line);
                     self.adjust(id, part == zet_ui::SettingPart::Less);
                 }
                 true
@@ -1012,6 +1096,45 @@ impl Host {
             renderer.resize(size.width, size.height, scale);
         }
         window.request_redraw();
+    }
+}
+
+/// The settings rows, in the shape the chrome draws them.
+///
+/// The two crates' vocabularies meet here and nowhere else: `zet-app` decides what a row
+/// means and answers with an id, `zet-ui` decides how it looks and is told a control.
+///
+/// A row that is waiting for a key says so rather than going on showing the chord it is
+/// about to lose. Without that the user has no way to tell that the next key they press
+/// is not going to the shell — which, with the panel drawn over a live terminal, is
+/// exactly the mistake worth designing out.
+fn panel_lines(lines: &[zet_app::Line], capturing: Option<Action>) -> Vec<zet_ui::SettingLine<'_>> {
+    lines
+        .iter()
+        .map(|line| {
+            let waiting =
+                capturing.is_some_and(|action| line.id() == Some(zet_app::Id::Binding(action)));
+            zet_ui::SettingLine {
+                text: line.text(),
+                control: line.kind().map(control_of),
+                value: if waiting { PRESS_A_KEY } else { line.value() },
+            }
+        })
+        .collect()
+}
+
+/// Where the panel's keyboard focus goes next.
+///
+/// `None` is a real destination and the one past the last row in either direction:
+/// leaving the panel is how the shell gets its arrow keys back, and a `Tab` that wrapped
+/// would be a `Tab` the terminal never sees again.
+fn next_focus(rows: usize, here: Option<usize>, forward: bool) -> Option<usize> {
+    match (here, forward) {
+        (None, true) => Some(0),
+        (None | Some(0), false) => None,
+        (Some(at), false) => Some(at - 1),
+        (Some(at), true) if at + 1 == rows => None,
+        (Some(at), true) => Some(at + 1),
     }
 }
 
@@ -1283,6 +1406,25 @@ mod tests {
         let doubled = grid_settings(&app, 2.0);
         assert_eq!(plain.family, doubled.family);
         assert_eq!(doubled.size, plain.size * 2.0);
+    }
+
+    #[test]
+    fn the_panel_focus_walks_the_rows_and_then_leaves() {
+        // Every step here is either "the next row" or "out", and out is what keeps the
+        // panel from being somewhere you can get stuck: with the last row focused, one
+        // more `Tab` has to hand the arrow keys back to the shell.
+        assert_eq!(next_focus(3, None, true), Some(0), "in at the top");
+        assert_eq!(next_focus(3, Some(0), true), Some(1));
+        assert_eq!(next_focus(3, Some(1), true), Some(2));
+        assert_eq!(next_focus(3, Some(2), true), None, "past the end is out");
+        assert_eq!(next_focus(3, None, false), None, "backwards from nowhere");
+        assert_eq!(next_focus(3, Some(0), false), None, "backwards past the top");
+        assert_eq!(next_focus(3, Some(2), false), Some(1));
+
+        // One row is the case where "in", "out" and "wrapped" are all the same index.
+        assert_eq!(next_focus(1, None, true), Some(0));
+        assert_eq!(next_focus(1, Some(0), true), None);
+        assert_eq!(next_focus(1, Some(0), false), None);
     }
 
     #[test]

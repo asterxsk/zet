@@ -43,7 +43,7 @@ The signal color appears in the chrome and stops at the grid boundary.
 | `ink` | `#e7e9ec` | Primary chrome text, active tab index |
 | `ink-mid` | `#99a0a8` | Secondary text, hovered tab index |
 | `ink-dim` | `#7b838d` | Inactive tab index, disabled controls |
-| `signal` | `#ffa62b` | The active marker. Indicators and focus rings only |
+| `signal` | `#ffa62b` | The active marker. Indicators only |
 | `signal-dim` | `#8a5a17` | Signal at rest, for hover preview of an indicator |
 | `danger` | `#ff6b5e` | Destructive confirmations, error text |
 | `ok` | `#57d9a3` | Success confirmations |
@@ -298,9 +298,22 @@ Every row writes through to the config file as it changes, and the file keeps it
 comments — `toml_edit` round-trips, so a hand-written note beside a setting survives
 being set from the panel.
 
-Keyboard: `Escape` closes the panel and the chord that opened it toggles it. The panel
-is not reachable with `Tab` and the arrow keys, which is a gap rather than a decision.
-It is the one thing in the panel that is mouse-only, and it is next.
+Keyboard: `Tab` or `Down` enters the panel and moves to the next row, `Shift+Tab` or
+`Up` to the previous one, `Left` and `Right` (or `Enter`, or `Space`) adjust the row the
+keyboard is on, and `Tab` past the last row hands the keyboard back to the shell rather
+than wrapping. `Escape` does the same, and a second `Escape` closes the panel. The chord
+that opened it toggles it.
+
+Focus is drawn as the same hairline in `ink` — the brightest edge the chrome has. `signal`
+is the obvious colour for a focus ring and the wrong one: DESIGN.md gives it a 3px by 40px
+budget and calls it a lamp, which a border around a 118-pixel control would spend several
+times over. Three weights of one hairline, then, and no fourth: the row the keyboard is on
+is `ink`, the one under the pointer is `hairline-strong`, and the rest are `hairline`.
+
+Only those keys are the panel's. Every letter and every chord with a modifier still goes
+to the shell, because the terminal behind the panel is live and typing into it is the
+reason the panel does not cover it. That is what "it does not steal focus from the prompt"
+has to mean.
 
 ## Surfaces the framework gave us
 
@@ -311,8 +324,9 @@ the palette like everything else:
   chrome uses `signal` at 20% alpha.
 - The scrollbar is a 8px `hairline-strong` thumb on `ground`, growing to 10px on
   hover, with no track and no arrows.
-- Focus rings are a 2px `signal` outline offset by 1px, on every focusable control
-  including the tab strip and the grid itself.
+- Focus is a `hairline` in `ink` rather than a `signal` ring. `signal` is the app's one
+  lamp and a ring around a control spends its whole budget several times over; the
+  brightest hairline says "here" without saying "look at me".
 - The find bar is a 32px row pinned above the grid, `surface-raised`, using the same
   hairline language.
 - The window resize cursor, the IME candidate window anchor, and the drag-and-drop
