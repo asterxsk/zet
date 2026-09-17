@@ -115,8 +115,9 @@ Tags are `v`-prefixed. Both `v0.2.0` and `0.2.0` parse, but the workflow creates
 ## Updates
 
 **Not wired up yet.** [`zet-update`](crates/zet-update) implements the whole of it — the version
-identity, the release lookup, the digest check, and the self-replacement — but nothing in the
-binary calls it, so the current build never touches the network on its own.
+identity, the release lookup, the digest check, and the self-replacement — and the binary now
+calls exactly one thing in it: `version_line`, for `zet --version`. The checking, the download,
+and the replacement are all still uncalled, so the current build never touches the network.
 
 When it is wired in, the intent is that zet checks GitHub Releases on launch and tells you when
 there is a newer version, that you choose whether to install it, and that it takes effect the

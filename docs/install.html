@@ -221,8 +221,9 @@ ISCC.exe /DVersion=0.1.0 /O"dist" packaging\zet.iss</code></pre>
       <h2>Updates</h2>
 
       <p>Not wired up. <code>zet-update</code> implements the version identity, the release lookup,
-      the digest check, and the self-replacement, but nothing in the binary calls it, so this build
-      never touches the network on its own. The configuration key for the check exists already, so
+      the digest check, and the self-replacement, and the binary now calls exactly one thing in it
+      — <code>version_line</code>, for <code>zet --version</code>. The checking, the download, and
+      the replacement are all still uncalled, so this build never touches the network. The configuration key for the check exists already, so
       setting it now costs nothing — see
       <a href="configuration.html#update">the update section of Configuration</a>.</p>
     </article>
