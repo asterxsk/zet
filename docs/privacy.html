@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — zet</title>
+<meta name="description" content="What zet sends, what it does not, and what it writes to your disk.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html" aria-current="page">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Project</p>
+      <h1>Privacy</h1>
+      <p class="lede">zet is a local desktop application. It has no user accounts, no server of its
+      own, and no telemetry.</p>
+
+      <table>
+        <caption>Policy</caption>
+        <tbody>
+          <tr><th scope="row">Effective date</th><td class="k">17 September 2026</td></tr>
+          <tr><th scope="row">Applies to</th><td>zet ("the application"), a terminal emulator for Windows distributed from <a href="https://github.com/asterxsk/zet">github.com/asterxsk/zet</a></td></tr>
+        </tbody>
+      </table>
+
+      <h2>Summary</h2>
+
+      <ul>
+        <li>zet does <strong>not</strong> collect, transmit, or store telemetry, analytics, crash
+        reports, or usage data.</li>
+        <li>zet does <strong>not</strong> have accounts, logins, or any server it operates.</li>
+        <li>zet <strong>does</strong> make one kind of outbound request: an update check against the
+        public GitHub Releases API. It can be turned off.</li>
+        <li>Everything your shell prints stays on your machine.</li>
+      </ul>
+
+      <h2>What stays on your machine</h2>
+
+      <p>zet is a terminal. It reads the output of the programs you run inside it, parses that output,
+      and draws it in a window. All of that happens locally, in memory, on your computer. Terminal
+      contents, command history, scrollback, and anything printed by the programs you run are never
+      sent anywhere by zet.</p>
+
+      <p>Some of the programs you run inside zet will themselves use the network — a package manager,
+      a git remote, an agentic coding tool. Those programs have their own privacy practices and their
+      connections are theirs, not zet's. zet does not inspect, log, or forward them.</p>
+
+      <h2>The update check</h2>
+
+      <div class="callout">
+        <span class="callout__label">Not implemented yet</span>
+        <p>This section describes the update check zet is being built to make. The code for it exists,
+        but nothing in the shipped binary calls it, so as of this date zet makes no network requests
+        at all, and the setting below has nothing to turn off. It is published here so that the request
+        is described before it is made rather than after.</p>
+      </div>
+
+      <p><strong>What it is.</strong> On launch, zet asks GitHub whether a newer version has been
+      published. This is the only request zet makes on its own.</p>
+
+      <p><strong>Where it goes.</strong> <code>api.github.com</code>, operated by GitHub, Inc. (a
+      subsidiary of Microsoft Corporation).</p>
+
+      <p><strong>What is sent.</strong> The HTTP request itself necessarily discloses:</p>
+
+      <table>
+        <caption>Sent with the update check</caption>
+        <thead>
+          <tr><th scope="col">Data</th><th scope="col">Why</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Your IP address</td><td>Unavoidable in any TCP connection; GitHub sees it.</td></tr>
+          <tr><td>A <code>User-Agent</code> string identifying zet and its version</td><td>GitHub's API requires one, and it lets the project tell releases apart in aggregate.</td></tr>
+          <tr><td>The <code>Accept</code> header GitHub's API requires</td><td>Protocol requirement.</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>What is not sent.</strong> No identifier for you or your machine is generated or
+      included. zet does not send a device ID, an installation ID, a username, a hostname, a machine
+      GUID, terminal contents, command history, or a list of installed shells. There is no analytics
+      payload.</p>
+
+      <p><strong>What GitHub does with it.</strong> GitHub's handling of that request is governed by
+      the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement">GitHub
+      Privacy Statement</a>. GitHub is an independent controller for this data; the project does not
+      receive it and cannot retrieve it.</p>
+
+      <p><strong>Downloads.</strong> If you accept an update, the release archive is downloaded from
+      <code>github.com</code> / <code>objects.githubusercontent.com</code>. The same disclosure
+      applies.</p>
+
+      <p><strong>Turning it off.</strong> The update check can be disabled in
+      <code>config.toml</code>:</p>
+
+<pre><code>[update]
+check-on-launch = false</code></pre>
+
+      <p>With that set, zet makes no network request at all until you explicitly ask for one.</p>
+
+      <div class="callout callout--note">
+        <span class="callout__label">A manual check has no way in yet</span>
+        <p>The policy describes a manual check as <code>zet --check-update</code>. That option does
+        not exist: the binary accepts <code>-d</code>/<code>--directory</code>, <code>-h</code>/<code>--help</code>,
+        and <code>-V</code>/<code>--version</code>, and refuses any other argument by name. There is
+        no menu item either, because there is no settings panel or menu. The behaviour described
+        above is the intent for when the updater is wired in, not something this build can do.</p>
+      </div>
+
+      <h2>What zet writes to your disk</h2>
+
+      <table>
+        <caption>Paths and what they hold</caption>
+        <thead>
+          <tr><th scope="col">Location</th><th scope="col">Contents</th><th scope="col">Why</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="k">%APPDATA%\zet\config.toml</td><td>Your settings: theme, font, shell profiles, keybindings</td><td>To remember your configuration.</td></tr>
+          <tr><td class="k">%LOCALAPPDATA%\zet\logs\</td><td>Diagnostic logs, if you enable them. Off by default</td><td>To help you diagnose a problem you report.</td></tr>
+          <tr><td class="k">%LOCALAPPDATA%\zet\cache\</td><td>Downloaded update archives before they are applied</td><td>To stage an update.</td></tr>
+        </tbody>
+      </table>
+
+      <p>Only the first row is in use so far, and the current build only reads it: there is no settings
+      panel to write <code>config.toml</code> back yet, and no log or update code wired in. The other
+      two rows are what the finished program will use, listed here so that the directories are known
+      before they appear.</p>
+
+      <p>zet does not read files outside those directories and the ones you point it at — for example
+      a theme file you choose, or a working directory you open.</p>
+
+      <p>The installer writes to a fourth location, <code>%LOCALAPPDATA%\Programs\zet</code>, and it
+      is the same argument: an uninstaller in that directory and one registry key under
+      <code>HKCU</code> so the program appears in Settings → Apps → Installed apps. It never touches
+      <code>config.toml</code>, and uninstalling leaves it alone.</p>
+
+      <h2>Children</h2>
+
+      <p>zet is a developer tool. It is not directed at children and the project does not knowingly
+      collect information from anyone, including children.</p>
+
+      <h2>Your rights</h2>
+
+      <p>Because zet collects no personal data and operates no server, there is no personal data to
+      export, correct, or erase. The only personal data involved anywhere in the update path is held
+      by GitHub, and requests about it go to GitHub under the statement linked above.</p>
+
+      <p>If you believe zet is handling data in a way this policy does not describe, open an issue at
+      <a href="https://github.com/asterxsk/zet/issues">github.com/asterxsk/zet/issues</a> or email the
+      address below.</p>
+
+      <h2>Changes to this policy</h2>
+
+      <p>If zet ever adds anything that transmits data — crash reporting, a package index, an account
+      — this policy will be updated before that version ships, and the change will be called out in
+      the <a href="changelog.html">changelog</a>. The effective date above is the date of the last
+      change.</p>
+
+      <h2>Contact</h2>
+
+      <p><strong>asterxsk</strong> —
+      <a href="mailto:112053934+asterxsk@users.noreply.github.com">112053934+asterxsk@users.noreply.github.com</a></p>
+
+      <p>For security vulnerabilities, use the process in <a href="security.html">Security</a> instead
+      of a public issue.</p>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

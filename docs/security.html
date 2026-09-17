@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Security — zet</title>
+<meta name="description" content="How to report a vulnerability in zet, what is in scope, and what release integrity means here.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html" aria-current="page">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Project</p>
+      <h1>Security</h1>
+      <p class="lede">zet parses untrusted bytes, runs processes, and replaces its own executable. A
+      problem in any of those is worth reporting.</p>
+
+      <h2>Reporting a vulnerability</h2>
+
+      <p>Report privately through GitHub's
+      <a href="https://github.com/asterxsk/zet/security/advisories/new">private vulnerability
+      reporting</a> on the repository. Do not open a public issue for a security problem.</p>
+
+      <p>If you cannot use that form, email
+      <a href="mailto:112053934+asterxsk@users.noreply.github.com">112053934+asterxsk@users.noreply.github.com</a>.</p>
+
+      <p>Please include the zet version (<code>zet --version</code>), your Windows build, what you
+      did, and what happened. A proof of concept is welcome; a working exploit is not required.</p>
+
+      <p><strong>What to expect.</strong> An acknowledgement within 7 days. If the report is valid, a
+      fix and a GitHub Security Advisory, with credit unless you ask otherwise. If it is not, an
+      explanation of why. This is a spare-time project, so those are targets rather than
+      guarantees.</p>
+
+      <h2>Supported versions</h2>
+
+      <p>Only the latest release receives fixes. zet is pre-1.0 and the terminal is not yet usable as
+      a daily driver, so there are no maintenance branches. At the time of writing there is no
+      release at all.</p>
+
+      <h2>What counts as a security issue here</h2>
+
+      <p>In scope:</p>
+
+      <table>
+        <caption>In scope</caption>
+        <thead>
+          <tr><th scope="col">Area</th><th scope="col">What would count</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Escape-sequence parsing</td><td>Memory unsafety, panics reachable from terminal output, or arbitrary code execution via a crafted escape sequence. This is the highest-value target: a terminal parses bytes from every program you run.</td></tr>
+          <tr><td>The update path</td><td>Anything that lets a party other than the release process cause zet to download or run a binary — a checksum bypass, a redirect to an attacker-controlled host, a path traversal in the extraction step, or a way to make a forged release look signed.</td></tr>
+          <tr><td>Command execution</td><td>Anything that turns terminal output into executed code without the user asking for it — a hyperlink or OSC handler that runs a command, a paste that escapes a bracketed-paste guard, a title string that reaches a shell.</td></tr>
+          <tr><td>Sandbox and privilege boundaries</td><td>A child process escaping the job object that is supposed to die with the session, or zet itself doing something it should not have the rights for.</td></tr>
+          <tr><td>Denial of service</td><td>A remote party making zet hang or crash by printing bytes. Slowness alone is not a security issue.</td></tr>
+        </tbody>
+      </table>
+
+      <p>Out of scope:</p>
+
+      <ul>
+        <li>Anything requiring an attacker who already runs code as you. A terminal deliberately runs
+        programs you tell it to run; that is the feature.</li>
+        <li>The behaviour of programs you run inside zet. Report those to their authors.</li>
+        <li>Missing hardening with no demonstrated impact.</li>
+        <li>Anything in a dependency that upstream has not yet fixed — report it upstream, and tell
+        the project so it can pin or patch.</li>
+      </ul>
+
+      <h2>Release integrity</h2>
+
+      <p>Releases are built by GitHub Actions from a signed tag in the repository and published with
+      a <code>SHA256SUMS</code> file alongside the artifacts. The updater refuses an archive whose
+      checksum does not match. The build pipeline is in
+      <code>.github/workflows/release.yml</code> and is readable in full.</p>
+
+      <p>Two artifacts are published from a tag: the bare
+      <code>zet-&lt;version&gt;-x86_64-pc-windows-msvc.exe</code>, which is what the updater replaces
+      in place, and <code>zet-&lt;version&gt;-setup.exe</code>, the per-user installer. Each gets its
+      own line in <code>SHA256SUMS</code>.</p>
+
+      <div class="callout callout--danger">
+        <span class="callout__label">Archives are not code-signed</span>
+        <p>Windows SmartScreen and some corporate endpoint tools will warn on first run, because zet
+        ships no Authenticode signature — neither the binary nor the installer. That is a known
+        limitation, not a compromise. A checksum proves the download matches what the release
+        published; it does not prove who published it. Tag protection and a GitHub account with
+        two-factor authentication are what stand in for signature verification today.</p>
+      </div>
+
+      <p>The same claim is stated in the <a href="install.html">install notes</a> for anyone
+      downloading the installer, because the first run is where the warning appears.</p>
+
+      <h2>What zet does not do</h2>
+
+      <ul>
+        <li>It does not sandbox the programs you run. A child process is your process, with your
+        rights, and the job object is there to reap it at teardown rather than to contain it.</li>
+        <li>It does not verify who published a release, because nothing is signed.</li>
+        <li>It does not check for updates in the current build at all, so there is no network path to
+        attack yet. See <a href="privacy.html">Privacy</a> for what the check will do when it is
+        wired in.</li>
+      </ul>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design — zet</title>
+<meta name="description" content="Instrument: zet's palette, type, and the rules that keep them honest.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html" aria-current="page">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Reference</p>
+      <h1>Design</h1>
+      <p class="lede">zet looks like a precision instrument, not like a terminal. The reference
+      points are measuring equipment and studio hardware.</p>
+
+      <p>An oscilloscope, a VU meter, a rack tuner, a laboratory power supply. What those objects
+      share is that every mark on them carries information, nothing is decoration, and the numbers
+      are the interface. They are dense without being cramped, quiet without being dull, and they use
+      exactly one signal colour to say "this one is active."</p>
+
+      <p>That last property is why this world fits zet. A terminal multiplexer's whole job is to say
+      which of several sessions you are in. An instrument answers that question with a single lamp,
+      not with a highlighted card.</p>
+
+      <h2>Two planes, never mixed</h2>
+
+      <p>The window has two planes and they never borrow from each other.</p>
+
+      <ul>
+        <li><strong>The chrome plane</strong> is zet's: the titlebar, the tab strip, the settings
+        panel, the scrollbar, the find bar, every focus ring. It uses the zet palette below,
+        including the signal colour.</li>
+        <li><strong>The grid plane</strong> is the program's: every character cell, its foreground,
+        its background, the selection, the cursor. It uses only the active theme's ANSI palette. zet
+        never tints a cell to match the app.</li>
+      </ul>
+
+      <p>This rule is what keeps zet from looking like an app that painted over your terminal. The
+      signal colour appears in the chrome and stops at the grid boundary. It is enforced by the
+      types: <code>Theme</code> cannot return a chrome colour, and <code>Palette</code> cannot
+      return a theme colour.</p>
+
+      <h2>Colour</h2>
+
+      <p>The chrome palette, exactly as it is defined in
+      <code>crates/zet-config/src/palette.rs</code>.</p>
+
+      <table>
+        <caption>Chrome palette</caption>
+        <thead>
+          <tr><th scope="col"><span class="visually-hidden">Swatch</span></th><th scope="col">Token</th><th scope="col">Value</th><th scope="col">Use</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="swatch" style="background:#0a0b0d"></span></td><td class="k">ground</td><td class="k">#0a0b0d</td><td>Window background, behind everything</td></tr>
+          <tr><td><span class="swatch" style="background:#0f1114"></span></td><td class="k">surface</td><td class="k">#0f1114</td><td>Titlebar and tab strip</td></tr>
+          <tr><td><span class="swatch" style="background:#15181c"></span></td><td class="k">surface-raised</td><td class="k">#15181c</td><td>Settings panel, popovers, menus</td></tr>
+          <tr><td><span class="swatch" style="background:#23272d"></span></td><td class="k">hairline</td><td class="k">#23272d</td><td>Every 1px division in the chrome</td></tr>
+          <tr><td><span class="swatch" style="background:#333941"></span></td><td class="k">hairline-strong</td><td class="k">#333941</td><td>Focused input borders, drag targets</td></tr>
+          <tr><td><span class="swatch" style="background:#e7e9ec"></span></td><td class="k">ink</td><td class="k">#e7e9ec</td><td>Primary chrome text, active tab index</td></tr>
+          <tr><td><span class="swatch" style="background:#99a0a8"></span></td><td class="k">ink-mid</td><td class="k">#99a0a8</td><td>Secondary text, hovered tab index</td></tr>
+          <tr><td><span class="swatch" style="background:#7b838d"></span></td><td class="k">ink-dim</td><td class="k">#7b838d</td><td>Inactive tab index, disabled controls</td></tr>
+          <tr><td><span class="swatch" style="background:#ffa62b"></span></td><td class="k">signal</td><td class="k">#ffa62b</td><td>The active marker. Indicators and focus rings only</td></tr>
+          <tr><td><span class="swatch" style="background:#8a5a17"></span></td><td class="k">signal-dim</td><td class="k">#8a5a17</td><td>Signal at rest, for hover preview of an indicator</td></tr>
+          <tr><td><span class="swatch" style="background:#ff6b5e"></span></td><td class="k">danger</td><td class="k">#ff6b5e</td><td>Destructive confirmations, error text</td></tr>
+          <tr><td><span class="swatch" style="background:#57d9a3"></span></td><td class="k">ok</td><td class="k">#57d9a3</td><td>Success confirmations</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Rules that keep the palette honest</h3>
+
+      <ul>
+        <li><code>signal</code> never fills an area larger than 3px by 40px. It is a lamp, not a
+        colour. It marks the active tab, the focus ring, and an inline indicator — never a button
+        background, never a heading.</li>
+        <li><code>hairline</code> is the only depth mechanism in the chrome. No shadows, no
+        gradients, no glass. Elevation is expressed by a line and by a one-step surface change.</li>
+        <li>Text on <code>surface-raised</code> is still <code>ink</code> or <code>ink-mid</code>,
+        never a tinted grey.</li>
+        <li>The settings panel shows every value numerically, so the panel is legible as data even
+        when the visual preview is off screen.</li>
+      </ul>
+
+      <h3>Contrast floors</h3>
+
+      <p>These are asserted in tests, and the measured column is the WCAG relative-luminance ratio
+      for the values above.</p>
+
+      <table>
+        <caption>Contrast floors, and what the shipped palette measures</caption>
+        <thead>
+          <tr><th scope="col">Pair</th><th scope="col">Minimum</th><th scope="col">Measured</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>ink</code> on <code>ground</code></td><td class="num">12:1</td><td class="num">16.19:1</td></tr>
+          <tr><td><code>ink-mid</code> on <code>ground</code></td><td class="num">6:1</td><td class="num">7.45:1</td></tr>
+          <tr><td><code>ink-dim</code> on <code>surface</code></td><td class="num">4.5:1</td><td class="num">4.93:1</td></tr>
+          <tr><td><code>signal</code> on <code>surface</code></td><td class="num">4.5:1</td><td class="num">9.67:1</td></tr>
+          <tr><td>Theme ANSI colours on theme ground</td><td class="num">4.5:1</td><td>zet's own themes only</td></tr>
+        </tbody>
+      </table>
+
+      <p>The palette's own tests also assert <code>danger</code> and <code>ok</code> at 4.5:1 against
+      <code>surface-raised</code>, where they measure 6.37:1 and 10.06:1.</p>
+
+      <p>The floor has already changed one value. <code>ink-dim</code> was first drafted as
+      <code>#5a626b</code>, which measures 3.06:1 on <code>surface</code> and fails the row above.
+      The floor is the requirement and the hex was a guess, so the hex moved to
+      <code>#7b838d</code> — the same grey, lighter. A palette edit that dims the chrome text should
+      fail a test rather than a review.</p>
+
+      <p>Imported palettes ship unmodified so they look like themselves, and the theme picker labels
+      them "as published" rather than implying they were checked. Two theme colours are exempt from
+      the ANSI floor, and the exemption is deliberate: indices 0 and 8 are a palette's "black" and
+      "bright black", which programs use as backgrounds. Requiring them to be legible against a
+      near-black ground would force them to be light, at which point they stop being black and the
+      programs that rely on that stop looking right. The other fourteen are colours text is printed
+      in, and they all clear 4.5:1.</p>
+
+      <h2>Type</h2>
+
+      <p>Two faces, and they do not swap roles.</p>
+
+      <ul>
+        <li><strong>Chrome: IBM Plex Sans.</strong> Open source, self-hosted, and drawn with
+        engineering proportions rather than marketing ones. Two weights ship, 400 and 500. Nothing in
+        the chrome is bold; 500 is the ceiling and it marks only the active tab and the settings
+        section headings.</li>
+        <li><strong>Grid: Cascadia Mono by default</strong>, discovered from the system with Consolas
+        as the fallback. The terminal font is a user setting with a curated list plus any installed
+        monospace face.</li>
+      </ul>
+
+      <p>Numbers in the chrome use tabular figures. Tab indices, font sizes, opacity percentages,
+      scroll positions, and row counts all align on the same column width, which is the single detail
+      that makes the chrome read as instrumentation rather than as an app.</p>
+
+      <table>
+        <caption>Scale at 100% DPI</caption>
+        <thead>
+          <tr><th scope="col">Role</th><th scope="col">Size</th><th scope="col">Weight</th><th scope="col">Tracking</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Titlebar app name</td><td class="num">12px</td><td class="num">500</td><td class="k">+0.02em</td></tr>
+          <tr><td>Tab index</td><td class="num">13px</td><td>500 active / 400 inactive</td><td class="k">0</td></tr>
+          <tr><td>Settings section heading</td><td class="num">12px</td><td>500, uppercase</td><td class="k">+0.08em</td></tr>
+          <tr><td>Settings label</td><td class="num">13px</td><td class="num">400</td><td class="k">0</td></tr>
+          <tr><td>Settings value</td><td class="num">13px</td><td>400, tabular</td><td class="k">0</td></tr>
+          <tr><td>Body text</td><td class="num">13px</td><td class="num">400</td><td class="k">0</td></tr>
+          <tr><td>Hint and help</td><td class="num">12px</td><td class="num">400</td><td class="k">0</td></tr>
+        </tbody>
+      </table>
+
+      <p>The chrome does not scale with the terminal font size. Text scaling is a separate setting
+      and follows the Windows accessibility text size value by default.</p>
+
+      <div class="callout callout--note">
+        <span class="callout__label">Known gap</span>
+        <p>The tabular-figures rule is specified here and not yet met in the code.
+        <code>zet-ui</code> records the reason: the font layer has no way to ask for an OpenType
+        feature, so the chrome's numbers are drawn in Plex Sans's default proportional figures.
+        Spacing digits by hand would be a lie about the font's own metrics, so it is left and
+        written down instead. The rule applies to everything the chrome draws, not to this page.</p>
+      </div>
+
+      <h2>The tab strip</h2>
+
+      <p>A tab is a number, not a label.</p>
+
+<pre><code> horizontal, one row shared with the titlebar
++---------------------------------------------------------------+
+| zet   #1   #2   #3        (drag region)        _   []   x     |
+|       ~~                                                      |
++---------------------------------------------------------------+</code></pre>
+
+      <ul>
+        <li>The index renders as <code>#</code> at 70% of the number's size, then the number. The
+        <code>#</code> is part of the mark, not a prefix that disappears. It is what makes the strip
+        read as a set of numbered channels.</li>
+        <li>Numbering is creation order, never renumbered on close. Close #2 of three and the
+        remaining tabs are still #1 and #3. A number identifies a session, and shuffling numbers
+        under the user is worse than a gap.</li>
+        <li>Single digit up to #9, then #10 and beyond. Tab width grows to fit.</li>
+        <li>Active tab: a 2px <code>signal</code> bar on the bottom edge plus <code>ink</code> at
+        weight 500.</li>
+        <li>Inactive tab: <code>ink-dim</code>, weight 400, no bar, no background.</li>
+        <li>Hover: the index moves to <code>ink-mid</code>. The indicator bar previews at
+        <code>signal-dim</code>. No background fill, ever. Filling a hovered tab is the single most
+        common way a tab strip starts looking like everyone else's.</li>
+        <li>New tab: a <code>+</code> at the end of the run, the same footprint as a tab,
+        <code>ink-dim</code>.</li>
+      </ul>
+
+<pre><code> vertical, a rail on the left
++------+--------------------------------------------------------+
+| zet  |                                    _   []   x         |
++------+--------------------------------------------------------+
+| #1 | |                                                        |
+| #2   |   PS D:\Apps\projects\zet&gt; cargo build                 |
+| #3   |      Compiling zet-vt v0.1.0                           |
+|      |       Finished dev in 0.34s                            |
+|  +   |                                                        |
++------+--------------------------------------------------------+</code></pre>
+
+      <ul>
+        <li>Rail width 48px, cells 36px tall, index centred.</li>
+        <li>The divider between the rail and the grid is a <code>hairline</code>.</li>
+        <li>The active tab carries the same 2px <code>signal</code> bar, moved to the left edge.
+        Same language, rotated.</li>
+        <li>The rail has no scrollbar. Overflowing tabs compress the cell height to a 24px floor,
+        then the rail scrolls under the wheel.</li>
+      </ul>
+
+      <h3>Zero tabs</h3>
+
+      <p>When no terminal is open the strip does not collapse to a thin line and does not show an
+      empty state message. It is simply absent. The window is a titlebar, a hairline, and an empty
+      grid holding one centred line:</p>
+
+<pre><code>  No terminals.  Ctrl+T for PowerShell 7,  Ctrl+Shift+T to choose a profile.</code></pre>
+
+      <p>The whole row that held tabs is gone. The window is 40px shorter. It should feel like the
+      app got lighter, not like something is missing.</p>
+
+      <div class="callout callout--note">
+        <span class="callout__label">The line above does not match the keymap</span>
+        <p>This is the design document's text, reproduced as it stands. The shipped default binds
+        <code>new-tab</code> to <code>Ctrl+Shift+T</code>; nothing is bound to <code>Ctrl+T</code>.
+        See <a href="keybindings.html">Keybindings</a> for the bindings that exist.</p>
+      </div>
+
+      <h2>Cursor</h2>
+
+      <p>The cursor is the one element that belongs to both planes, so it follows the theme's palette
+      and never the chrome's.</p>
+
+      <ul>
+        <li>Default: solid block, drawn in the theme foreground with the cell's character inverted to
+        the theme background.</li>
+        <li>Options: block, bar, underline, hollow block. Thickness is adjustable to 1, 2, or 3px for
+        bar and underline, which is the accessibility lever for low vision.</li>
+        <li>Blink: 530ms on, 530ms off, hard transitions, no fade. Blinking curses if you can see the
+        in-between. Off is a first-class setting and is the default when reduce-motion is on.</li>
+        <li>Unfocused window: hollow block outline, no blink. Never invisible.</li>
+      </ul>
+
+      <h2>Window chrome</h2>
+
+      <p>One 40px row holds the app name, the tabs, the drag region, and the caption buttons.
+      Stacking a titlebar above a tab strip wastes 36px of vertical space to say nothing, and this is
+      the change that makes zet feel denser than Windows Terminal.</p>
+
+      <ul>
+        <li>Caption buttons keep Windows' own metrics: 46px wide, 40px tall, full-height right edge,
+        close turning <code>danger</code> on hover. Users hit these hundreds of times a day and
+        muscle memory is not ours to redesign.</li>
+        <li>The drag region is any horizontal gap between the last tab and the caption buttons.
+        Double-click maximizes.</li>
+        <li>Maximized: the row loses its bottom hairline and the window loses its rounded corners,
+        matching how Windows handles a maximized frame.</li>
+        <li>The app name is hidden when the tab strip needs the space. Tabs outrank branding.</li>
+      </ul>
+
+      <h2>Motion</h2>
+
+      <p>Exactly one authored moment. <strong>The active indicator travels.</strong> When the active
+      tab changes, the 2px bar moves from the old tab to the new one over 140ms on an exponential
+      ease-out curve, and the two indices cross-fade their ink weight over the same duration. The
+      strip itself does not move, resize, or reflow. One line travels; nothing else reacts.</p>
+
+      <p>Everything else is instant.</p>
+
+      <ul>
+        <li>Theme changes apply in one frame with no crossfade. A crossfade would show an intermediate
+        theme, which is a worse lie than a hard cut.</li>
+        <li>The settings panel slides in over 180ms. That is a spatial change, not decoration, and it
+        needs the duration to stay legible.</li>
+        <li>Tab open and close: the new tab appears already at full size. No scale-in, no slide. A tab
+        that animates into existence delays input by exactly as long as the animation, which in a
+        terminal is a real cost.</li>
+        <li>Reduce motion, read live from the system: the indicator jumps, the panel appears
+        instantly, cursor blink stops. Everything still works, nothing moves.</li>
+      </ul>
+
+      <p>The bar travels because that motion carries the answer to "where am I now." No other
+      transition in the app is load-bearing, so no other transition exists.</p>
+
+      <h2>Settings</h2>
+
+      <p>A 380px panel anchored to the right edge, on <code>surface-raised</code>, separated from the
+      terminal by a <code>hairline</code>. Not a modal. It does not block the terminal, does not dim
+      it, and does not steal focus from the prompt.</p>
+
+      <p>The terminal stays visible behind it and updates live as you change things. Theme, font,
+      size, opacity, and background all apply to the real terminal the moment they change, so the
+      preview is not a preview. This is the reason the panel exists at all rather than a config file
+      alone.</p>
+
+      <p>Sections, in order: Appearance, Tabs, Terminal, Keys. Each is a heading at 12px uppercase
+      with a <code>hairline</code> under it, then rows.</p>
+
+      <p>Row anatomy: label on the left, control on the right, current value in tabular figures.
+      Controls are segmented buttons for enums, a hairline-bordered stepper plus a numeric readout
+      for sizes, a slider with a numeric readout for opacity, and a swatch grid for colours. Every
+      control reports its value as a number, so the panel can be read as a spec sheet.</p>
+
+      <p>Keyboard: the panel is fully reachable with Tab, arrow keys adjust values, Escape closes. It
+      never traps focus.</p>
+
+      <div class="callout callout--note">
+        <span class="callout__label">The panel is not built</span>
+        <p><code>zet-ui</code> draws the panel's skeleton — the four headings and their rows, each row
+        a label and a control-shaped rectangle — and that is all a layout can honestly draw until it
+        is handed the configuration's values. Nothing opens it: the <code>settings</code> binding is
+        a no-op, and there is no code that writes <code>config.toml</code> back.</p>
+      </div>
+
+      <h2>Surfaces the framework gave us</h2>
+
+      <p>These ship with defaults that belong to no design system, and they get themed from the
+      palette like everything else:</p>
+
+      <ul>
+        <li>Text selection in the grid uses the theme's selection colour, and selection in the chrome
+        uses <code>signal</code> at 20% alpha.</li>
+        <li>The scrollbar is an 8px <code>hairline-strong</code> thumb on <code>ground</code>,
+        growing to 10px on hover, with no track and no arrows.</li>
+        <li>Focus rings are a 2px <code>signal</code> outline offset by 1px, on every focusable
+        control including the tab strip and the grid itself.</li>
+        <li>The find bar is a 32px row pinned above the grid, <code>surface-raised</code>, using the
+        same hairline language.</li>
+        <li>The window resize cursor, the IME candidate window anchor, and the drag-and-drop overlay
+        all follow the same palette.</li>
+      </ul>
+
+      <h2>Themes</h2>
+
+      <p>Eight ship. Three are zet's own and are held to the 4.5:1 ANSI floor. Five are imported and
+      ship exactly as published.</p>
+
+      <table>
+        <caption>Shipped themes</caption>
+        <thead>
+          <tr><th scope="col"><span class="visually-hidden">Swatch</span></th><th scope="col">Theme</th><th scope="col">Ground</th><th scope="col">Note</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="swatch" style="background:#0a0b0d"></span></td><td>zet dark</td><td class="k">#0a0b0d</td><td>Default. Graphite, amber signal, neutral ANSI.</td></tr>
+          <tr><td><span class="swatch" style="background:#faf9f7"></span></td><td>zet light</td><td class="k">#faf9f7</td><td>Warm paper ground, ink at <code>#14161a</code>, signal darkened to <code>#a35f00</code>.</td></tr>
+          <tr><td><span class="swatch" style="background:#000000"></span></td><td>zet contrast</td><td class="k">#000000</td><td>Pure black, pure white ink.</td></tr>
+          <tr><td><span class="swatch" style="background:#2e3440"></span></td><td>Nord</td><td>as published</td><td>Imported.</td></tr>
+          <tr><td><span class="swatch" style="background:#282828"></span></td><td>Gruvbox dark</td><td>as published</td><td>Imported.</td></tr>
+          <tr><td><span class="swatch" style="background:#1a1b26"></span></td><td>Tokyo Night</td><td>as published</td><td>Imported.</td></tr>
+          <tr><td><span class="swatch" style="background:#1e1e2e"></span></td><td>Catppuccin Mocha</td><td>as published</td><td>Imported.</td></tr>
+          <tr><td><span class="swatch" style="background:#fdf6e3"></span></td><td>Solarized Light</td><td>as published</td><td>Imported.</td></tr>
+        </tbody>
+      </table>
+
+      <p>High contrast mode is not a theme. When Windows reports forced colours, zet switches to
+      <code>zet contrast</code> and overrides the chrome palette to pure black, pure white ink, and
+      the system highlight colour, ignoring your theme until forced colours turn off. Themes are the
+      user's choice; forced colours is not.</p>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

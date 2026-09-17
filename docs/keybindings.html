@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keybindings — zet</title>
+<meta name="description" content="The eighteen default bindings in zet, and the chord syntax behind them.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html" aria-current="page">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Using</p>
+      <h1>Keybindings</h1>
+      <p class="lede">Eighteen actions are bound by default. A binding is a chord — modifiers and a
+      key — and it lives in the <code>[keys]</code> table of <code>config.toml</code>.</p>
+
+      <h2>The default bindings</h2>
+
+      <table>
+        <caption>Action, default chord, and what it does</caption>
+        <thead>
+          <tr><th scope="col">Action</th><th scope="col">Default</th><th scope="col">What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="k">new-tab</td><td class="k">Ctrl+Shift+T</td><td>Opens a tab at the current grid size.</td></tr>
+          <tr><td class="k">close-tab</td><td class="k">Ctrl+Shift+W</td><td>Closes the active tab. Closing the last one quits.</td></tr>
+          <tr><td class="k">next-tab</td><td class="k">Ctrl+Tab</td><td>Activates the next tab by number.</td></tr>
+          <tr><td class="k">previous-tab</td><td class="k">Ctrl+Shift+Tab</td><td>Activates the previous tab by number.</td></tr>
+          <tr><td class="k">new-window</td><td class="k">Ctrl+Shift+N</td><td>Starts a second process, rather than a second window in the same process. Tabs belong to a window, so two windows would otherwise share one tab list.</td></tr>
+          <tr><td class="k">copy</td><td class="k">Ctrl+Shift+C</td><td>Copies the selection to the clipboard. Does nothing when there is no selection.</td></tr>
+          <tr><td class="k">paste</td><td class="k">Ctrl+Shift+V</td><td>Writes the clipboard to the active terminal, bracketed when the program asked for bracketed paste.</td></tr>
+          <tr><td class="k">find</td><td class="k">Ctrl+Shift+F</td><td>Bound, and does nothing yet. The find bar exists as a layout; the binding is a no-op until it is wired.</td></tr>
+          <tr><td class="k">settings</td><td class="k">Ctrl+Shift+Comma</td><td>Bound, and does nothing yet, for the same reason. There is no settings panel.</td></tr>
+          <tr><td class="k">toggle-tab-position</td><td class="k">Ctrl+Shift+P</td><td>Flips the tab strip between the top row and the left rail. This is the one action that changes the configuration in memory.</td></tr>
+          <tr><td class="k">scroll-page-up</td><td class="k">Shift+PageUp</td><td>Scrolls back one page.</td></tr>
+          <tr><td class="k">scroll-page-down</td><td class="k">Shift+PageDown</td><td>Scrolls forward one page.</td></tr>
+          <tr><td class="k">scroll-to-top</td><td class="k">Ctrl+Shift+Home</td><td>Scrolls to the oldest line.</td></tr>
+          <tr><td class="k">scroll-to-bottom</td><td class="k">Ctrl+Shift+End</td><td>Returns to the live grid.</td></tr>
+          <tr><td class="k">font-larger</td><td class="k">Ctrl+Plus</td><td>One point larger, capped at 72.</td></tr>
+          <tr><td class="k">font-smaller</td><td class="k">Ctrl+Minus</td><td>One point smaller, floored at 4.</td></tr>
+          <tr><td class="k">font-reset</td><td class="k">Ctrl+0</td><td>Back to the configured size.</td></tr>
+          <tr><td class="k">quit</td><td class="k">Alt+F4</td><td>Exits. This is Windows' own close gesture for a window, and it is not ours to move.</td></tr>
+        </tbody>
+      </table>
+
+      <p>The eighteen names in that table are exactly the actions zet knows. A <code>[keys]</code>
+      entry naming anything else is a diagnostic, not a silent no-op.</p>
+
+      <h2>Writing a chord</h2>
+
+      <ul>
+        <li>Modifiers are <code>Ctrl</code>, <code>Shift</code>, <code>Alt</code>, and
+        <code>Super</code>, in any order and any case, joined to each other and to the key by
+        <code>+</code>. The key comes last.</li>
+        <li><code>Ctrl+Shift+T</code>, <code>ctrl+shift+t</code>, and <code>Shift+Ctrl+T</code> are
+        the same chord as far as the modifiers go.</li>
+        <li><strong>Case does not imply Shift.</strong> <code>Shift</code> is written out. A chord is
+        compared exactly, including the case of a character, so <code>Ctrl+Shift+T</code> names a
+        capital <code>T</code>. A binding written with the wrong case never fires, which is a better
+        failure than one that fires on a keystroke you did not describe.</li>
+        <li>The <code>+</code> key itself is written <code>Ctrl++</code>. Everything before the last
+        token that is not a modifier is taken as the key, so splitting on every <code>+</code>
+        would break it.</li>
+        <li>Function keys are <code>F1</code> through <code>F24</code>. <code>F0</code> and
+        <code>F25</code> are not keys.</li>
+        <li>A misspelled modifier is reported as an unknown key, because at that position the two
+        are the same mistake: <code>Foo+T</code> and <code>Ctrl+NotAKey</code> are both a typo
+        somewhere.</li>
+      </ul>
+
+      <h3>Named keys</h3>
+
+      <p>A single character names itself. Everything else uses one of these names, and the list is
+      matched without regard to case.</p>
+
+      <table>
+        <caption>Key names accepted in a chord</caption>
+        <thead>
+          <tr><th scope="col">Group</th><th scope="col">Names</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Characters</td><td class="k">a–z, A–Z, 0–9, and any single character, including @ and +</td></tr>
+          <tr><td>Editing</td><td class="k">Enter, Tab, Backspace, Escape, Space, Delete, Insert</td></tr>
+          <tr><td>Navigation</td><td class="k">Home, End, PageUp, PageDown, Up, Down, Left, Right</td></tr>
+          <tr><td>Function</td><td class="k">F1 … F24</td></tr>
+          <tr><td>Lock and system</td><td class="k">CapsLock, NumLock, ScrollLock, PrintScreen, Pause, Menu</td></tr>
+          <tr><td>Punctuation</td><td class="k">Plus, Minus, Comma, Period, Slash, Semicolon, Quote, Backquote, Backslash, BracketLeft, BracketRight, Equal</td></tr>
+        </tbody>
+      </table>
+
+      <h2>Rebinding</h2>
+
+      <p>The action name is the key and the chord is the value. Rebinding an action replaces its
+      default; you do not have to repeat the bindings you are keeping.</p>
+
+<pre><code>[keys]
+new-tab = "Ctrl+T"
+close-tab = "Ctrl+W"
+quit = "Ctrl+Shift+Q"</code></pre>
+
+      <p>The full default <code>[keys]</code> table is on
+      <a href="configuration.html">Configuration</a>, and it is a complete list: a key you omit
+      keeps the default above rather than becoming unbound.</p>
+
+      <h2>What a chord is not</h2>
+
+      <ul>
+        <li>There are no sequences and no prefix keys. A chord is one key with modifiers, and a
+        binding either matches a keystroke or it does not.</li>
+        <li>The kitty keyboard protocol is not implemented, so a program that negotiates for it sees
+        the same shortcut behaviour as one that does not.</li>
+        <li>The clipboard is plain <code>CF_UNICODETEXT</code> in both directions. There is no rich
+        text and no image paste.</li>
+      </ul>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

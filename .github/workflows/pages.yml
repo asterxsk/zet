@@ -1,0 +1,44 @@
+name: Pages
+
+# The documentation site is hand-written HTML in `docs/` with one stylesheet and two
+# fonts. There is no build step, so publishing it is a copy: nothing is compiled, nothing
+# is cached, and the artifact is the directory exactly as it is committed.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# `pages: write` and `id-token: write` are what `actions/deploy-pages` needs. Everything
+# else here needs nothing.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and a queued run is not cancelled. A push while a deploy is
+# going supersedes nothing: a half-published site is worse than a slightly older one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: publish docs/
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/configure-pages@v5
+
+      # The whole directory, including `assets/`. `404.html` is picked up by GitHub Pages
+      # automatically for paths that do not exist, which is the one file here that is not
+      # reachable by a link.
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

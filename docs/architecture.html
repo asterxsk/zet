@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture — zet</title>
+<meta name="description" content="How zet's eleven crates are layered, and what each one is allowed to know.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html" aria-current="page">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Reference</p>
+      <h1>Architecture</h1>
+      <p class="lede">The workspace is layered. Each crate is built on the ones above it in the list,
+      and the dependency arrow never points back down.</p>
+
+      <p>The in-tree dependencies are declared in <code>Cargo.toml</code> in that order, so the
+      layering is readable without opening a single manifest.</p>
+
+      <h2>The layers</h2>
+
+      <table>
+        <caption>Crate, and what it owns</caption>
+        <thead>
+          <tr><th scope="col">Crate</th><th scope="col">What it owns</th><th scope="col">Knows nothing about</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="k">zet-vt</td><td>The terminal engine: parser, grid, scrollback, reflow, damage</td><td>Processes, rendering, configuration</td></tr>
+          <tr><td class="k">zet-pty</td><td>ConPTY sessions and shell profile discovery</td><td>Terminals, grids, rendering</td></tr>
+          <tr><td class="k">zet-config</td><td>TOML configuration, themes, the ANSI palette, hot reload</td><td>The window, the grid, the renderer</td></tr>
+          <tr><td class="k">zet-font</td><td>Font loading, rasterisation, the face chain and its fallback order</td><td>Cells, layout, the GPU</td></tr>
+          <tr><td class="k">zet-input</td><td>Key and mouse encoding, chords and keybindings</td><td><code>winit</code>, the window, the pty</td></tr>
+          <tr><td class="k">zet-session</td><td>A session: a pty and a terminal with a read loop between them</td><td>Windows, rendering, configuration</td></tr>
+          <tr><td class="k">zet-render</td><td>The wgpu renderer: the glyph atlas, the grid and chrome pipelines</td><td>The layout, which is <code>zet-ui</code>'s; the state, which is <code>zet-app</code>'s</td></tr>
+          <tr><td class="k">zet-ui</td><td>The chrome's layout, and the embedded IBM Plex Sans it is drawn in</td><td>The grid, a clock, a theme — it cannot name one</td></tr>
+          <tr><td class="k">zet-app</td><td>The application state machine: tabs, commands, themes, selection</td><td>A window, a GPU, a clipboard, an event loop</td></tr>
+          <tr><td class="k">zet</td><td>The binary: the window, the event loop, and the frame host</td><td>—</td></tr>
+          <tr><td class="k">zet-update</td><td>Version identity, update checks, self-replacement</td><td>Everything else; it stands alone</td></tr>
+        </tbody>
+      </table>
+
+      <p><code>zet-update</code> is the exception to the ordering and is the only crate here published
+      as a library in its own right. It depends on nothing in the workspace and nothing in the
+      workspace depends on it except the binary, which does not call it yet.</p>
+
+      <h2>Why it is split this way</h2>
+
+      <p>The alternative — an app that owns the window and is called by it — is the shape most
+      terminals have, and it makes the interesting half of the program untestable without a display.
+      Everything below <code>zet</code> is built so that a test can drive it with no window and no
+      GPU: open two tabs, press a key, assert which one is active.</p>
+
+      <p>Two boundaries carry most of that weight.</p>
+
+      <ul>
+        <li><strong><code>zet-input</code> does not depend on <code>winit</code>.</strong> A user's
+        keybinding is text like <code>Ctrl+Shift+T</code> in a config file, so a key has to be
+        namable, parseable, and printable on its own. It is a piece of the configuration vocabulary
+        before it is ever a piece of an event, and <code>winit</code>'s key type cannot be that
+        because it describes a platform event rather than something a person writes down.</li>
+        <li><strong><code>zet-ui</code> is pure computation on the CPU.</strong> It is handed a
+        description of the window, it fills a frame with rectangles, and it answers where the user
+        just clicked. Everything the chrome does can be asserted against a frame and a hit test.</li>
+      </ul>
+
+      <h2>The crates</h2>
+
+      <h3>zet-vt — the terminal engine</h3>
+
+      <p>It turns a byte stream from a pty into a grid of styled cells and tracks which cells changed
+      so the renderer can repaint the minimum. The layers, bottom up: the value types (<code>color</code>,
+      <code>attrs</code>, <code>cell</code>), storage (<code>row</code>, <code>grid</code>), the
+      byte-level parser, the terminal state machine, and damage tracking.</p>
+
+      <p>The parser is deliberately ignorant of terminal state. Everything that can be wrong about a
+      terminal, from reflow to erase semantics, lives in the state machine where it can be tested
+      against a real grid instead of against a byte sequence.</p>
+
+      <h3>zet-pty — the process layer</h3>
+
+      <p>A running child process attached to a pseudoconsole, and the bytes flowing in and out of it.
+      It is written against <code>windows-sys</code> rather than a wrapper crate, because every
+      wrapper in the ecosystem was eliminated for a specific reason — a missing creation-flags
+      parameter, an inverted <code>TerminateProcess</code> result on Windows, a two-year-old
+      dependency tree.</p>
+
+      <p>ConPTY has four behaviours that turn a straightforward read loop into a deadlock, and none of
+      them are in its documentation. Closing the pseudoconsole blocks until its output has been
+      drained. Closing the input half kills the child with <code>0xC000013A</code> instead of letting
+      it see end of input. A read on the output pipe never returns zero while the pseudoconsole is
+      open. And ConPTY's own tree kill misses detached grandchildren, so a job object with
+      <code>KILL_ON_JOB_CLOSE</code> is the only thing that reliably reaps them.</p>
+
+      <h3>zet-config — the file and the two planes</h3>
+
+      <p>This is the shared vocabulary for everything above it. It owns the colour type with the
+      sRGB-to-linear conversion the renderer needs and the contrast arithmetic the design system is
+      held to; <code>Theme</code> and <code>Palette</code>, which are the two planes
+      <a href="design.html">Design</a> keeps apart; and <code>Config</code>, the file, its defaults,
+      its diagnostics, and the round-trip that preserves your comments.</p>
+
+      <p>The file is authoritative and the settings panel is a view over it, so this crate is the
+      only writer. That is what makes "change it in the app" and "change it by hand" the same
+      operation rather than two code paths that have to be kept in agreement.</p>
+
+      <h3>zet-font — discovery and pixels</h3>
+
+      <p><code>fontique</code> for the system database and <code>swash</code> for the pixels, with the
+      fallback policy supplied here rather than by a shaping layer. A terminal's grid is one glyph per
+      cell at a fixed advance width; text does not wrap around a float, does not need kerning across a
+      cell boundary, and must never ligate two characters into one glyph unless the user asked for it.</p>
+
+      <p>The rule that keeps the grid a grid: <strong>every cell is the width of the primary face's
+      advance for <code>M</code>, forever.</strong> A fallback face that is proportional, or
+      monospaced at a different pitch, draws its glyph centred in the cell and is allowed to overflow
+      it. Scaling a fallback to fit would move the cell boundaries, and a grid whose columns move is
+      not a grid.</p>
+
+      <h3>zet-input — decoded input to stdin bytes</h3>
+
+      <p>The seam between the windowing layer and the pty. Almost all of it is a table, and the table
+      is the legacy VT / xterm one. Key and mouse encoding live there, plus the paste and focus
+      sequences that a mode gates rather than a keystroke.</p>
+
+      <p>The kitty keyboard protocol is not implemented, and what is missing is an input rather than a
+      decision. It is negotiated as a stack of flags, so encoding under it needs the current flag set,
+      and the terminal is the only thing that sees a push happen. Until the terminal engine tracks
+      that stack, <code>encode_key</code> reports the legacy encoding and answers nothing for key
+      release and repeat, because legacy VT has no byte for either.</p>
+
+      <h3>zet-session — one running terminal</h3>
+
+      <p>The join between the pty and the parser: one parser, the terminal it feeds, and the scrollback
+      view over that grid, for one tab. <code>Sessions</code> owns several and hands out the tab
+      numbers.</p>
+
+      <p>The reader is not here, because the pty already runs it. This crate adds a pump instead: a
+      thread parked in the pty's chunk channel with a timeout, appending whatever comes back to a
+      buffer this crate owns and calling the host's waker. The pump exists because nothing else can
+      wait — a ConPTY output pipe never reports end of file while the pseudoconsole is open, so there
+      is no future to await and no readiness to poll. Teardown stops the pump and joins it before the
+      pseudoconsole is shut down, so a parked pump cannot keep a closed tab's child alive.</p>
+
+      <h3>zet-render — a frame</h3>
+
+      <p>It turns a terminal and an app into two arrays of rectangles. It owns the atlas, the glyph
+      cache, and the device; it does not own the layout, which is <code>zet-ui</code>'s, and not the
+      state, which is <code>zet-app</code>'s. The grid draws from the theme's ANSI palette and the
+      chrome draws from the app palette, and the two are enforced before anything gets here.</p>
+
+      <h3>zet-ui — the chrome</h3>
+
+      <p>The titlebar, the tab strip, the caption buttons, the scrollbar, the settings panel, and the
+      find bar. It holds a palette for the length of one call and has no way to name a theme at all,
+      which is the strongest form of the two-plane rule: the crate cannot break it.</p>
+
+      <p>Three things it is not told, each a deliberate limit: nothing about the grid, no clock — the
+      indicator's travel is measured against a time the caller supplies, because a transition that
+      reads the clock cannot be asserted seventy milliseconds into itself — and no scrollback position
+      or find-bar state, both of which change without the configuration changing.</p>
+
+      <h3>zet-app — what a key does</h3>
+
+      <p>The terminal's behaviour with every platform dependency taken out. It owns the tabs, the
+      selection, the scroll position, the keymap, and the cursor's blink, and it decides what a key
+      press means. When it needs a window, a GPU, a clipboard, or an event loop it returns a
+      <code>Command</code> and the caller carries it out.</p>
+
+      <h3>zet — the binary</h3>
+
+      <p>The binary and nothing else. Every decision the terminal makes lives in a library below it,
+      which is why the interesting parts of zet have tests and this crate has a <code>main</code>.
+      What is here is the set of things that cannot be a library: the event loop, the window, and the
+      modules that talk to Win32.</p>
+
+      <p><code>host</code> is the event loop's callback and the only place the platform and the state
+      machine meet. <code>keys</code> and <code>mouse</code> translate between the platform's events
+      and the vocabulary <code>zet-app</code> speaks. <code>clipboard</code> and <code>platform</code>
+      call Win32 directly and are the only files in the binary with an <code>unsafe</code> block; the
+      crate denies <code>unsafe_code</code> everywhere else.</p>
+
+      <h3>zet-update — becoming the next version</h3>
+
+      <p>It answers three questions: what am I running, is there something newer, and how do I become
+      it. The path is a check against GitHub's latest-release endpoint, a download that verifies size
+      and digest before anything is written, a stage beside the running executable, and a replacement
+      on the next launch. Windows will not let a running executable be overwritten or deleted, but it
+      will let one be renamed, and that is the entire mechanism.</p>
+
+      <p>Nothing in the binary calls it yet, so the current build never touches the network on its own.
+      That is described in <a href="privacy.html">Privacy</a>, and what verification does and does not
+      prove is in <a href="security.html">Security</a>.</p>
+
+      <h2>The workspace</h2>
+
+      <p>One workspace at the repository root, with <code>members = ["crates/*"]</code>. The shared
+      manifest sets the version, <code>edition = "2024"</code>, <code>rust-version = "1.90"</code>,
+      and the dual licence, and lists every dependency once so that a crate's manifest names only what
+      it actually uses.</p>
+
+      <p>The release profile is tuned for throughput rather than for compile time: fat LTO, one codegen
+      unit, <code>panic = "abort"</code>, and stripped symbols. Dependencies are optimized even in a
+      debug build, because the parser and the windowing stack are what make a dev build feel slow and
+      rebuilding them is rare.</p>
+
+      <h2>Testing</h2>
+
+      <p>Every crate below the binary is built to be driven by a test with no window in sight, and the
+      tests are where several of the project's rules are enforced rather than promised: that zet's own
+      themes clear the ANSI contrast floor, that the chrome palette matches the values in
+      <code>DESIGN.md</code>, that the default keymap only names actions that exist, and that every
+      key name round-trips through its text form.</p>
+
+      <p>The tests that talk to GitHub are ignored by default, so a flaky network is never the reason
+      a pull request looks broken. <code>.github/workflows/ci.yml</code> runs formatting, lints with
+      warnings denied, and the workspace tests on every push and pull request.</p>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

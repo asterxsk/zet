@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install — zet</title>
+<meta name="description" content="There is no installer for zet yet. Build the binary from source.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="install.html" aria-current="page">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Start</p>
+      <h1>Install</h1>
+      <p class="lede">There is no published installer and no published download. zet is built from
+      source, either as a bare binary or through the installer script in <code>packaging/</code>.</p>
+
+      <div class="callout">
+        <span class="callout__label">Nothing is published</span>
+        <p><code>packaging/zet.iss</code> builds a per-user installer, and it has never been shipped.
+        <code>.github/workflows/release.yml</code> publishes two artifacts when a <code>v*</code> tag
+        is pushed — the bare binary and the installer — with a <code>SHA256SUMS</code> digest beside
+        them, but no such tag has been pushed: the changelog's first release is still marked
+        unreleased, and the repository has no releases. Neither the installer nor the binary is
+        code-signed, so SmartScreen warns on first run whichever way you get it.</p>
+      </div>
+
+      <h2>Requirements</h2>
+
+      <ul>
+        <li>Windows 11. The process layer is ConPTY and shell discovery reads the Windows app-alias
+        directory, WSL distributions, and Program Files. Nothing here is portable.</li>
+        <li>Rust 1.90 or newer, with the MSVC toolchain. The workspace sets
+        <code>rust-version = "1.90"</code> and <code>edition = "2024"</code>.</li>
+      </ul>
+
+      <p>The installer itself has a floor of Windows 10 version 1809
+      (<code>10.0.17763</code>), because that is the first build with the ConPTY API the pty layer
+      runs the shell under. Installing on anything older would produce a window that opens and a
+      terminal that never starts.</p>
+
+      <h2>Build</h2>
+
+<pre><code>git clone https://github.com/asterxsk/zet
+cd zet
+cargo build --release
+cargo test --workspace</code></pre>
+
+      <p>That produces <code>target/release/zet.exe</code>, which is the whole program. It needs no
+      assets beside it, because the chrome's fonts are compiled in.</p>
+
+      <p>The release profile is tuned for throughput rather than compile time: fat LTO, one codegen
+      unit, and <code>panic = "abort"</code>, so a release build is slower to produce than a debug
+      one and worth it.</p>
+
+      <h2>Run</h2>
+
+<pre><code>zet                           <span class="c"># start the terminal</span>
+zet --directory D:\somewhere  <span class="c"># start its shell there</span>
+zet --help                    <span class="c"># print the usage</span>
+zet --version                 <span class="c"># print the version</span></code></pre>
+
+      <p>There is no flag for a setting, because a flag for every setting would be a second place
+      for the same truth. <code>--directory</code> earns its place because it is not a setting: it
+      is where you were standing when you typed the command. It is what the installer's folder
+      right-click menu passes, and it applies to every tab the window opens, because the window is
+      what the directory was chosen for. The short form is <code>-d</code>.</p>
+
+      <p>An argument zet does not recognise is refused rather than ignored, so
+      <code>zet --maximised</code> fails with a message instead of opening a window that did not do
+      what you asked. A flag with nothing after it says so by name — <code>zet --directory</code>
+      reports that it needs a directory, rather than reporting an unknown argument.</p>
+
+      <p><code>zet --version</code> prints the crate version, which for this source tree is
+      <code>zet 0.1.0</code>.</p>
+
+      <h2>The installer</h2>
+
+      <p><code>packaging/zet.iss</code> is an <a href="https://jrsoftware.org/isinfo.php">Inno
+      Setup</a> script, and it has never been published. To build it by hand you need Inno Setup 6.3
+      or newer on <code>PATH</code> as <code>ISCC.exe</code>:</p>
+
+<pre><code>cargo build --release -p zet
+ISCC.exe /DVersion=0.1.0 /O"dist" packaging\zet.iss</code></pre>
+
+      <p><code>/DVersion</code> must be the version <code>Cargo.toml</code> carries. The release
+      workflow passes the tag it is releasing, having already checked that the two agree.</p>
+
+      <p>It installs <strong>for the current user only</strong>, into
+      <code>%LOCALAPPDATA%\Programs\zet</code>, and it never raises a UAC prompt.
+      <code>PrivilegesRequired=lowest</code> makes Setup decline elevation even when the account
+      could have it, and the "install for all users" option is not offered. It writes an uninstaller,
+      <code>unins000.exe</code>, into the same directory, and registers itself under <code>HKCU</code>
+      so zet appears in Settings → Apps → Installed apps for that user alone.</p>
+
+      <p>Settings are never touched. <code>%APPDATA%\zet\config.toml</code> survives an uninstall,
+      because reinstalling and losing your configuration is worse than leaving two kilobytes
+      behind.</p>
+
+      <p>Three things are offered on the Select Additional Tasks page, and only the first is ticked
+      by default.</p>
+
+      <table>
+        <caption>Installer tasks</caption>
+        <thead>
+          <tr><th scope="col">Task</th><th scope="col">Default</th><th scope="col">What it writes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Start Menu shortcut</td><td>on for a fresh install</td><td class="k">[userprograms]\zet</td></tr>
+          <tr><td>Add zet to my PATH</td><td>off</td><td class="k">one entry appended to HKCU\Environment\Path</td></tr>
+          <tr><td>"Open zet here" in the folder right-click menu</td><td>off</td><td class="k">HKCU\Software\Classes\Directory\shell\zet<br>and Directory\Background\shell\zet</td></tr>
+        </tbody>
+      </table>
+
+      <p>There is no licence page. zet is MIT/Apache-2.0 dual-licensed, which grants rights rather
+      than withholding them, so a page demanding that you click "I accept" would misrepresent what
+      the licence says. The two licence files and <code>THIRD-PARTY-NOTICES</code> are installed
+      beside the binary instead, which is where they belong: the binary statically links IBM Plex
+      Sans under the SIL Open Font License, and that licence requires its text to travel with the
+      font.</p>
+
+      <p>The icon is <code>packaging/zet.ico</code>. <code>packaging/make-icon.py</code> draws both
+      the icon and <code>zet.svg</code> from one set of constants, so the two cannot drift.</p>
+
+      <h2>Where it looks for configuration</h2>
+
+      <p><code>%APPDATA%\zet\config.toml</code>. A missing file is not an error; zet starts with
+      its defaults. The current build only reads that file — there is no settings panel to write it
+      back, so nothing creates it. See <a href="configuration.html">Configuration</a>.</p>
+
+      <h2>The tests that need the network</h2>
+
+      <p>The tests that talk to GitHub are ignored by default, because a test that needs the network
+      is a test that fails on a train. <code>cargo test --workspace</code> does not run them. To run
+      them on purpose:</p>
+
+<pre><code>cargo test -p zet-update --test live -- --ignored --nocapture</code></pre>
+
+      <h2>Releases</h2>
+
+      <p>Releases are tags. There is no release branch and no manual build step: the version in
+      <code>Cargo.toml</code> under <code>[workspace.package]</code> is moved, the changelog entries
+      move out of Unreleased, and a <code>v</code>-prefixed tag is pushed.<br>
+      <code>.github/workflows/release.yml</code> then checks that the tag and the manifest agree,
+      builds the binary and the installer, writes a <code>SHA256SUMS</code> digest for each of them,
+      and publishes a GitHub Release. Both artifacts are wanted: the bare
+      <code>zet-&lt;version&gt;-x86_64-pc-windows-msvc.exe</code> is what the updater looks for by
+      that exact suffix and replaces in place, and <code>zet-&lt;version&gt;-setup.exe</code> is what
+      a person downloads the first time.</p>
+
+      <p>The tag and the manifest are checked against each other because a binary that reports a
+      different version from the tag it shipped under makes the updater offer the same release on
+      every launch, forever.</p>
+
+      <p>Archives are not Authenticode-signed. A checksum proves the download matches what the
+      release published; it does not prove who published it. That distinction, and what stands in
+      for signature verification today, is set out in <a href="security.html">Security</a>.</p>
+
+      <h2>Updates</h2>
+
+      <p>Not wired up. <code>zet-update</code> implements the version identity, the release lookup,
+      the digest check, and the self-replacement, but nothing in the binary calls it, so this build
+      never touches the network on its own. The configuration key for the check exists already, so
+      setting it now costs nothing — see
+      <a href="configuration.html#update">the update section of Configuration</a>.</p>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

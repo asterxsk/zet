@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changelog — zet</title>
+<meta name="description" content="Notable changes to zet, newest first.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html" aria-current="page">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Project</p>
+      <h1>Changelog</h1>
+      <p class="lede">Notable changes to zet, newest first.</p>
+
+      <p>The format follows <a href="https://keepachangelog.com/en/1.1.0/">Keep a Changelog</a> and
+      zet adheres to <a href="https://semver.org/spec/v2.0.0.html">Semantic Versioning</a>. While the
+      major version is <code>0</code>, a minor bump may break compatibility and a patch bump will
+      not: <code>0.2.0</code> to <code>0.3.0</code> can break your configuration;
+      <code>0.3.0</code> to <code>0.3.1</code> cannot.</p>
+
+      <p>What "breaking" means for a terminal is narrower than it sounds, because most of what a
+      terminal emits is not zet's API. Escape sequences, the alternate screen, mouse reporting, and
+      bracketed paste are standards; they change when the standards change. What counts as breaking
+      here is a keybinding that stops working or starts doing something else, a configuration key
+      that is renamed, moved, or removed, a theme file format change, and any change to
+      <code>zet-update</code>'s public API, which is published as a library.</p>
+
+      <h2>Unreleased</h2>
+
+      <p>Until 1.0.0 ships, each release is a <code>0.x</code> minor and any of them may break
+      compatibility.</p>
+
+      <h3>Fixed</h3>
+
+      <h4>zet-render — a glyph's tint is scaled by its coverage, not by the whole texel</h4>
+
+      <p>The fragment shader multiplied the premultiplied tint by all four channels of the sampled
+      texel instead of by its alpha. The texel's colour is white, so the tint's colour survived at
+      full strength and every glyph drew as a solid rectangle of its own colour, in the right place
+      and the right size, with only its edges dimmed.</p>
+
+      <h4>zet — the session is told its size at the end of a frame, not from the resize event</h4>
+
+      <p>A resize event says how many pixels there are; how many columns that is depends on where the
+      chrome puts the grid, and only the layout knows that. Fitting from the event fitted against the
+      previous frame's layout and never corrected it, so a window opened at 1100x720 spent its whole
+      life as an eighty-column terminal.</p>
+
+      <h2>0.1.0 — unreleased</h2>
+
+      <p>The first release, and the first point at which an archive is published. Not yet usable as a
+      daily driver.</p>
+
+      <h3>Added</h3>
+
+      <h4>zet-vt — the terminal engine, written from scratch</h4>
+
+      <ul>
+        <li>Cell, row, and grid storage with trailing-blank trimming, soft-wrap tracking, and per-row
+        damage.</li>
+        <li>A byte-level VT parser covering the C0/C1 controls, CSI, OSC, DCS, SOS/PM/APC, and the
+        ESC intermediates, including the parameter, intermediate, and final dispatch rules.</li>
+        <li>Terminal state: scroll regions, the alternate screen, cursor save/restore, character
+        sets, tab stops, insert/replace mode, and origin mode.</li>
+        <li>Colour: 16-colour, 256-colour, and 24-bit SGR, with reverse video resolved at draw
+        time.</li>
+        <li>Reflow across logical lines on resize, and back-colour-erase that respects the current
+        SGR.</li>
+        <li>Synchronized output (<code>DECSET 2026</code>) so a full-screen repaint is one frame and
+        not a storm.</li>
+      </ul>
+
+      <h4>zet-pty — the process layer</h4>
+
+      <ul>
+        <li>ConPTY sessions: create, resize, write, read, kill, and shut down, with a job object that
+        reaps grandchildren the child tried to detach.</li>
+        <li>Shell profile discovery across <code>PATH</code> and <code>PATHEXT</code>, Program Files,
+        the Windows app-alias directory, Git Bash, and WSL distributions read from
+        <code>wsl.exe -l -v</code>.</li>
+        <li>A bounded reader channel, so a child that writes faster than the terminal draws feels
+        backpressure instead of deadlocking the close.</li>
+      </ul>
+
+      <h4>zet-config — the configuration file, its shipped themes, and the chrome palette</h4>
+
+      <ul>
+        <li>TOML, with defaults, diagnostics that name the line and the offending span, and a
+        round-trip save that preserves the user's comments.</li>
+        <li>A theme for the grid and a palette for the chrome, kept apart so neither can name the
+        other's colours, and the 16-colour ANSI palette.</li>
+        <li>Appearance, cursor, font, tab, and window settings, and the keymap the input layer
+        parses.</li>
+        <li>Hot reload: the file is authoritative and the settings panel is a view over it, so the
+        panel edits the same configuration the reload path reads back.</li>
+      </ul>
+
+      <h4>zet-font — font discovery, cell metrics, and glyph rasterisation</h4>
+
+      <ul>
+        <li><code>fontique</code> for the system database and <code>swash</code> for the pixels, with
+        the fallback policy supplied here rather than by a shaping layer.</li>
+        <li>A face chain resolved per character, with a resolution cache, and cell metrics taken from
+        the primary face rather than from whichever fallback answered.</li>
+        <li>Every cell is the primary face's advance for <code>M</code>; a proportional or
+        differently pitched fallback draws centred and is allowed to overflow the cell rather than
+        being scaled into it.</li>
+      </ul>
+
+      <h4>zet-input — decoded input turned into the bytes a program reads on its stdin</h4>
+
+      <ul>
+        <li>The seam between the windowing layer and the pty, deliberately independent of
+        <code>winit</code>, so a key is namable, parseable, and printable before it is ever an
+        event.</li>
+        <li>Key and mouse encoding against the legacy VT / xterm table, plus the paste and focus
+        sequences that a mode gates rather than a keystroke.</li>
+        <li>Chords and keybindings parsed out of the configuration, so <code>Ctrl+Shift+T</code> is a
+        value before it is a binding.</li>
+        <li>The kitty keyboard protocol is not implemented — the terminal engine does not track its
+        flag stack — so key encoding reports the legacy encoding and answers nothing for key release
+        and repeat.</li>
+      </ul>
+
+      <h4>zet-session — one running terminal</h4>
+
+      <ul>
+        <li>A pump thread parked in the pty's chunk channel with a timeout, because a ConPTY output
+        pipe never reports end of file; draining then takes the bytes without blocking, which is what
+        makes draining cheap enough to do every frame.</li>
+        <li>Scrollback over the grid, and a title, and nothing about windows, rendering, or
+        configuration.</li>
+        <li>Several sessions owned together, handing out the tab numbers; teardown stops and joins
+        the pump before the pty is shut down, so a parked pump cannot keep a closed tab's child
+        alive.</li>
+      </ul>
+
+      <h4>zet-render — turning a terminal and an app into a frame</h4>
+
+      <ul>
+        <li>The glyph atlas, shared with the chrome and told apart by the face in each glyph's
+        key.</li>
+        <li>The grid and chrome pipelines, and the frame of quads both become, drawn from the theme's
+        ANSI palette and the app palette respectively.</li>
+        <li>The device, the atlas, and the glyph cache; not the layout, which is <code>zet-ui</code>'s,
+        and not the state, which is <code>zet-app</code>'s.</li>
+      </ul>
+
+      <h4>zet-ui — the chrome</h4>
+
+      <ul>
+        <li>Pure computation on the CPU: it fills a frame with rectangles and answers where the user
+        just clicked, with no window and no GPU in the loop.</li>
+        <li>It holds a palette for the length of one call and has no way to name a theme at all.</li>
+        <li>The tab strip's indicator travel is measured against a time the caller supplies, so a
+        transition can be asserted partway through.</li>
+        <li>IBM Plex Sans at two weights, self-hosted and registered into the font database, drawing
+        from the same atlas as the grid.</li>
+      </ul>
+
+      <h4>zet-app — what zet does when you press a key, with no window in sight</h4>
+
+      <ul>
+        <li>The tabs, the selection, the scroll position, the keymap, and the cursor's blink, and the
+        decision about what a key press means.</li>
+        <li>When it needs a window, a GPU, a clipboard, or an event loop it returns a command and the
+        caller carries it out.</li>
+        <li>Actions, the active theme, and the config reload path.</li>
+      </ul>
+
+      <h4>zet — the binary</h4>
+
+      <ul>
+        <li>A <code>winit</code> window and event loop, and the holder of the window handle, the
+        surface, and the frame.</li>
+        <li>Key and mouse translation between the platform's events and the vocabulary
+        <code>zet-app</code> speaks, and the waker the session's pump uses to wake the loop.</li>
+        <li>The Win32 clipboard, plain <code>CF_UNICODETEXT</code> in both directions, and the
+        accessibility settings — high contrast and text scaling — read from the system rather than
+        guessed.</li>
+      </ul>
+
+      <h3>Security</h3>
+
+      <p>Update checks verify a <code>SHA256SUMS</code> digest before an archive is applied. Archives
+      are not Authenticode-signed; see <a href="security.html">Security</a>.</p>
+
+      <div class="callout callout--note">
+        <span class="callout__label">Not in this list yet</span>
+        <p>The installer script in <code>packaging/</code>, and the release workflow that builds it,
+        are not accounted for in the 0.1.0 entry above. The changelog is the authoritative record of
+        what changed, so the entry is out of date rather than the code.</p>
+      </div>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

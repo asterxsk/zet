@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuration — zet</title>
+<meta name="description" content="Every key in zet's config.toml, its type, and its default.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html" aria-current="page">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Using</p>
+      <h1>Configuration</h1>
+      <p class="lede">zet reads one TOML file at <code>%APPDATA%\zet\config.toml</code>. A key that
+      is missing takes its default. A key that is not in the schema is an error.</p>
+
+      <div class="callout callout--note">
+        <span class="callout__label">The file is read, not written</span>
+        <p>There is no settings panel yet, so nothing writes this file back. <code>zet-config</code>
+        contains the save path and the round-trip that preserves a file's comments, but the binary
+        does not call it. Everything on this page describes the file a hand-editor writes.</p>
+      </div>
+
+      <h2>The file</h2>
+
+      <p>Three rules shape the schema, and they are worth knowing before you edit anything.</p>
+
+      <ul>
+        <li><strong>Every key has a default.</strong> A key that is present and equal to its default
+        is indistinguishable from one that is absent. That is what lets a hand-editor delete lines
+        without breaking anything.</li>
+        <li><strong>A key that is not in the schema is an error, not a shrug.</strong> Silently
+        ignoring <code>fonnt.size</code> means you change a setting, see nothing happen, and have no
+        way to find out why. The cost is that a config written by a newer zet is rejected by an
+        older one, which is the right trade here.</li>
+        <li><strong>A bad file never stops the app from starting.</strong> A terminal that refuses to
+        open because a colour is misspelled is a terminal you cannot use to fix the misspelling.</li>
+      </ul>
+
+      <h2>The default file</h2>
+
+      <p>This is what every key looks like at its default. It is the file a save would produce from
+      a fresh install.</p>
+
+<pre><code>theme = "zet-dark"
+
+[font]
+family = "Cascadia Mono"
+size = 13.0
+fallback = [
+    "Consolas",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+]
+
+[window]
+opacity = 1.0
+remember-position = true
+start-maximized = false
+
+[window.background]
+kind = "solid"
+
+[tabs]
+position = "top"
+open-default-without-asking = true
+
+[cursor]
+shape = "block"
+blink = true
+thickness = 2
+
+[appearance]
+text-scale = 0.0
+follow-reduce-motion = true
+follow-forced-colors = true
+
+[keys]
+close-tab = "Ctrl+Shift+W"
+copy = "Ctrl+Shift+C"
+find = "Ctrl+Shift+F"
+font-larger = "Ctrl+Plus"
+font-reset = "Ctrl+0"
+font-smaller = "Ctrl+Minus"
+new-tab = "Ctrl+Shift+T"
+new-window = "Ctrl+Shift+N"
+next-tab = "Ctrl+Tab"
+paste = "Ctrl+Shift+V"
+previous-tab = "Ctrl+Shift+Tab"
+quit = "Alt+F4"
+scroll-page-down = "Shift+PageDown"
+scroll-page-up = "Shift+PageUp"
+scroll-to-bottom = "Ctrl+Shift+End"
+scroll-to-top = "Ctrl+Shift+Home"
+settings = "Ctrl+Shift+Comma"
+toggle-tab-position = "Ctrl+Shift+P"
+
+[update]
+check-on-launch = true</code></pre>
+
+      <h2 id="keys">Every key</h2>
+
+      <table>
+        <caption>Key, type, and default</caption>
+        <thead>
+          <tr><th scope="col">Key</th><th scope="col">Type</th><th scope="col">Default</th><th scope="col">Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="k">theme</td><td>string</td><td class="k">"zet-dark"</td><td>A theme slug. See <a href="#themes">Themes</a>.</td></tr>
+          <tr><td class="k">font.family</td><td>string</td><td class="k">"Cascadia Mono"</td><td>The family name, exactly as Windows reports it.</td></tr>
+          <tr><td class="k">font.size</td><td>float</td><td class="k">13.0</td><td>Points at 100% scaling. Valid 4 to 72.</td></tr>
+          <tr><td class="k">font.fallback</td><td>array of string</td><td class="k">["Consolas", "Segoe UI Emoji", "Segoe UI Symbol"]</td><td>Tried in order when the primary face has no glyph for a character. The primary must be monospaced; a fallback only has to cover the one character it is reached for.</td></tr>
+          <tr><td class="k">window.background.kind</td><td>string</td><td class="k">"solid"</td><td>One of <code>solid</code>, <code>image</code>, <code>gradient</code>.</td></tr>
+          <tr><td class="k">window.background.path</td><td>string</td><td colspan="2">Required when <code>kind = "image"</code>. The file must exist.</td></tr>
+          <tr><td class="k">window.background.opacity</td><td>float</td><td class="k">1.0</td><td>Image only, 0.0 to 1.0. The theme's ground shows through below this, which is what keeps text legible over a photograph.</td></tr>
+          <tr><td class="k">window.background.from</td><td>colour</td><td colspan="2">Required when <code>kind = "gradient"</code>. The first stop.</td></tr>
+          <tr><td class="k">window.background.to</td><td>colour</td><td colspan="2">Required when <code>kind = "gradient"</code>. The second stop.</td></tr>
+          <tr><td class="k">window.background.angle</td><td>float</td><td colspan="2">Required when <code>kind = "gradient"</code>. Degrees clockwise from pointing right.</td></tr>
+          <tr><td class="k">window.opacity</td><td>float</td><td class="k">1.0</td><td>0.0 to 1.0.</td></tr>
+          <tr><td class="k">window.remember-position</td><td>bool</td><td class="k">true</td><td>Whether the window remembers where it was.</td></tr>
+          <tr><td class="k">window.start-maximized</td><td>bool</td><td class="k">false</td><td>Whether the window starts maximized.</td></tr>
+          <tr><td class="k">tabs.position</td><td>string</td><td class="k">"top"</td><td><code>top</code> is one row shared with the titlebar; <code>left</code> is a rail down the left edge.</td></tr>
+          <tr><td class="k">tabs.open-default-without-asking</td><td>bool</td><td class="k">true</td><td>Whether a new tab opens the default profile without asking.</td></tr>
+          <tr><td class="k">cursor.shape</td><td>string</td><td class="k">"block"</td><td>One of <code>block</code>, <code>bar</code>, <code>underline</code>, <code>hollow-block</code>.</td></tr>
+          <tr><td class="k">cursor.blink</td><td>bool</td><td class="k">true</td><td>530ms on, 530ms off, hard transitions. Off is the default when reduce-motion is on.</td></tr>
+          <tr><td class="k">cursor.thickness</td><td>integer</td><td class="k">2</td><td>1 to 3, in pixels, for a bar or underline cursor.</td></tr>
+          <tr><td class="k">appearance.text-scale</td><td>float</td><td class="k">0.0</td><td><code>0.0</code> means follow the system's text-size setting. Otherwise 0.5 to 3.0.</td></tr>
+          <tr><td class="k">appearance.follow-reduce-motion</td><td>bool</td><td class="k">true</td><td>Whether to honor the system's reduce-motion setting.</td></tr>
+          <tr><td class="k">appearance.follow-forced-colors</td><td>bool</td><td class="k">true</td><td>Whether to switch to the contrast theme when Windows reports forced colours.</td></tr>
+          <tr><td class="k">keys</td><td>table</td><td colspan="2">A table of action name to chord. See <a href="keybindings.html">Keybindings</a>.</td></tr>
+          <tr><td class="k">update.check-on-launch</td><td>bool</td><td class="k">true</td><td>Whether zet asks GitHub for a newer version at launch. Not read by the current build; nothing calls the updater.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Colours</h3>
+
+      <p>A colour is a string carrying an sRGB hex value: <code>"#0a0b0d"</code>. The <code>#</code>
+      is required, and the three channels are two hex digits each.</p>
+
+      <h2 id="themes">Themes</h2>
+
+      <p>Eight themes ship. Three are zet's own and are held to a 4.5:1 contrast floor on their
+      body-text colours. Five are imported from their authors and ship unmodified so they look like
+      themselves. The three zet themes come first in the picker, and the imported ones follow in the
+      order below.</p>
+
+      <table>
+        <caption>Theme slugs, in the order the settings panel lists them</caption>
+        <thead>
+          <tr><th scope="col">Slug</th><th scope="col">Name</th><th scope="col">Ground</th><th scope="col">Note</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="k">zet-dark</td><td>zet dark</td><td class="k">#0a0b0d</td><td>Default. Graphite ground, one amber signal, an ANSI set chosen to be neutral rather than saturated.</td></tr>
+          <tr><td class="k">zet-light</td><td>zet light</td><td class="k">#faf9f7</td><td>Warm paper ground, ink at <code>#14161a</code>, the signal darkened to <code>#a35f00</code>.</td></tr>
+          <tr><td class="k">zet-contrast</td><td>zet contrast</td><td class="k">#000000</td><td>Pure black and pure white. Switched to when Windows reports forced colours, ignoring the chosen theme until forced colours turn off.</td></tr>
+          <tr><td class="k">nord</td><td>Nord</td><td>as published</td><td>Imported.</td></tr>
+          <tr><td class="k">gruvbox-dark</td><td>Gruvbox dark</td><td>as published</td><td>Imported.</td></tr>
+          <tr><td class="k">tokyo-night</td><td>Tokyo Night</td><td>as published</td><td>Imported.</td></tr>
+          <tr><td class="k">catppuccin-mocha</td><td>Catppuccin Mocha</td><td>as published</td><td>Imported.</td></tr>
+          <tr><td class="k">solarized-light</td><td>Solarized Light</td><td>as published</td><td>Imported.</td></tr>
+        </tbody>
+      </table>
+
+      <p>A slug that does not name a shipped theme is reported and the default is used.</p>
+
+      <h2>Background</h2>
+
+      <p>The window's background is a tagged table. <code>kind</code> says which of the three it is,
+      and the fields that follow belong to that kind.</p>
+
+<pre><code><span class="c"># The theme's ground colour, flat. This is the default.</span>
+[window.background]
+kind = "solid"
+
+<span class="c"># A picture, scaled to fill. `opacity` is the picture's own; the theme's ground</span>
+<span class="c"># shows through below it.</span>
+[window.background]
+kind = "image"
+path = "D:/Images/grid.png"
+opacity = 0.85
+
+<span class="c"># A two-stop linear gradient. The angle is degrees clockwise from pointing right.</span>
+[window.background]
+kind = "gradient"
+from = "#0a0b0d"
+to = "#1a1030"
+angle = 45.0</code></pre>
+
+      <h2 id="diagnostics">Diagnostics</h2>
+
+      <p>Values that parse but cannot be used are reported separately from values that do not parse
+      at all. <code>size = -3</code> is a perfectly good float and a perfectly bad font size. Each
+      such value is replaced by its default, and the app runs on it.</p>
+
+      <table>
+        <caption>What is checked, and what happens when it fails</caption>
+        <thead>
+          <tr><th scope="col">Check</th><th scope="col">Severity</th><th scope="col">What the app runs on</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>theme</code> does not name a shipped theme</td><td>error</td><td><code>zet-dark</code></td></tr>
+          <tr><td><code>font.size</code> outside 4 to 72</td><td>error</td><td><code>13.0</code></td></tr>
+          <tr><td><code>window.opacity</code> outside 0 to 1</td><td>error</td><td>The value clamped to the range.</td></tr>
+          <tr><td><code>window.background.path</code> does not exist</td><td>error</td><td>A solid background.</td></tr>
+          <tr><td>A <code>keys</code> entry naming an action zet does not know</td><td>error</td><td>Reported; the entry is not a binding.</td></tr>
+          <tr><td><code>appearance.text-scale</code> outside 0.5 to 3.0, and not 0.0</td><td>error</td><td>The value clamped to the range.</td></tr>
+          <tr><td><code>cursor.thickness</code> outside 1 to 3</td><td>warning</td><td>The value clamped to the range.</td></tr>
+        </tbody>
+      </table>
+
+      <p>A file that is not valid TOML at all gets one diagnostic naming the line, and the app runs
+      on defaults. Trying to salvage individual sections out of text the parser rejected would mean
+      guessing which part of the file you meant, and guessing wrong is worse than saying so.</p>
+
+      <h2>A worked example</h2>
+
+      <p>A configuration that changes the theme, raises the font size, puts the tab strip on the
+      left, makes the cursor a two-pixel bar that does not blink, and rebinds two actions. Nothing
+      here is required: any line omitted takes its default.</p>
+
+<pre><code><span class="c"># zet — my settings</span>
+theme = "gruvbox-dark"
+
+[font]
+family = "Cascadia Mono"
+size = 16.0
+
+[window]
+opacity = 0.95
+remember-position = true
+
+[window.background]
+kind = "gradient"
+from = "#0a0b0d"
+to = "#151a24"
+angle = 90.0
+
+[tabs]
+position = "left"
+
+[cursor]
+shape = "bar"
+blink = false
+thickness = 2
+
+[appearance]
+text-scale = 0.0
+follow-reduce-motion = true
+
+[keys]
+<span class="c"># Rebinding an action replaces the default. The action names are the keys.</span>
+new-tab = "Ctrl+T"
+close-tab = "Ctrl+W"
+quit = "Ctrl+Shift+Q"</code></pre>
+
+      <p>Only the keys you write are changed. <code>font.fallback</code>, <code>tabs.open-default-without-asking</code>,
+      <code>appearance.follow-forced-colors</code>, <code>update.check-on-launch</code>, and every
+      binding not listed above keep their defaults.</p>
+
+      <h2 id="update">The update check</h2>
+
+      <p><code>update.check-on-launch</code> is the entire privacy control, which is why
+      <a href="privacy.html">Privacy</a> points at this key rather than at a settings screen. It
+      defaults to <code>true</code>, which is the intent for the finished program. In the current
+      build it makes no difference either way, because nothing in the binary reads it and nothing
+      calls the updater.</p>
+
+<pre><code>[update]
+check-on-launch = false</code></pre>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zet — a terminal multiplexer for Windows</title>
+<meta name="description" content="zet is a terminal multiplexer for Windows, written in Rust, with its own VT engine and a GPU renderer.">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.0</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html" aria-current="page">Overview</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Start</p>
+      <h1>zet</h1>
+      <p class="lede">A terminal multiplexer for Windows, written in Rust, with its own VT engine
+      and a GPU renderer.</p>
+
+      <div class="callout">
+        <span class="callout__label">Status — pre-alpha</span>
+        <p>zet builds and runs: it opens a window, starts a shell, and draws it with its own VT
+        engine and its own GPU renderer. What is missing is the depth around that — the settings
+        file is read but there is no settings panel, <code>zet-update</code> is written but not
+        wired to the binary, and the kitty keyboard protocol is not implemented. Nothing here is
+        usable as a daily driver, and nothing here is worth installing.</p>
+      </div>
+
+      <h2>Why</h2>
+
+      <p>Windows terminals each make you give something up. Windows Terminal is good but its
+      rendering and configuration are Microsoft's to decide. Alacritty is fast but has no tabs and
+      no settings UI. WezTerm has everything and needs its own manual. None of them let you own the
+      part that matters.</p>
+
+      <p>There is also a correctness problem that only shows up when you live in a terminal.
+      Full-screen TUI programs flicker on every repaint unless the terminal honors synchronized
+      output. Alternate-screen apps leave artifacts on resize. Mouse reporting, truecolor, and
+      hyperlinks work in some terminals and half-work in others. You notice the first time you run
+      an agentic coding tool inside one.</p>
+
+      <p>zet owns its terminal engine end to end: the byte parser, the screen grid, the scrollback,
+      the reflow, the damage tracking, and the renderer. Nothing about the character pipeline is
+      borrowed. That is the point of the project, and the reason the rest of it exists.</p>
+
+      <h2>The crates</h2>
+
+      <p>The workspace is layered, and each crate is built on the ones above it in this list —
+      except <code>zet-update</code>, which stands alone and is the only crate here published as a
+      library in its own right.</p>
+
+      <table>
+        <caption>Eleven crates, in dependency order</caption>
+        <thead>
+          <tr><th scope="col">Crate</th><th scope="col">What it owns</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="k">zet-vt</td><td>The terminal engine: parser, grid, scrollback, reflow, damage</td></tr>
+          <tr><td class="k">zet-pty</td><td>ConPTY sessions and shell profile discovery</td></tr>
+          <tr><td class="k">zet-config</td><td>TOML configuration, themes, the ANSI palette, hot reload</td></tr>
+          <tr><td class="k">zet-font</td><td>Font loading, rasterisation, the face chain and its fallback order</td></tr>
+          <tr><td class="k">zet-input</td><td>Key and mouse encoding, chords and keybindings</td></tr>
+          <tr><td class="k">zet-session</td><td>A session: a pty and a terminal with a read loop between them</td></tr>
+          <tr><td class="k">zet-render</td><td>The wgpu renderer: the glyph atlas, the grid and chrome pipelines</td></tr>
+          <tr><td class="k">zet-ui</td><td>The chrome's layout, and the embedded IBM Plex Sans it is drawn in</td></tr>
+          <tr><td class="k">zet-app</td><td>The application state machine: tabs, commands, themes, selection</td></tr>
+          <tr><td class="k">zet</td><td>The binary: the window, the event loop, and the frame host</td></tr>
+          <tr><td class="k">zet-update</td><td>Version identity, update checks, self-replacement</td></tr>
+        </tbody>
+      </table>
+
+      <p><a href="architecture.html">Architecture</a> describes how the layers fit together and what
+      each one is allowed to know.</p>
+
+      <h2>Where to go next</h2>
+
+      <div class="grid">
+        <a class="card" href="install.html">
+          <span class="card__title">Install</span>
+          <span class="card__body">Build the binary from source. There is no installer yet.</span>
+        </a>
+        <a class="card" href="configuration.html">
+          <span class="card__title">Configuration</span>
+          <span class="card__body">Every key in <code>config.toml</code>, its type, and its default.</span>
+        </a>
+        <a class="card" href="keybindings.html">
+          <span class="card__title">Keybindings</span>
+          <span class="card__body">The eighteen default bindings and the chord syntax behind them.</span>
+        </a>
+        <a class="card" href="design.html">
+          <span class="card__title">Design</span>
+          <span class="card__body">Instrument: the palette, the type, and the rules that keep them honest.</span>
+        </a>
+        <a class="card" href="changelog.html">
+          <span class="card__title">Changelog</span>
+          <span class="card__body">What changed, newest first, and the first release.</span>
+        </a>
+        <a class="card" href="security.html">
+          <span class="card__title">Security</span>
+          <span class="card__body">How to report a vulnerability, and what is in scope.</span>
+        </a>
+      </div>
+
+      <h2>Not built yet</h2>
+
+      <p>The documentation states plainly what does not exist, because the status above is the
+      honest description of the code and a page that rounded it up would be worse than no page.</p>
+
+      <ul>
+        <li>No settings panel. The configuration file is read at launch; nothing in the binary writes it back.</li>
+        <li>No update checking. <code>zet-update</code> implements the whole path and nothing calls it, so the current build makes no network requests at all.</li>
+        <li>No kitty keyboard protocol. Key release and repeat are answered with nothing, because the legacy encoding has no byte for either.</li>
+        <li>No find bar and no settings screen behind the <code>find</code> and <code>settings</code> bindings, so those two keys currently do nothing.</li>
+        <li>No published installer and no published release. The Inno Setup script in <code>packaging/</code> builds one; nothing has shipped it.</li>
+      </ul>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>
