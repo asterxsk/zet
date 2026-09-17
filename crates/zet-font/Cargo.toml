@@ -1,0 +1,37 @@
+[package]
+name = "zet-font"
+description = "Font discovery, metrics, and glyph rasterisation for zet's grid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+zet-config.workspace = true
+
+# Two crates with two jobs. `fontique` is the database: what families are installed,
+# what does this family contain, and which face should answer for a character the
+# chosen one has never heard of. `swash` is the rasteriser: metrics in pixels and a
+# coverage bitmap for one glyph. They are separate dependencies because only the
+# second one is in the per-frame path, and keeping them apart is what makes it
+# obvious which half a slow frame is coming from.
+fontique.workspace = true
+swash.workspace = true
+
+# `fontique`'s fallback API is keyed by Unicode script, not by character — Windows
+# exposes no "which font draws this codepoint" call — so something has to answer
+# "what script is 中 in" before the system will help. This is that: a generated table
+# of the Unicode `Script` property, no dependencies, and the same data the browser and
+# every text engine use for the same decision.
+unicode-script.workspace = true
+
+thiserror.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

@@ -1,0 +1,21 @@
+[package]
+name = "zet-session"
+description = "One running terminal: a ConPTY child, its VT parser, and the grid it produces"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+zet-vt.workspace = true
+zet-pty.workspace = true
+thiserror.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

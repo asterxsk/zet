@@ -93,7 +93,9 @@ fn a_size_change_is_accepted_while_the_child_is_running() {
 #[test]
 fn typing_reaches_the_child() {
     // `cmd /k` stays alive and reads its input, which is what a real shell session does.
-    let mut pty = Pty::spawn(&SpawnConfig::new(cmd(), 80, 24).args(["/k", "prompt $g"]))
+    // Not `mut`: `write` takes `&self` now, which is the whole reason a keystroke can
+    // be sent while another thread is blocked reading the child.
+    let pty = Pty::spawn(&SpawnConfig::new(cmd(), 80, 24).args(["/k", "prompt $g"]))
         .expect("the session should start");
 
     // Wait for the banner so the write does not race the console attaching.

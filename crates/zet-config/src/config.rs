@@ -141,13 +141,20 @@ impl Default for FontSettings {
         // DESIGN.md fixes the grid face: Cascadia Mono, with Consolas behind it. Both
         // ship with Windows 11, so a fresh install has a working terminal before the
         // user has opened the settings panel.
+        //
+        // The emoji face comes before the symbol face deliberately, and the order was
+        // wrong until a test caught it. Segoe UI Symbol contains monochrome outlines
+        // for the same codepoints Segoe UI Emoji has colour glyphs for, so putting it
+        // first means 😀 is drawn as a grey blob by a font that was asked for a
+        // diamond. The emoji face covers nothing else — box drawing and the arrows
+        // come from the primary — so it costs the symbol face nothing to go second.
         Self {
             family: "Cascadia Mono".to_owned(),
             size: 13.0,
             fallback: vec![
                 "Consolas".to_owned(),
-                "Segoe UI Symbol".to_owned(),
                 "Segoe UI Emoji".to_owned(),
+                "Segoe UI Symbol".to_owned(),
             ],
         }
     }

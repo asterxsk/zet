@@ -346,7 +346,11 @@ impl Pty {
             console.close_pipes();
         }
 
-        while self.receiver().recv_timeout(Duration::from_millis(20)).is_ok() {}
+        while self
+            .receiver()
+            .recv_timeout(Duration::from_millis(20))
+            .is_ok()
+        {}
 
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
