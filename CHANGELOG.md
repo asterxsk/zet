@@ -154,6 +154,17 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     echoed back. The host does not carry the physical key, and claiming a feature that is not
     there is worse than the honest no that the protocol's set-then-query handshake exists to get.
 
+- **`zet`** — the icon is in the executable, and so is a version block.
+  - `packaging/zet.ico` was reaching the installer and nothing else: `zet.exe` had no
+    resource section at all, so the taskbar button, Alt-Tab, Explorer, and the Start Menu
+    shortcut all drew the generic Windows application icon. A resource is a section of the
+    PE file and has to be there before the linker is finished, so the only way in is a
+    build script — `crates/zet/build.rs`, which hands the file to `winresource`.
+  - The same section carries a version block, which is what Properties → Details reads:
+    product name, description, version, publisher, licence, and the repository URL. All of
+    it comes from the crate's own `Cargo.toml`, so none of it can drift from what
+    `zet --version` prints.
+
 ### Removed
 
 - **`zet-config`** — the `[update] check-on-launch` key, and the `[update]` section it lived in.

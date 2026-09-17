@@ -56,6 +56,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Registry",
 ] }
 
+# Build time only, and not used by any code in this crate. The icon and the version block
+# that Explorer, the taskbar, and the Properties dialog read live in the executable's
+# resource section, and a section has to be in the file before the linker is finished —
+# so the only thing that can put one there is a build script.
+[build-dependencies]
+winresource.workspace = true
+
 [lints.rust]
 # `deny` and not `forbid`, because two modules — `platform` and `clipboard` — call Win32
 # directly and Win32 is an unsafe API. A `forbid` cannot be relaxed by a nearer `allow`,

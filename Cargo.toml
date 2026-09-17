@@ -48,6 +48,13 @@ unicode-script = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 toml_edit = "0.25"
 
+# Build time only, and Windows only: writes `zet.ico` and a version block into the
+# executable's resource section, which is where Explorer, the taskbar and the Start Menu
+# shortcut read an application's icon and its publisher from. A build script is the only
+# way in — a resource is a section of the PE file, so it has to be there before the linker
+# is finished, and nothing at runtime can add one.
+winresource = "0.1"
+
 # A terminal is a latency-sensitive interactive program, so the release profile is
 # tuned for throughput rather than for compile time. panic = "abort" plus fat LTO
 # gives the renderer and the parser the best chance at inlining across crate lines.

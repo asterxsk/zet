@@ -284,6 +284,20 @@
         handshake exists to get.</li>
       </ul>
 
+      <h4>zet — the icon is in the executable, and so is a version block</h4>
+
+      <p><code>packaging/zet.ico</code> was reaching the installer and nothing else:
+      <code>zet.exe</code> had no resource section at all, so the taskbar button, Alt-Tab,
+      Explorer, and the Start Menu shortcut all drew the generic Windows application icon. A
+      resource is a section of the PE file and has to be there before the linker is finished, so
+      the only way in is a build script — <code>crates/zet/build.rs</code>, which hands the file
+      to <code>winresource</code>.</p>
+
+      <p>The same section carries a version block, which is what Properties → Details reads:
+      product name, description, version, publisher, licence, and the repository URL. All of it
+      comes from the crate's own <code>Cargo.toml</code>, so none of it can drift from what
+      <code>zet --version</code> prints.</p>
+
       <h3>Removed</h3>
 
       <h4>zet-config — the <code>[update] check-on-launch</code> key, and the <code>[update]</code> section it lived in</h4>

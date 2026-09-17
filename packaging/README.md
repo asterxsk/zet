@@ -119,6 +119,19 @@ The mark is the `#` from the tab strip, with a small square lit in `signal` at i
 centre. The preview sheet is written to `D:\Apps\tmp\zet\` and never into the repository,
 because the only reason to look at it is to decide whether to change the constants.
 
+The `.ico` reaches the places it is needed from two directions. Inno Setup names it with
+`SetupIconFile`, which covers the installer's own window and its entry in Apps & features.
+Everything else — the taskbar button, Alt-Tab, Explorer, and the Start Menu shortcut —
+reads it out of the **executable**, and that half is `crates/zet/build.rs`: it hands the
+file to `winresource`, which compiles a resource section containing the icon and a
+version block into `zet.exe` before the linker is finished. A resource cannot be added at
+runtime, which is why it takes a build script to do it.
+
+That script is also why `zet.exe` shows a version, a publisher, and a description in
+Properties → Details. Those fields are filled from the crate's own `Cargo.toml` rather
+than from a number written out twice, so they cannot drift from what `zet --version`
+prints.
+
 Note that the strokes thicken below 48px. That is optical sizing, not an inconsistency:
 a stroke that is correct at 256px renders at 1.5 pixels at 16px, which is below the
 width at which a line holds its colour, and the mark greys out in the size the taskbar
