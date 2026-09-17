@@ -1,0 +1,23 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Local tooling artifacts
+/.omo/
+/graft/
+/.impeccable/
+/.gstack/
+
+# Editor and OS noise
+/.vs/
+/.vscode/*
+!/.vscode/settings.json
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# Build and packaging output
+/dist/
+*.pdb
+*.ilk

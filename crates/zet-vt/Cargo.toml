@@ -1,0 +1,20 @@
+[package]
+name = "zet-vt"
+description = "zet's terminal emulation core: VT parser, screen grid, scrollback, and damage tracking"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bitflags.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

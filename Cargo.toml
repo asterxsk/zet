@@ -1,0 +1,39 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/asterxsk/zet"
+authors = ["asterxsk"]
+
+[workspace.dependencies]
+zet-vt = { path = "crates/zet-vt" }
+zet-config = { path = "crates/zet-config" }
+zet-pty = { path = "crates/zet-pty" }
+zet-render = { path = "crates/zet-render" }
+
+bitflags = "2.13"
+thiserror = "2.0"
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+
+# A terminal is a latency-sensitive interactive program, so the release profile is
+# tuned for throughput rather than for compile time. panic = "abort" plus fat LTO
+# gives the renderer and the parser the best chance at inlining across crate lines.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+# Dependencies are worth optimizing even in a debug build: the parser and the
+# windowing stack are what make a dev build feel slow, and rebuilding them is rare.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
