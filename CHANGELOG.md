@@ -114,16 +114,21 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
   - A property of the window rather than of its first tab: a window opened from "Open zet here"
     belongs to that folder, and a new tab in it that started somewhere else would be the
     surprising thing. The Windows installer registers a shell context menu that uses it.
-- **`zet`** — `--check-update` asks GitHub whether a newer version has been published.
-  - The manual half of the update check, and the only thing in the binary that touches the
-    network. It prints the answer and exits; it downloads nothing and changes nothing on disk, so
-    a check you did not act on costs one request and no more.
-  - It deliberately does not read the config file. `[update] check-on-launch` is about the check
-    zet makes *on its own*, and a flag the user typed is not that — which also means this works on
-    a machine whose config will not parse, exactly when someone might want it.
-  - A check that cannot be completed exits non-zero, so a script can tell "there is nothing newer"
-    from "there is no answer". Whether there *is* a newer version does not change the exit code:
-    this reports, it does not decide.
+- **`zet`** — `--check-update` and `--update`, which are the updater wired into the binary.
+  - `--check-update` asks GitHub whether a newer version has been published, prints the answer, and
+    exits. It downloads nothing and changes nothing on disk, so a check you did not act on costs
+    one request and no more. A check that cannot be completed exits non-zero, so a script can tell
+    "there is nothing newer" from "there is no answer"; whether there *is* a newer version does not
+    change the exit code, because this reports and does not decide.
+  - `--update` is the same check and then the install: download, digest check, replace the running
+    binary. Nothing is written until the download has matched the digest the release published, so
+    the worst case of a build that has gone wrong is a message and no file. Windows will not let a
+    running image be written to or deleted but will let it be *renamed*, which is the whole
+    mechanism — the new version takes effect the next time zet starts.
+  - Neither reads the config file. `[update] check-on-launch` is about the check zet makes *on its
+    own*, and a flag the user typed is not that — which also means both work on a machine whose
+    config will not parse, exactly when someone might want them. That check is still not written,
+    so the key remains one with nothing behind it.
 - **`packaging/`** — a per-user Windows installer and the icon it installs.
   - Inno Setup, installing to `%LOCALAPPDATA%\Programs\zet` with no elevation. Optional PATH
     entry, Start Menu shortcut, and "Open zet here" context menu.

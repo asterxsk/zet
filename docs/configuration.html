@@ -323,14 +323,18 @@ quit = "Ctrl+Shift+Q"</code></pre>
       defaults to <code>true</code>, which is the intent for the finished program.</p>
 
       <p>In the current build it makes no difference either way, because the check it gates is not
-      written and nothing reads the key. What does exist is the manual half:</p>
+      written and nothing reads the key. What does exist is the manual half, which is two flags:</p>
 
-<pre><code>zet --check-update</code></pre>
+<pre><code>zet --check-update
+zet --update</code></pre>
 
-      <p>That asks GitHub whether a newer version has been published and prints the answer. It
-      ignores this key, because the key is about the check zet makes <em>on its own</em> and a flag
-      you typed is not that. It downloads nothing and exits; installing what it finds means running
-      the installer again.</p>
+      <p>The first asks GitHub whether a newer version has been published and prints the answer; it
+      downloads nothing and changes nothing on disk. The second does the same check and then
+      installs what it finds — download, digest check, replace the running binary — with the new
+      version taking effect the next time zet starts.</p>
+
+      <p>Both ignore this key, because the key is about the check zet makes <em>on its own</em> and
+      a flag you typed is not that.</p>
 
 <pre><code>[update]
 check-on-launch = false</code></pre>

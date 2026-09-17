@@ -79,7 +79,8 @@
         engine and its own GPU renderer. It speaks the kitty keyboard protocol in both directions —
         the flag stack, the query, and the <code>CSI u</code> encoding, with <code>Report alternate
         keys</code> the one flag it does not implement. What is missing is the depth around that:
-        the update check exists as <code>zet --check-update</code> but does not yet run on launch.
+        the update check exists as <code>zet --check-update</code> and <code>zet --update</code>,
+        but does not yet run on launch.
         Nothing here is usable as a daily driver, and nothing here is worth installing.</p>
       </div>
 
@@ -164,7 +165,7 @@
       honest description of the code and a page that rounded it up would be worse than no page.</p>
 
       <ul>
-        <li>No update check on launch, and no way to install an update from inside zet. <code>zet --check-update</code> reports whether a newer version exists; getting it means running the installer again.</li>
+        <li>No update check on launch. <code>zet --check-update</code> reports whether a newer version exists and <code>zet --update</code> installs it, but both are commands you type; nothing checks on its own yet.</li>
         <li>No <code>Report alternate keys</code>. The rest of the kitty keyboard protocol is there; this flag is dropped rather than echoed, because the host does not carry the physical key.</li>
         <li>No published installer and no published release. The Inno Setup script in <code>packaging/</code> builds one; nothing has shipped it.</li>
       </ul>

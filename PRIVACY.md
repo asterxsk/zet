@@ -29,13 +29,18 @@ connections are theirs, not zet's. zet does not inspect, log, or forward them.
 
 ## The update check
 
-**Partly implemented.** `zet --check-update` makes this request today, and it is the only way to
-make it: the automatic check on launch is still to come, so `[update] check_on_launch` below has
-nothing to turn off yet. What is described here is the whole of the intent, published so that the
-request is described before it is made rather than after.
+**Partly implemented.** `zet --check-update` and `zet --update` make this request today, and they
+are the only way to make it: the automatic check on launch is still to come, so
+`[update] check_on_launch` below has nothing to turn off yet. What is described here is the whole
+of the intent, published so that the request is described before it is made rather than after.
 
 **What it is.** `zet --check-update` asks GitHub whether a newer version has been published and
 prints the answer. It makes no other request, downloads nothing, and changes nothing on disk.
+
+`zet --update` is the same check and then the download: if there is a newer version for this
+machine it fetches the archive, checks it against the digest the release published, and puts it
+where the running binary is. The new version takes effect the next time zet starts. Nothing is
+written until the download has matched its published digest.
 
 **What it will be.** The same request, made once on launch, when `[update] check-on-launch` is
 left at its default of `true`. That is the one request zet would make on its own.
@@ -59,10 +64,10 @@ contents, command history, or a list of installed shells. There is no analytics 
 [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement).
 GitHub is an independent controller for this data; we do not receive it and cannot retrieve it.
 
-**Downloads.** If you accept an update, the release archive is downloaded from
-`github.com` / `objects.githubusercontent.com`. The same disclosure applies. **Nothing downloads
-anything today.** There is no install path in the binary and no way to accept an update from
-inside zet; a new version is installed by running the installer again.
+**Downloads.** When you run `zet --update` and there is something to install, the release archive
+is downloaded from `github.com` / `objects.githubusercontent.com`. The same disclosure applies.
+Nothing else in zet downloads anything, and nothing is ever downloaded without you typing that
+command.
 
 **Turning it off.** Once the launch check exists, it will be disabled in `config.toml`:
 
@@ -71,14 +76,14 @@ inside zet; a new version is installed by running the installer again.
 check_on_launch = false
 ```
 
-With that set, zet would make no request on its own, and `zet --check-update` would remain the
-only way to make one — a request you asked for by name.
+With that set, zet would make no request on its own, and `zet --check-update` and `zet --update`
+would remain the only ways to make one — requests you asked for by name.
 
 **That is the state today, minus the check.** The key exists and is read by nothing: no code
 path in the binary consults it, because the launch check it gates is not written. The binary
-accepts `-d`/`--directory`, `-h`/`--help`, `-V`/`--version`, and `--check-update`, and refuses
-any other argument by name. The settings panel has no update row. So the only request zet can
-make is one you typed.
+accepts `-d`/`--directory`, `-h`/`--help`, `-V`/`--version`, `--check-update`, and `--update`,
+and refuses any other argument by name. The settings panel has no update row. So the only request
+zet can make is one you typed, and the only file it will rewrite is its own binary.
 
 ## What zet writes to your disk
 
@@ -86,11 +91,13 @@ make is one you typed.
 |---|---|---|
 | `%APPDATA%\zet\config.toml` | Your settings: theme, font, shell profiles, keybindings | To remember your configuration |
 | `%LOCALAPPDATA%\zet\logs\` | Diagnostic logs, if you enable them. Off by default | To help you diagnose a problem you report |
-| `%LOCALAPPDATA%\zet\cache\` | Downloaded update archives before they are applied | To stage an update |
+| Beside `zet.exe` | An update, while it is being put in place: the verified download as `zet.exe.new`, then the binary it replaced as `zet.exe.old` | To replace a running binary, which Windows allows only by renaming it |
 
-Only the first two rows are in use so far: the settings panel writes `config.toml` back as you
-change a setting, and no log or update code is wired in. The cache row is what the finished
-program will use, listed here so that the directory is known before it appears.
+The logs row is not in use: nothing writes a log. The update row is, when you run `zet --update`.
+The new binary has to be staged beside the running one rather than in a cache directory, because
+a rename across volumes is a copy and a delete — neither atomic nor able to replace an open file
+— and the displaced `zet.exe.old` is deleted the next time zet starts, by which point nothing is
+holding it.
 
 zet does not read files outside those directories and the ones you point it at — for example a
 theme file you choose, or a working directory you open.

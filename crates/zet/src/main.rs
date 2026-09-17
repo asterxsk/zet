@@ -41,12 +41,14 @@ zet — a terminal for Windows, built around the grid
 USAGE:
     zet [--directory <path>]
     zet --check-update
+    zet --update
 
 OPTIONS:
     -d, --directory <path>    Start the shell in this directory
     -h, --help                Print this
     -V, --version             Print the version
         --check-update        Ask GitHub whether a newer version has been published
+        --update              Download it, verify it, and put it where this binary is
 
 `--directory` is not a setting and nothing else here is one either. Everything zet can
 be configured to do is in its config file — the key bindings, the theme, the font, and
@@ -55,10 +57,13 @@ comment by comment, so the two can never disagree. The directory is not a settin
 is where you were standing when you typed the command: it is what the folder right-click
 menu passes, and it applies to every tab the window opens.
 
-`--check-update` is the one thing here that touches the network, and it is the only flag
-that does not start a terminal. Nothing else in zet makes a request on its own: the
-launch check that `[update] check-on-launch` is written for is not wired in yet, so this
-is the only way to make zet ask. See PRIVACY.md for what the request discloses.";
+`--check-update` and `--update` are the only things here that touch the network, and the
+only flags that do not start a terminal. Nothing else in zet makes a request on its own:
+the launch check that `[update] check-on-launch` is written for is not wired in yet, so
+typing one of these is the only way to make zet ask. `--update` is the same check plus
+the download, the digest check, and the replacement — nothing is written until the
+download has matched the digest the release published, and the new version takes effect
+the next time zet starts rather than now. See PRIVACY.md for what the requests disclose.";
 
 fn main() -> ExitCode {
     match parse(std::env::args().skip(1)) {
@@ -75,6 +80,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Args::CheckUpdate => check_update(),
+        Args::Update => update(),
         Args::Bad(reason) => {
             eprintln!("zet: {reason}");
             eprintln!("{USAGE}");
@@ -94,6 +100,8 @@ enum Args {
     Version,
     /// Ask whether a newer version has been published.
     CheckUpdate,
+    /// Download the newest version and put it where the running binary is.
+    Update,
     /// Something zet does not understand, and why.
     Bad(String),
 }
@@ -116,6 +124,7 @@ fn parse(mut arguments: impl Iterator<Item = String>) -> Args {
             "-h" | "--help" => return Args::Help,
             "-V" | "--version" => return Args::Version,
             "--check-update" => return Args::CheckUpdate,
+            "--update" => return Args::Update,
             "-d" | "--directory" => {
                 let Some(path) = arguments.next() else {
                     return Args::Bad(format!("`{argument}` needs a directory after it"));
@@ -168,6 +177,65 @@ fn check_report(newer: Option<&str>) -> String {
             zet_update::DEFAULT_REPO,
         ),
     }
+}
+
+/// Download the newest release, verify it, and put it where the running binary is.
+///
+/// Unlike [`check_update`], this one does change something on disk, and what it changes is
+/// the executable that is currently running. Windows will not let a running image be
+/// written to or deleted but will let it be *renamed*, which is the whole mechanism: the
+/// old binary is moved aside, the new one takes the name, and the displaced copy is
+/// deleted on the next launch, by which point nothing is holding it. This process keeps
+/// running from the image it already has, so **the new version takes effect the next time
+/// zet starts**.
+///
+/// Typing the flag is the confirmation. Nothing is downloaded until the check has said
+/// there is a newer version for this target, and nothing is written until the download has
+/// matched the digest the release published — so the worst case of a build that has gone
+/// wrong is a message and no file.
+fn update() -> ExitCode {
+    let checker = zet_update::Checker::new(zet_update::Http::default(), zet_update::DEFAULT_REPO);
+    let found = match checker.check() {
+        Ok(found) => found,
+        Err(error) => {
+            eprintln!("zet: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(update) = found else {
+        print!("{}", check_report(None));
+        return ExitCode::SUCCESS;
+    };
+
+    // Reported before the download rather than after it, because it is a megabyte and a
+    // half of someone else's bandwidth and a line saying what is being fetched is the
+    // difference between waiting and wondering.
+    println!("zet {} is available; downloading it", update.version());
+    match update.install(&zet_update::Http::default()) {
+        Ok(_) => {
+            print!("{}", install_report(&update.version().to_string()));
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            // The old binary is still in place unless the error says otherwise: the
+            // install moves it aside only after the new one is verified, and puts it back
+            // if the second move fails.
+            eprintln!("zet: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// What to print once a new binary is in place.
+///
+/// The path is printed because this is the one operation in the program that rewrites a
+/// file the user owns, and where it landed is the first thing anyone would want to check.
+fn install_report(version: &str) -> String {
+    let at = std::env::current_exe().map_or_else(
+        |_| "where zet is".to_owned(),
+        |path| path.display().to_string(),
+    );
+    format!("zet {version} is installed at {at}; it takes effect the next time zet starts\n")
 }
 
 /// Start the terminal, and say why if it cannot.
@@ -310,7 +378,18 @@ mod tests {
         // It has no short form on purpose: `-c` reads like `--config` or `--continue`,
         // and this is the one flag here that makes a network request.
         assert!(matches!(args(&["--check-update"]), Args::CheckUpdate));
+        assert!(matches!(args(&["--update"]), Args::Update));
         assert!(matches!(args(&["-c"]), Args::Bad(_)));
+    }
+
+    #[test]
+    fn installing_says_where_it_put_the_binary() {
+        // The path is the point of this line. An update rewrites a file the user owns, and
+        // "where did it go" is the first question anyone would ask of a command that did.
+        let line = install_report("9.9.9");
+        assert!(line.contains("zet 9.9.9 is installed at"), "{line}");
+        assert!(line.contains("next time zet starts"), "{line}");
+        assert_eq!(line.lines().count(), 1);
     }
 
     #[test]
@@ -367,7 +446,13 @@ mod tests {
         // Kept in step by hand, so the list of flags is written down twice in one file
         // and the second copy is a test. A flag that exists but is undocumented is the
         // one a user cannot find.
-        for flag in ["--help", "--version", "--directory", "--check-update"] {
+        for flag in [
+            "--help",
+            "--version",
+            "--directory",
+            "--check-update",
+            "--update",
+        ] {
             assert!(USAGE.contains(flag), "{flag} is missing from the usage");
         }
     }
