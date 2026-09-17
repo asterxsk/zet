@@ -29,7 +29,7 @@
 //! out, because the gaps are real: `CSI 16~` is not F6 and no terminal sends it.
 //! F21 through F24 have no entry in it at all — see [`function`].
 
-use zet_vt::{Modes, MouseEncoding, MouseMode};
+use zet_vt::{KeyboardFlags, Modes, MouseEncoding, MouseMode};
 
 use crate::chord::{Key, Modifiers};
 use crate::key::{KeyEvent, KeyKind};
@@ -47,9 +47,19 @@ const ESC: u8 = 0x1b;
 /// and that never had a byte of their own. A host that treats `None` as an error
 /// will drop the keystroke twice.
 ///
-/// The modifiers are read from the event and the text is not; [`KeyEvent`] says why.
+/// The text is read for one thing and one thing only, and only when a program has
+/// asked for it by name: the kitty protocol's associated-text field. [`KeyEvent`]
+/// says why it is otherwise kept off this path.
 #[must_use]
 pub fn encode_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
+    // A program that asked for the kitty keyboard protocol gets what it asked for.
+    // This is not a second spelling of the same bytes: under the protocol a release
+    // exists at all, a repeat is told apart from a press, and Escape stops being a
+    // byte a program has to guess about with a timer.
+    if let Some(bytes) = kitty_key(event, modes) {
+        return Some(bytes);
+    }
+
     // A key going up has no byte in legacy VT, so a release produces none. A key
     // repeating does, and it is the byte its press produces, because a repeat *is* a
     // press as far as the wire is concerned: the keyboard is held down and the
@@ -59,8 +69,8 @@ pub fn encode_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
     // Backspace deletes exactly one character.
     //
     // The kind is still kept distinct in [`KeyKind`], because the kitty protocol can
-    // express it and is the reason the host tracks it at all; this encoder is simply
-    // not the one that can.
+    // express it and is the reason the host tracks it at all; the branch above is the
+    // one that does, and this one is the encoding that cannot.
     if event.kind == KeyKind::Release {
         return None;
     }
@@ -84,26 +94,35 @@ pub fn encode_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
 }
 
 /// The keys whose modifiers travel inside the sequence.
+///
+/// This is also exactly the set the kitty protocol reports in that form rather than
+/// in its `CSI u` form, which is not a coincidence: the protocol's own table gives
+/// the up arrow as `CSI 1 A` and Insert as `CSI 2 ~`, the sequences these keys have
+/// had for forty years. See [`kitty_key`].
 fn parameterised_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
-    let m = modifier_param(event.mods);
+    let p = Params::plain(modifier_param(event.mods));
     match event.key {
-        Key::Up => Some(cursor(b'A', m, modes)),
-        Key::Down => Some(cursor(b'B', m, modes)),
-        Key::Right => Some(cursor(b'C', m, modes)),
-        Key::Left => Some(cursor(b'D', m, modes)),
-        Key::Home => Some(cursor(b'H', m, modes)),
-        Key::End => Some(cursor(b'F', m, modes)),
-        Key::Insert => Some(tilde(2, m)),
-        Key::Delete => Some(tilde(3, m)),
-        Key::PageUp => Some(tilde(5, m)),
-        Key::PageDown => Some(tilde(6, m)),
-        Key::Tab if event.mods.contains(Modifiers::SHIFT) => Some(back_tab(m)),
-        Key::F(n) => function(n, m),
+        Key::Up => Some(cursor(b'A', p, modes)),
+        Key::Down => Some(cursor(b'B', p, modes)),
+        Key::Right => Some(cursor(b'C', p, modes)),
+        Key::Left => Some(cursor(b'D', p, modes)),
+        Key::Home => Some(cursor(b'H', p, modes)),
+        Key::End => Some(cursor(b'F', p, modes)),
+        Key::Insert => Some(tilde(2, p)),
+        Key::Delete => Some(tilde(3, p)),
+        Key::PageUp => Some(tilde(5, p)),
+        Key::PageDown => Some(tilde(6, p)),
+        Key::Tab if event.mods.contains(Modifiers::SHIFT) => Some(back_tab(p)),
+        Key::F(n) => function(n, p),
         _ => None,
     }
 }
 
 /// The value of xterm's `<m>` parameter for a set of modifiers.
+///
+/// The kitty protocol's modifier bit field is this number minus one — the two agree
+/// on the encoding down to the bit assignments — so this is also what the protocol's
+/// sequences carry, and the two callers do not need their own copies.
 fn modifier_param(mods: Modifiers) -> u8 {
     let mut m = 1;
     if mods.contains(Modifiers::SHIFT) {
@@ -121,12 +140,48 @@ fn modifier_param(mods: Modifiers) -> u8 {
     m
 }
 
+/// The parameter a key's sequence carries, and the event type when one is reported.
+///
+/// The kitty protocol puts its event type in a sub-field of the modifier parameter,
+/// so a sequence that has to say "this key came up" is the same sequence with a
+/// colon and a 3 in it. Everything that writes one of those sequences takes this
+/// rather than the bare number, because there is one place that decides when the
+/// parameter can be left out and it is not the same place for every key.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Params {
+    /// `1 +` the modifiers held.
+    m: u8,
+    /// The kitty event type: 2 for a repeat, 3 for a release. `None` for a press,
+    /// which the protocol makes the default and leaves out of the sequence.
+    event: Option<u8>,
+}
+
+impl Params {
+    /// The parameter for the legacy encoding, which has no event types at all.
+    const fn plain(m: u8) -> Self {
+        Self { m, event: None }
+    }
+
+    /// Whether the parameter can be left out of the sequence entirely.
+    ///
+    /// Several of these keys have a shorter form when it can be: `SS3 A` for an
+    /// unmodified up arrow, `CSI Z` for Shift+Tab. A sequence that has to carry an
+    /// event type has nowhere to put it in the short form, so it takes the long one.
+    const fn is_default(self) -> bool {
+        self.m == 1 && self.event.is_none()
+    }
+}
+
 /// `CSI 1;<m><final>`, the parameter form of a cursor key or a shifted tab.
-fn parameterised(lead: u16, m: u8, final_byte: u8) -> Vec<u8> {
+fn parameterised(lead: u16, p: Params, final_byte: u8) -> Vec<u8> {
     let mut out = vec![ESC, b'['];
     out.extend_from_slice(lead.to_string().as_bytes());
     out.push(b';');
-    out.extend_from_slice(m.to_string().as_bytes());
+    out.extend_from_slice(p.m.to_string().as_bytes());
+    if let Some(event) = p.event {
+        out.push(b':');
+        out.extend_from_slice(event.to_string().as_bytes());
+    }
     out.push(final_byte);
     out
 }
@@ -138,24 +193,24 @@ fn parameterised(lead: u16, m: u8, final_byte: u8) -> Vec<u8> {
 /// application-mode prefix has no room for a parameter, and xterm does not try to
 /// keep it, which is why a program that enabled application cursor keys still
 /// receives `CSI` for Shift+Left.
-fn cursor(final_byte: u8, m: u8, modes: &Modes) -> Vec<u8> {
-    if m == 1 {
+fn cursor(final_byte: u8, p: Params, modes: &Modes) -> Vec<u8> {
+    if p.is_default() {
         let lead = if modes.app_cursor_keys { b'O' } else { b'[' };
         vec![ESC, lead, final_byte]
     } else {
-        parameterised(1, m, final_byte)
+        parameterised(1, p, final_byte)
     }
 }
 
 /// `CSI <n>~` and its parameter form, for the editing keypad and F5 upward.
-fn tilde(n: u16, m: u8) -> Vec<u8> {
-    if m == 1 {
+fn tilde(n: u16, p: Params) -> Vec<u8> {
+    if p.is_default() {
         let mut out = vec![ESC, b'['];
         out.extend_from_slice(n.to_string().as_bytes());
         out.push(b'~');
         out
     } else {
-        parameterised(n, m, b'~')
+        parameterised(n, p, b'~')
     }
 }
 
@@ -164,11 +219,11 @@ fn tilde(n: u16, m: u8) -> Vec<u8> {
 /// Plain Shift keeps xterm's short `CSI Z`, which is what readline's `backward-tab`
 /// and every completion menu in existence look for, even though it sits oddly next
 /// to `CSI 1;2Z` for Shift+Alt+Tab. The short form is the one in the wild.
-fn back_tab(m: u8) -> Vec<u8> {
-    if m == 2 {
+fn back_tab(p: Params) -> Vec<u8> {
+    if p.m == 2 && p.event.is_none() {
         vec![ESC, b'[', b'Z']
     } else {
-        parameterised(1, m, b'Z')
+        parameterised(1, p, b'Z')
     }
 }
 
@@ -185,38 +240,38 @@ fn back_tab(m: u8) -> Vec<u8> {
 /// would collide with this crate's own modifier handling and has no terminfo entry
 /// behind it. Named keys a user cannot bind are a gap worth stating; invented bytes
 /// are a bug worth not shipping.
-fn function(n: u8, m: u8) -> Option<Vec<u8>> {
+fn function(n: u8, p: Params) -> Option<Vec<u8>> {
     match n {
-        1 => Some(function_ss3(b'P', m)),
-        2 => Some(function_ss3(b'Q', m)),
-        3 => Some(function_ss3(b'R', m)),
-        4 => Some(function_ss3(b'S', m)),
-        5 => Some(tilde(15, m)),
-        6 => Some(tilde(17, m)),
-        7 => Some(tilde(18, m)),
-        8 => Some(tilde(19, m)),
-        9 => Some(tilde(20, m)),
-        10 => Some(tilde(21, m)),
-        11 => Some(tilde(23, m)),
-        12 => Some(tilde(24, m)),
-        13 => Some(tilde(25, m)),
-        14 => Some(tilde(26, m)),
-        15 => Some(tilde(28, m)),
-        16 => Some(tilde(29, m)),
-        17 => Some(tilde(31, m)),
-        18 => Some(tilde(32, m)),
-        19 => Some(tilde(33, m)),
-        20 => Some(tilde(34, m)),
+        1 => Some(function_ss3(b'P', p)),
+        2 => Some(function_ss3(b'Q', p)),
+        3 => Some(function_ss3(b'R', p)),
+        4 => Some(function_ss3(b'S', p)),
+        5 => Some(tilde(15, p)),
+        6 => Some(tilde(17, p)),
+        7 => Some(tilde(18, p)),
+        8 => Some(tilde(19, p)),
+        9 => Some(tilde(20, p)),
+        10 => Some(tilde(21, p)),
+        11 => Some(tilde(23, p)),
+        12 => Some(tilde(24, p)),
+        13 => Some(tilde(25, p)),
+        14 => Some(tilde(26, p)),
+        15 => Some(tilde(28, p)),
+        16 => Some(tilde(29, p)),
+        17 => Some(tilde(31, p)),
+        18 => Some(tilde(32, p)),
+        19 => Some(tilde(33, p)),
+        20 => Some(tilde(34, p)),
         _ => None,
     }
 }
 
 /// `SS3 <final>`, or `CSI 1;<m><final>` once a modifier has to be carried.
-fn function_ss3(final_byte: u8, m: u8) -> Vec<u8> {
-    if m == 1 {
+fn function_ss3(final_byte: u8, p: Params) -> Vec<u8> {
+    if p.is_default() {
         vec![ESC, b'O', final_byte]
     } else {
-        parameterised(1, m, final_byte)
+        parameterised(1, p, final_byte)
     }
 }
 
@@ -291,6 +346,346 @@ fn control_byte(ch: char) -> Option<u8> {
         '?' => Some(0x7f),
         _ => None,
     }
+}
+
+// ---- the kitty keyboard protocol ---------------------------------------------
+//
+// Everything below is one protocol, and it is worth saying at the top what it is
+// for, because the escape codes it produces look arbitrary until you know. A
+// terminal has to send keys as bytes, and the bytes it has to send them as were
+// chosen when there was no way to say anything else: Escape *is* the byte that
+// starts an escape sequence, `Ctrl+I` is the byte for Tab, and a key going up has
+// no byte at all. Every terminal program of the last forty years has had to guess
+// around that, usually with a timer that waits to see whether anything follows a
+// lone 0x1b.
+//
+// The protocol fixes it by giving every key a canonical escape code of its own.
+// A program opts in by name, in stages, and a terminal that speaks it reports what
+// it was asked for and nothing more — which is why every function here has a
+// condition on it rather than a single branch at the top.
+
+/// The escape code a key event has under the kitty keyboard protocol, or `None` when
+/// the protocol leaves the key to the legacy encoding.
+///
+/// `None` is the common answer and not a failure. Under this protocol the legacy
+/// bytes are the *correct* bytes for most keys: the protocol's own table gives the
+/// up arrow `CSI 1 A` and Insert `CSI 2 ~`, which is what the legacy encoder already
+/// sends, and the specification says a terminal should use whatever its terminfo
+/// entry says for those keys. What the protocol adds is a way to say the things the
+/// legacy bytes cannot — a release, a repeat, an Escape that is not the start of a
+/// sequence — and those are what this produces.
+fn kitty_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
+    let flags = modes.keyboard;
+    if flags.is_empty() {
+        return None;
+    }
+
+    let typed = flags.contains(KeyboardFlags::EVENT_TYPES);
+    // A key going up has no legacy byte and never had one, so a release exists only
+    // where a program asked for event types. A repeat does have one — it is the
+    // byte its press produces — but only inside the protocol is it told apart from
+    // one, so without the flag it falls through and is sent as a press.
+    if event.kind == KeyKind::Release && !typed {
+        return None;
+    }
+
+    let p = Params {
+        m: modifier_param(event.mods),
+        event: event_type(event.kind, typed),
+    };
+
+    // A key the protocol reports in a sequence — an arrow, the editing keypad, a
+    // function key up to F12 — keeps the one it already has, because that sequence is
+    // the protocol's own table entry for it and not a legacy stand-in: the table
+    // gives the up arrow `CSI 1 A` and Insert `CSI 2 ~`, which is what every terminal
+    // has sent for forty years. So the bytes do not change, and the only thing that
+    // can bring us here is an event type that has to be written into them.
+    if sequence_form(event.key) {
+        return p.event.map(|_| parameterised_form(event, p));
+    }
+
+    // Everything else is a key that produces text, or one the protocol numbers. It is
+    // reported as an escape code when a flag moves it there — and a key with no
+    // legacy bytes at all is already there, which is why `numbered` is a reason on
+    // its own rather than a condition on the others.
+    let all = flags.contains(KeyboardFlags::ALL_KEYS);
+    let numbered = key_code(event.key).is_some() && !has_legacy_bytes(event.key);
+    let escaped = all
+        || numbered
+        || (flags.contains(KeyboardFlags::DISAMBIGUATE) && ambiguous(event));
+
+    if !escaped && p.event.is_none() {
+        return None;
+    }
+
+    Some(csi_u(
+        key_code(event.key)?,
+        p,
+        kitty_text(event, flags, all),
+    ))
+}
+
+/// Whether the protocol reports a key in a sequence rather than giving it a code
+/// point of its own.
+///
+/// This is the protocol's functional-key table read the other way round: the keys it
+/// lists with a `CSI` sequence are these. F13 upward are deliberately not among them,
+/// even though [`function`] has tilde sequences for F13 through F20 out of xterm's
+/// table — the protocol's table numbers them in the private use area instead, and a
+/// program that opted into the protocol is reading that table and not xterm's.
+fn sequence_form(key: Key) -> bool {
+    matches!(
+        key,
+        Key::Up
+            | Key::Down
+            | Key::Right
+            | Key::Left
+            | Key::Home
+            | Key::End
+            | Key::Insert
+            | Key::Delete
+            | Key::PageUp
+            | Key::PageDown
+            | Key::F(1..=12)
+    )
+}
+
+/// Whether the legacy encoding has bytes of its own for a key the protocol numbers.
+///
+/// The four the protocol keeps the control codes of, and every key that produces a
+/// character: those are what the legacy encoder sends, and it takes a flag to move
+/// them off it. The rest of the numbered keys — the locks, Print Screen, Pause, Menu,
+/// F13 upward — have nothing behind them, so the protocol's number is the only thing
+/// there is to send and no flag is needed to prefer it.
+fn has_legacy_bytes(key: Key) -> bool {
+    matches!(key, Key::Escape | Key::Enter | Key::Tab | Key::Backspace)
+        || character_of(key).is_some()
+}
+
+/// Whether the protocol says a key must be reported as an escape code rather than as
+/// the bytes it would produce on its own.
+///
+/// The protocol names five cases: Escape, alt+key, ctrl+key, ctrl+alt+key, and
+/// shift+alt+key. What they have in common is that the bytes the key would otherwise
+/// produce are bytes that mean something else — `alt+[` produces the two bytes that
+/// begin a CSI sequence, and Escape produces the one byte that *is* a sequence's
+/// first byte. Shift is not among them: `A` cannot be mistaken for anything, so it
+/// is still sent as text.
+///
+/// Enter, Tab, and Backspace are excepted by name on top of that, and the reason is
+/// worth keeping: a program that set the flag and then crashed without clearing it
+/// would otherwise leave a terminal whose Enter key does not produce a newline, and
+/// the user could not type `reset` to get out.
+fn ambiguous(event: &KeyEvent) -> bool {
+    match event.key {
+        Key::Enter | Key::Tab | Key::Backspace => false,
+        Key::Escape => true,
+        _ => event.mods.contains(Modifiers::ALT) || event.mods.contains(Modifiers::CTRL),
+    }
+}
+
+/// The event type sub-field's value, or `None` for a press.
+///
+/// A press is the protocol's default and is left out rather than spelled as `1`,
+/// which is what makes a sequence from a program that asked for event types and one
+/// from a program that did not byte-identical for the common case.
+const fn event_type(kind: KeyKind, typed: bool) -> Option<u8> {
+    if !typed {
+        return None;
+    }
+    match kind {
+        KeyKind::Press => None,
+        KeyKind::Repeat => Some(2),
+        KeyKind::Release => Some(3),
+    }
+}
+
+/// The sequence for a key that carries its modifiers as a CSI parameter, with the
+/// event type written into it.
+///
+/// The parameter is always present here even when nothing is held, because the event
+/// type is a sub-field of it and a sub-field needs a field to be a sub-field of.
+/// That is also why this does not go through [`cursor`] or [`tilde`]: their short
+/// forms — `SS3 A`, `CSI 2 ~` — have nowhere to put it.
+fn parameterised_form(event: &KeyEvent, p: Params) -> Vec<u8> {
+    let (lead, final_byte) = match event.key {
+        Key::Up => (1, b'A'),
+        Key::Down => (1, b'B'),
+        Key::Right => (1, b'C'),
+        Key::Left => (1, b'D'),
+        Key::Home => (1, b'H'),
+        Key::End => (1, b'F'),
+        Key::Insert => (2, b'~'),
+        Key::Delete => (3, b'~'),
+        Key::PageUp => (5, b'~'),
+        Key::PageDown => (6, b'~'),
+        // F1 through F4 are the `SS3` keys, and `CSI 1;<m>P` is what their parameter
+        // form has always been. F5 upward are the tilde table.
+        Key::F(n) if n <= 4 => (1, b"PQRS"[usize::from(n) - 1]),
+        Key::F(n) => (function_tilde(n).unwrap_or(1), b'~'),
+        // `sequence_form` is the only caller and it admits nothing else, so this is
+        // unreachable rather than a case to guess at.
+        _ => (1, b'~'),
+    };
+    parameterised(lead, p, final_byte)
+}
+
+/// The number in `CSI <n>~` for a function key from F5 upward, or `None` for one the
+/// table does not reach.
+///
+/// The same table [`function`] uses, and the reason it is a function rather than a
+/// second match: the two must agree, and a key reported under the protocol with a
+/// different number from the one reported without it is a key two programs disagree
+/// about.
+fn function_tilde(n: u8) -> Option<u16> {
+    Some(match n {
+        5 => 15,
+        6 => 17,
+        7 => 18,
+        8 => 19,
+        9 => 20,
+        10 => 21,
+        11 => 23,
+        12 => 24,
+        13 => 25,
+        14 => 26,
+        15 => 28,
+        16 => 29,
+        17 => 31,
+        18 => 32,
+        19 => 33,
+        20 => 34,
+        _ => return None,
+    })
+}
+
+/// The code point the protocol names a key by.
+///
+/// Most of these are in the Unicode private use area, because a key like Print
+/// Screen has no character and the protocol needs a number for it that cannot
+/// collide with one. The four that are not are Escape, Enter, Tab, and Backspace,
+/// which keep the control codes they have always had — the same exception
+/// [`ambiguous`] makes, for the same reason, and the protocol's table lists them
+/// that way too.
+///
+/// `None` for a key the protocol has no number for. That is a key whose sequence
+/// carries its modifiers instead, and the arithmetic of *that* is
+/// [`parameterised_form`]'s; it is also the handful of named keys a user can bind and
+/// nothing can type.
+fn key_code(key: Key) -> Option<u32> {
+    Some(match key {
+        Key::Escape => 27,
+        Key::Enter => 13,
+        Key::Tab => 9,
+        Key::Backspace => 127,
+        // F1 through F12 have a sequence of their own and never reach here. F13
+        // upward have no sequence in the legacy table at all — which is the gap
+        // [`function`] documents — and the protocol is where they become usable:
+        // its table numbers them from here.
+        Key::F(n) => match n {
+            13..=35 => 57_376 + (u32::from(n) - 13),
+            _ => return None,
+        },
+        Key::CapsLock => 57_358,
+        Key::ScrollLock => 57_359,
+        Key::NumLock => 57_360,
+        Key::PrintScreen => 57_361,
+        Key::Pause => 57_362,
+        Key::Menu => 57_363,
+        _ => u32::from(unshifted(character_of(key)?)),
+    })
+}
+
+/// The unshifted form of a character, which is the one the protocol names the key by.
+///
+/// The protocol is explicit that the code is the key *before* shift: a program
+/// matching a shortcut for `ctrl+shift+a` looks for the code of `a`, and a terminal
+/// that sends the code of `A` hands it a chord it will never match. The host passes
+/// on the key the layout produced, which under shift is the shifted character, so the
+/// shift has to come back off here — and only here, because the bytes the legacy
+/// encoding sends are the shifted ones and have to stay that way.
+///
+/// Letters are exact and the same on every layout: shift on a letter is its upper
+/// case wherever there are letters. The rest is the pairing the protocol was defined
+/// against, the digits and the punctuation above them on a PC-101 keyboard, which is
+/// what every other terminal sends. A character in neither table is sent as itself,
+/// which is the right answer for every key shift does not move.
+fn unshifted(ch: char) -> char {
+    if ch.is_ascii_uppercase() {
+        return ch.to_ascii_lowercase();
+    }
+    match ch {
+        '!' => '1',
+        '@' => '2',
+        '#' => '3',
+        '$' => '4',
+        '%' => '5',
+        '^' => '6',
+        '&' => '7',
+        '*' => '8',
+        '(' => '9',
+        ')' => '0',
+        '_' => '-',
+        '+' => '=',
+        '{' => '[',
+        '}' => ']',
+        '|' => '\\',
+        ':' => ';',
+        '"' => '\'',
+        '<' => ',',
+        '>' => '.',
+        '?' => '/',
+        '~' => '`',
+        _ => ch,
+    }
+}
+
+/// The code points of the text a key produced, when the program asked for them.
+///
+/// The flag is only meaningful alongside [`KeyboardFlags::ALL_KEYS`], and asking for
+/// it is the one thing that makes this crate read [`KeyEvent::text`] at all: the text
+/// rides inside the escape code, which a program only parses because it asked, rather
+/// than being sent as bytes that a shell would take for typing. A key with no text —
+/// an arrow, a function key — gets no field rather than an empty one.
+fn kitty_text(event: &KeyEvent, flags: KeyboardFlags, all: bool) -> Option<Vec<u32>> {
+    if !all || !flags.contains(KeyboardFlags::ASSOCIATED_TEXT) {
+        return None;
+    }
+    let text = event.text.as_deref()?;
+    let points: Vec<u32> = text.chars().map(u32::from).collect();
+    (!points.is_empty()).then_some(points)
+}
+
+/// `CSI <code> ; <mods> ; <text> u`, with each field left out when it has nothing to
+/// say.
+fn csi_u(code: u32, p: Params, text: Option<Vec<u32>>) -> Vec<u8> {
+    let mut out = vec![ESC, b'['];
+    out.extend_from_slice(code.to_string().as_bytes());
+    if text.is_some() && p.is_default() {
+        // A field cannot be written without the one before it. `;1` says what an
+        // absent modifier field says — no modifiers, a press — so the text has a
+        // place to sit.
+        out.push(b';');
+        out.push(b'1');
+    } else if !p.is_default() {
+        out.push(b';');
+        out.extend_from_slice(p.m.to_string().as_bytes());
+        if let Some(event) = p.event {
+            out.push(b':');
+            out.extend_from_slice(event.to_string().as_bytes());
+        }
+    }
+    if let Some(text) = text {
+        out.push(b';');
+        for (i, point) in text.iter().enumerate() {
+            if i > 0 {
+                out.push(b':');
+            }
+            out.extend_from_slice(point.to_string().as_bytes());
+        }
+    }
+    out.push(b'u');
+    out
 }
 
 /// The bytes a program should be given for a mouse event, or `None` for none at all.
@@ -1492,5 +1887,361 @@ mod tests {
     fn focus_events_are_silent_when_not_asked_for() {
         assert_eq!(encode_focus(true, &Modes::default()), None);
         assert_eq!(encode_focus(false, &Modes::default()), None);
+    }
+
+    // ---- the kitty keyboard protocol -----------------------------------------
+
+    /// A terminal a program has asked for `flags`.
+    fn kitty(flags: KeyboardFlags) -> Modes {
+        modes_with(|m| m.keyboard = flags)
+    }
+
+    /// The sequence a key produces under `flags`, or a panic saying it produced none.
+    fn kitty_bytes(event: &KeyEvent, flags: KeyboardFlags) -> String {
+        let bytes = encode_key(event, &kitty(flags)).expect("this key has an encoding");
+        String::from_utf8(bytes).expect("this sequence is valid UTF-8")
+    }
+
+    fn with_kind(key: Key, mods: Modifiers, kind: KeyKind) -> KeyEvent {
+        KeyEvent {
+            kind,
+            ..press(key, mods)
+        }
+    }
+
+    #[test]
+    fn a_program_that_has_asked_for_nothing_gets_the_legacy_bytes() {
+        // The whole point of the flags being a set of opt-ins: every test in this file
+        // above this line is a program that never sent `CSI = u`, and none of them
+        // changed. This is the test that says so from the inside.
+        for (key, mods) in [
+            (Key::Char('a'), Modifiers::empty()),
+            (Key::Char('a'), Modifiers::CTRL),
+            (Key::Up, Modifiers::empty()),
+            (Key::Escape, Modifiers::empty()),
+            (Key::F(5), Modifiers::empty()),
+        ] {
+            assert_eq!(
+                encode(key, mods),
+                encode_key(&press(key, mods), &kitty(KeyboardFlags::NONE)),
+                "{key:?} with {mods:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_protocols_own_examples_come_out_right() {
+        // Straight from the specification's table, because a sequence that is merely
+        // self-consistent is worth nothing here: the program on the other end has
+        // these numbers written down.
+        let disambiguate = KeyboardFlags::DISAMBIGUATE;
+        // `shift+a -> CSI 97 ; 2 ; 65 u`, from the section on associated text — which
+        // is a flag on top of the all-keys flag, so that is where the example lives.
+        // Without the text the same key is `CSI 97;2u`, which the next test checks.
+        assert_eq!(
+            kitty_bytes(
+                &KeyEvent {
+                    text: Some("A".into()),
+                    ..press(Key::Char('A'), Modifiers::SHIFT)
+                },
+                KeyboardFlags::ALL_KEYS | KeyboardFlags::ASSOCIATED_TEXT
+            ),
+            "\x1b[97;2;65u"
+        );
+        // `ctrl+shift+tab should be CSI 9 ; 6 u`, which the specification lists as a
+        // correction: fixterms sent `CSI 1 ; 5 Z`, and Tab is one of the three the
+        // disambiguate flag exempts — so this is the protocol's answer under the
+        // flag that has no exemptions, which the next test is about.
+        assert_eq!(
+            kitty_bytes(
+                &press(Key::Tab, Modifiers::CTRL | Modifiers::SHIFT),
+                KeyboardFlags::ALL_KEYS
+            ),
+            "\x1b[9;6u"
+        );
+        // The table's own rows for the letters, all with Ctrl held so that they are
+        // escape codes rather than text.
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('i'), Modifiers::CTRL), disambiguate),
+            "\x1b[105;5u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('3'), Modifiers::CTRL), disambiguate),
+            "\x1b[51;5u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Semicolon, Modifiers::CTRL), disambiguate),
+            "\x1b[59;5u"
+        );
+    }
+
+    #[test]
+    fn the_code_is_the_key_before_shift_and_never_after_it() {
+        // The protocol is explicit about this and gives a wrong example to make the
+        // point: `ctrl+shift+a` is `CSI 97;modifiers u` and "must not be CSI 65;
+        // modifiers u". A program matching a shortcut looks for the code of the
+        // unshifted key, so a terminal that sends the shifted one hands it a chord it
+        // will never match.
+        let flags = KeyboardFlags::ALL_KEYS;
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('A'), Modifiers::SHIFT), flags),
+            "\x1b[97;2u"
+        );
+        assert_eq!(
+            kitty_bytes(
+                &press(Key::Char('A'), Modifiers::CTRL | Modifiers::SHIFT),
+                flags
+            ),
+            "\x1b[97;6u"
+        );
+        // And the punctuation shift moves, which is the other half of the same fact:
+        // Shift+1 arrives as `!` and is still reported as the key `1`.
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('!'), Modifiers::SHIFT), flags),
+            "\x1b[49;2u"
+        );
+    }
+
+    #[test]
+    fn a_repeat_and_a_release_are_told_apart_from_a_press_only_with_event_types() {
+        // Without the flag, a repeat is a press — the bytes are the same, and the
+        // program asked for nothing better. With it, the type goes in a sub-field of
+        // the modifier parameter, which is why the parameter appears even with
+        // nothing held: a sub-field needs a field to be a sub-field of.
+        let arrow = press(Key::Up, Modifiers::empty());
+        assert_eq!(kitty_bytes(&with_kind(Key::Up, Modifiers::empty(), KeyKind::Repeat), KeyboardFlags::ALL_KEYS), "\x1b[A");
+        assert_eq!(
+            kitty_bytes(
+                &with_kind(Key::Up, Modifiers::empty(), KeyKind::Repeat),
+                KeyboardFlags::ALL_KEYS | KeyboardFlags::EVENT_TYPES
+            ),
+            "\x1b[1;1:2A"
+        );
+        assert_eq!(
+            kitty_bytes(
+                &with_kind(Key::Up, Modifiers::empty(), KeyKind::Release),
+                KeyboardFlags::ALL_KEYS | KeyboardFlags::EVENT_TYPES
+            ),
+            "\x1b[1;1:3A",
+            "the release of an unmodified arrow, which legacy has no byte for"
+        );
+        // A press carries no type at all, which is what makes a sequence from a
+        // program that asked for event types identical to one from a program that did
+        // not, in the case they share.
+        assert_eq!(
+            kitty_bytes(&arrow, KeyboardFlags::ALL_KEYS | KeyboardFlags::EVENT_TYPES),
+            "\x1b[A"
+        );
+        // And an empty event type is not enough: the type lands after the modifiers.
+        assert_eq!(
+            kitty_bytes(
+                &with_kind(Key::Up, Modifiers::CTRL, KeyKind::Release),
+                KeyboardFlags::ALL_KEYS | KeyboardFlags::EVENT_TYPES
+            ),
+            "\x1b[1;5:3A"
+        );
+    }
+
+    #[test]
+    fn a_release_is_nothing_at_all_until_a_program_asks_for_event_types() {
+        // Not a new rule, the old one seen from the other side: legacy has no byte for
+        // a key going up, so without the flag there is nothing to send.
+        assert_eq!(
+            encode_key(
+                &with_kind(Key::Char('a'), Modifiers::empty(), KeyKind::Release),
+                &kitty(KeyboardFlags::ALL_KEYS)
+            ),
+            None
+        );
+        assert_eq!(
+            kitty_bytes(
+                &with_kind(Key::Char('a'), Modifiers::empty(), KeyKind::Release),
+                KeyboardFlags::ALL_KEYS | KeyboardFlags::EVENT_TYPES
+            ),
+            "\x1b[97;1:3u"
+        );
+    }
+
+    #[test]
+    fn the_disambiguate_flag_moves_only_the_keys_that_were_ambiguous() {
+        // The five the protocol names: Escape, alt+key, ctrl+key, ctrl+alt+key, and
+        // shift+alt+key. Shift alone is not among them — `A` cannot be mistaken for
+        // the start of anything — so it is still sent as the text it is.
+        let flags = KeyboardFlags::DISAMBIGUATE;
+        assert_eq!(
+            kitty_bytes(&press(Key::Escape, Modifiers::empty()), flags),
+            "\x1b[27u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('a'), Modifiers::CTRL), flags),
+            "\x1b[97;5u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('a'), Modifiers::ALT), flags),
+            "\x1b[97;3u"
+        );
+        assert_eq!(
+            kitty_bytes(
+                &press(Key::Char('a'), Modifiers::CTRL | Modifiers::ALT),
+                flags
+            ),
+            "\x1b[97;7u"
+        );
+        assert_eq!(
+            kitty_bytes(
+                &press(Key::Char('A'), Modifiers::SHIFT | Modifiers::ALT),
+                flags
+            ),
+            "\x1b[97;4u"
+        );
+        // And the ones it leaves alone.
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('A'), Modifiers::SHIFT), flags),
+            "A",
+            "shift on its own still produces text"
+        );
+        assert_eq!(kitty_bytes(&press(Key::Char('a'), Modifiers::empty()), flags), "a");
+    }
+
+    #[test]
+    fn enter_tab_and_backspace_keep_their_bytes_under_disambiguate() {
+        // The protocol carves these three out by name, and the reason is the shell: a
+        // program that set the flag and crashed without clearing it would otherwise
+        // leave a terminal whose Enter key produces no newline, and the user could not
+        // type `reset` to get out of it. So ctrl+Enter is still a carriage return.
+        let flags = KeyboardFlags::DISAMBIGUATE;
+        for (key, want) in [
+            (Key::Enter, "\r"),
+            (Key::Tab, "\t"),
+            (Key::Backspace, "\u{7f}"),
+        ] {
+            assert_eq!(
+                kitty_bytes(&press(key, Modifiers::CTRL), flags),
+                want,
+                "{key:?} with Ctrl"
+            );
+        }
+        // Under the all-keys flag there is no exception: every key is an escape code,
+        // and the protocol says so in as many words.
+        let all = KeyboardFlags::ALL_KEYS;
+        assert_eq!(kitty_bytes(&press(Key::Enter, Modifiers::empty()), all), "\x1b[13u");
+        assert_eq!(kitty_bytes(&press(Key::Tab, Modifiers::empty()), all), "\x1b[9u");
+        assert_eq!(
+            kitty_bytes(&press(Key::Backspace, Modifiers::empty()), all),
+            "\x1b[127u"
+        );
+    }
+
+    #[test]
+    fn the_all_keys_flag_reports_every_key_including_the_ones_that_were_text() {
+        let flags = KeyboardFlags::ALL_KEYS;
+        assert_eq!(kitty_bytes(&press(Key::Char('a'), Modifiers::empty()), flags), "\x1b[97u");
+        assert_eq!(kitty_bytes(&press(Key::Char('a'), Modifiers::SHIFT), flags), "\x1b[97;2u");
+        assert_eq!(kitty_bytes(&press(Key::Space, Modifiers::empty()), flags), "\x1b[32u");
+        // A lock key is not text and has no character, so the protocol gives it a
+        // number in the private use area.
+        assert_eq!(
+            kitty_bytes(&press(Key::CapsLock, Modifiers::empty()), flags),
+            "\x1b[57358u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::PrintScreen, Modifiers::empty()), flags),
+            "\x1b[57361u"
+        );
+    }
+
+    #[test]
+    fn the_function_keys_the_legacy_table_stops_at_are_reachable_under_the_protocol() {
+        // F21 through F24 have no entry in xterm's table — `function` documents that
+        // gap and returns nothing for them — and the protocol is what fills it: its
+        // table numbers them from F13's 57376 upward.
+        let flags = KeyboardFlags::ALL_KEYS;
+        assert_eq!(
+            kitty_bytes(&press(Key::F(13), Modifiers::empty()), flags),
+            "\x1b[57376u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::F(21), Modifiers::empty()), flags),
+            "\x1b[57384u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::F(24), Modifiers::empty()), flags),
+            "\x1b[57387u"
+        );
+        // F1 through F12 have a sequence of their own and keep it, because that is the
+        // sequence the protocol's table gives them too.
+        assert_eq!(kitty_bytes(&press(Key::F(1), Modifiers::empty()), flags), "\x1bOP");
+        assert_eq!(kitty_bytes(&press(Key::F(5), Modifiers::empty()), flags), "\x1b[15~");
+    }
+
+    #[test]
+    fn a_function_key_keeps_its_sequence_under_the_protocol_and_only_gains_a_type() {
+        // The protocol's table gives the arrow keys `CSI 1 A` and the editing keypad
+        // `CSI 2 ~`, which is what they have always been. Nothing about them changes
+        // under the protocol, which is why a program that opts in does not stop
+        // understanding its own terminfo entry.
+        let flags = KeyboardFlags::DISAMBIGUATE | KeyboardFlags::ALL_KEYS;
+        assert_eq!(kitty_bytes(&press(Key::Up, Modifiers::empty()), flags), "\x1b[A");
+        assert_eq!(kitty_bytes(&press(Key::Up, Modifiers::CTRL), flags), "\x1b[1;5A");
+        assert_eq!(kitty_bytes(&press(Key::Insert, Modifiers::empty()), flags), "\x1b[2~");
+        assert_eq!(
+            kitty_bytes(&press(Key::Delete, Modifiers::SHIFT), flags),
+            "\x1b[3;2~"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::PageDown, Modifiers::ALT), flags),
+            "\x1b[6;3~"
+        );
+    }
+
+    #[test]
+    fn the_associated_text_rides_inside_the_escape_code_and_nowhere_else() {
+        // This is the one thing in the crate that reads `KeyEvent::text`, and the
+        // reason it is safe is that the text goes *inside* a sequence the program
+        // asked for rather than being written to the pty as bytes a shell would take
+        // for typing. The protocol's own example is the first one.
+        let flags = KeyboardFlags::ALL_KEYS | KeyboardFlags::ASSOCIATED_TEXT;
+        let shift_a = KeyEvent {
+            text: Some("A".into()),
+            ..press(Key::Char('A'), Modifiers::SHIFT)
+        };
+        assert_eq!(kitty_bytes(&shift_a, flags), "\x1b[97;2;65u");
+
+        // Without the flag, or without the all-keys flag it is defined against, the
+        // text is not read at all.
+        assert_eq!(
+            kitty_bytes(&shift_a, KeyboardFlags::ALL_KEYS),
+            "\x1b[97;2u"
+        );
+        assert_eq!(
+            kitty_bytes(&shift_a, KeyboardFlags::ASSOCIATED_TEXT),
+            "A",
+            "the associated-text flag alone is undefined, so the key stays text"
+        );
+
+        // A key with no text gets no field rather than an empty one, and a key with
+        // no modifiers gets the modifier field written out so the text has somewhere
+        // to sit.
+        assert_eq!(
+            kitty_bytes(&press(Key::Up, Modifiers::empty()), flags),
+            "\x1b[A"
+        );
+        let plain = KeyEvent {
+            text: Some("a".into()),
+            ..press(Key::Char('a'), Modifiers::empty())
+        };
+        assert_eq!(kitty_bytes(&plain, flags), "\x1b[97;1;97u");
+    }
+
+    #[test]
+    fn a_key_the_protocol_has_no_number_for_is_left_to_the_legacy_encoding() {
+        // Nothing here is invented to fill a gap in the table. The protocol numbers
+        // F1 through F35 and the keys with characters, and a key outside that is one
+        // no program can be told about in this encoding either.
+        let flags = KeyboardFlags::ALL_KEYS;
+        assert_eq!(
+            encode_key(&press(Key::F(40), Modifiers::empty()), &kitty(flags)),
+            None
+        );
     }
 }

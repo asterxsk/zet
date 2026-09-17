@@ -16,21 +16,28 @@
 //! did not negotiate anything newer expects, [`encode_paste`] and [`encode_focus`]
 //! are the two that are gated by a mode rather than by a keystroke.
 //!
-//! # The kitty keyboard protocol is not implemented
+//! # The kitty keyboard protocol
 //!
-//! The kitty keyboard protocol is not here, and what is missing is an input rather
-//! than a decision. It is negotiated as a *stack* of flags — `CSI > u` pushes one,
-//! `CSI < u` pops one, and every push can change what the keys report — so encoding
-//! under it needs the current flag set. [`zet_vt::Modes`] does not track that stack
-//! yet, and this crate cannot invent it: the stack is the terminal's state, since
-//! the terminal is the only thing that sees the program's escape sequences come in.
-//! This crate only ever sees the events the host hands it, so it has no way to learn
-//! that a push happened and no way to keep a copy honest.
+//! [`encode_key`] speaks the kitty keyboard protocol as well as the legacy one, and
+//! which it speaks is not its decision: the flags arrive on [`zet_vt::Modes`], which
+//! is where the terminal keeps the stack a program pushes and pops. A program that
+//! asked for nothing gets the legacy bytes, which is every program that existed
+//! before this protocol did.
 //!
-//! Until `zet-vt` grows the flag stack, [`encode_key`] reports only the legacy
-//! encoding, which is exactly what a program that never asked for kitty expects.
-//! The visible cost is key release and repeat: legacy VT has no byte for either, so
-//! [`encode_key`] answers `None` and the host has nothing to send.
+//! What the protocol buys is the four things the legacy encoding cannot say: that a
+//! key went up, that it is repeating rather than being pressed again, that an Escape
+//! is a key and not the start of a sequence, and what text a key produced alongside
+//! the key itself. [`crate::encode`]'s `kitty_key` is where that lives and it is
+//! written against the specification's own tables rather than against what other
+//! terminals do.
+//!
+//! One flag of the five is deliberately not implemented: `Report alternate keys`
+//! asks for the key at the same position on the base layout beside every key, and
+//! the host does not carry the physical key that would come from. A terminal that
+//! cannot do something is supposed to say so rather than say nothing — the protocol
+//! has a program set the flags it wants and then query which it got, exactly so that
+//! a partial implementation is discoverable — so the bit is dropped when it arrives
+//! and never reported back.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

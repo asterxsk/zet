@@ -56,6 +56,13 @@ impl KeyboardFlags {
     /// `0b100`. Report the shifted key and the key at the same position on the base
     /// layout, so that a shortcut bound to a character works on a layout where that
     /// character needs a different key.
+    ///
+    /// **Not implemented**, and it is the only one of the five that is not. It wants
+    /// two code points beside every key — the shifted one and the one at the same
+    /// position on a PC-101 layout — and the host carries neither: a key event
+    /// arrives as the character the layout produced and the text it composed, and
+    /// the physical key the base-layout one would come from is dropped on the way.
+    /// See [`Self::SUPPORTED`] for what happens to a program that asks.
     pub const ALTERNATE_KEYS: Self = Self(0b100);
 
     /// `0b1000`. Report *every* key as an escape code, including the ones that would
@@ -73,13 +80,25 @@ impl KeyboardFlags {
     /// as an escape code has nowhere to carry the text.
     pub const ASSOCIATED_TEXT: Self = Self(0b10000);
 
-    /// The flags a set of bits names. Bits above the five defined ones are dropped
-    /// rather than kept: a program that sets one is asking for something this terminal
-    /// does not do, and echoing it back in the reply to `CSI ? u` would be a claim that
-    /// it does.
+    /// The flags this terminal implements.
+    ///
+    /// The protocol is built to be implemented a piece at a time: a program sets the
+    /// flags it wants and then queries to find out which it got, and the specification
+    /// says that is exactly how a program is meant to discover a terminal that does
+    /// only some of them. So the flag this terminal cannot honour — see
+    /// [`Self::ALTERNATE_KEYS`] — is dropped from every set that arrives and is never
+    /// reported back in the reply to `CSI ? u`. The alternative, echoing a bit nothing
+    /// acts on, is a promise the program then relies on and the keys then break.
+    pub const SUPPORTED: Self = Self(
+        Self::DISAMBIGUATE.0 | Self::EVENT_TYPES.0 | Self::ALL_KEYS.0 | Self::ASSOCIATED_TEXT.0,
+    );
+
+    /// The flags a set of bits names, less the ones this terminal does not implement.
+    /// Bits above the five defined ones are dropped for the same reason: a program
+    /// that sets one is asking for something nothing here does.
     #[must_use]
     pub const fn from_bits(bits: u8) -> Self {
-        Self(bits & 0b1_1111)
+        Self(bits & Self::SUPPORTED.0)
     }
 
     /// The flags as the number a program sends and reads back.
@@ -101,16 +120,20 @@ impl KeyboardFlags {
         self.0 == 0
     }
 
-    /// This set with `other` added.
-    #[must_use]
-    pub const fn with(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
     /// This set with `other` taken away.
     #[must_use]
     pub const fn without(self, other: Self) -> Self {
         Self(self.0 & !other.0)
+    }
+}
+
+impl core::ops::BitOr for KeyboardFlags {
+    type Output = Self;
+
+    /// Two flag sets together, which is how a program asks for two enhancements at
+    /// once and how a test says so: `DISAMBIGUATE | ALL_KEYS`.
+    fn bitor(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 }
 
@@ -217,7 +240,7 @@ impl Keyboard {
     pub fn apply(&mut self, flags: KeyboardFlags, mode: Apply) {
         self.flags = match mode {
             Apply::Set => flags,
-            Apply::Or => self.flags.with(flags),
+            Apply::Or => self.flags | flags,
             Apply::AndNot => self.flags.without(flags),
         };
     }
@@ -252,10 +275,20 @@ mod tests {
     #[test]
     fn a_bit_the_terminal_does_not_implement_is_dropped_rather_than_echoed() {
         // `CSI ? u` is a promise about what this terminal will report. Repeating back a
-        // bit that nothing here acts on would be a lie the program then relies on.
+        // bit that nothing here acts on would be a lie the program then relies on, and
+        // the protocol is built so that a program can find out: it sets what it wants,
+        // queries, and reads the answer.
         let asked = KeyboardFlags::from_bits(0xff);
-        assert_eq!(asked.bits(), 0b1_1111);
+        assert_eq!(asked.bits(), 0b1_1011);
         assert!(asked.contains(KeyboardFlags::ASSOCIATED_TEXT));
+        assert!(!asked.contains(KeyboardFlags::ALTERNATE_KEYS));
+
+        // And the same bit arriving on its own is nothing at all, rather than a set
+        // that claims to have it.
+        assert_eq!(
+            KeyboardFlags::from_bits(KeyboardFlags::ALTERNATE_KEYS.bits()),
+            KeyboardFlags::NONE
+        );
     }
 
     #[test]
@@ -268,7 +301,7 @@ mod tests {
         keyboard.apply(KeyboardFlags::EVENT_TYPES, Apply::Or);
         assert_eq!(
             keyboard.flags(),
-            KeyboardFlags::DISAMBIGUATE.with(KeyboardFlags::EVENT_TYPES)
+            KeyboardFlags::DISAMBIGUATE | KeyboardFlags::EVENT_TYPES
         );
 
         // And-not removes without disturbing.

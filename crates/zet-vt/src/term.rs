@@ -1984,7 +1984,7 @@ mod tests {
         feed(&mut t, b"\x1b[=2;2u");
         assert_eq!(
             t.modes().keyboard,
-            KeyboardFlags::ALL_KEYS.with(KeyboardFlags::EVENT_TYPES)
+            KeyboardFlags::ALL_KEYS | KeyboardFlags::EVENT_TYPES
         );
 
         // `3` is And-not: it takes away what is named and leaves the rest.
@@ -2056,9 +2056,9 @@ mod tests {
         feed(&mut t, b"\x1b[?u");
         assert_eq!(t.take_responses(), b"\x1b[?0u");
 
-        feed(&mut t, b"\x1b[=5u");
+        feed(&mut t, b"\x1b[=3u");
         feed(&mut t, b"\x1b[?u");
-        assert_eq!(t.take_responses(), b"\x1b[?5u");
+        assert_eq!(t.take_responses(), b"\x1b[?3u");
     }
 
     #[test]
@@ -2075,13 +2075,19 @@ mod tests {
 
     #[test]
     fn a_bit_this_terminal_does_not_implement_is_not_reported_back() {
-        // `CSI ? u` is a promise. A program that reads back bit 32 will rely on whatever
-        // it means, and nothing here acts on it, so the bit is cleared rather than
-        // echoed.
+        // `CSI ? u` is a promise. A program that reads back a bit nothing here acts on
+        // will rely on it, so the bits beyond the implemented ones are cleared rather
+        // than echoed — and `5` is the case that matters, because it is the one a real
+        // program sends: disambiguate and alternate keys, of which this terminal does
+        // the first and not the second.
         let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[=5u");
+        feed(&mut t, b"\x1b[?u");
+        assert_eq!(t.take_responses(), b"\x1b[?1u");
+
         feed(&mut t, b"\x1b[=255u");
         feed(&mut t, b"\x1b[?u");
-        assert_eq!(t.take_responses(), b"\x1b[?31u");
+        assert_eq!(t.take_responses(), b"\x1b[?27u");
     }
 
     #[test]
