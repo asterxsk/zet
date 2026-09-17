@@ -134,6 +134,16 @@ pub const TAB_SIZE: f32 = 13.0;
 /// The padding either side of a tab's index.
 pub const TAB_PADDING: f32 = 12.0;
 
+/// The gap between a tab's number and its name.
+pub const TAB_GAP: f32 = 8.0;
+
+/// The widest a tab's cell grows, however few tabs there are and however long the names.
+///
+/// A strip of one very long title is a strip with one tab on it. This is the ceiling
+/// that keeps a tab a cell in a run rather than a banner, and it is what makes the
+/// names share the row instead of taking it.
+pub const TAB_MAX_WIDTH: f32 = 180.0;
+
 /// The `#` is set at this fraction of the index's size.
 ///
 /// Part of the mark rather than a prefix: it is what makes a row of numbers read as a

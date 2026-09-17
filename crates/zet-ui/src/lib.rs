@@ -115,8 +115,12 @@ pub struct ChromeInput<'a> {
 pub struct TabInfo {
     /// The tab's number. Creation order, never renumbered on close.
     pub index: u32,
-    /// The tab's own title. The strip does not draw it — a tab is a number — and it is
-    /// here because the caller has one and the next version of this will want it.
+    /// The tab's own title: what the program set with `OSC 0`/`OSC 2`, or the profile's
+    /// name when it set nothing.
+    ///
+    /// The strip draws it after the number, truncated to whatever the cell has room for.
+    /// An empty title is not an error and is the one case where a tab is a number and
+    /// nothing else, which is what every tab was before names existed.
     pub title: String,
     /// Whether the pointer is over this tab's cell.
     pub hovered: bool,
@@ -469,10 +473,10 @@ impl Chrome {
                 rect: *rect,
             });
         }
-        for (index, rect) in &strip_plan.tabs {
+        for cell in &strip_plan.tabs {
             self.regions.push(Region::Tab {
-                index: *index,
-                rect: *rect,
+                index: cell.index,
+                rect: cell.rect,
             });
         }
         if let Some(rect) = strip_plan.plus {
@@ -528,8 +532,8 @@ impl Chrome {
         let arrives = strip_plan
             .tabs
             .iter()
-            .any(|(index, _)| Some(*index) == input.active);
-        let leaves = strip_plan.tabs.iter().any(|(index, _)| *index == previous);
+            .any(|cell| Some(cell.index) == input.active);
+        let leaves = strip_plan.tabs.iter().any(|cell| cell.index == previous);
         if input.reduce_motion || !arrives || !leaves {
             self.travel = None;
             return;

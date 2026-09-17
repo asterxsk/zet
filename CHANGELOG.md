@@ -12,8 +12,37 @@ counts as a breaking change in a terminal, is in
 Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compatibility; see
 [Versioning](README.md#versioning).
 
+### Added
+
+- **`zet-ui`** — a tab shows its name after its number, and the window shows the active tab's.
+  - `#3  PowerShell`: the number is the tab's identity and the name is what is running on it.
+    The name is what the program set with `OSC 0`/`OSC 2`, or the profile's name when it set
+    nothing, and it has been reaching `zet-ui` and being dropped on the floor until now.
+  - A name too long for its cell is cut and given an ellipsis; a name that fits whole is never
+    cut to make room for one. A cell is at most 180px wide, and past the point where the names
+    fit every cell gives up the same amount rather than the first tab taking the row.
+  - The OS window title becomes the active tab's name and then `zet`, so the taskbar and
+    Alt-Tab can tell two zet windows apart.
+- **`zet`** — `-d, --directory <path>` starts every tab of the window in that directory.
+  - A property of the window rather than of its first tab: a window opened from "Open zet here"
+    belongs to that folder, and a new tab in it that started somewhere else would be the
+    surprising thing. The Windows installer registers a shell context menu that uses it.
+- **`packaging/`** — a per-user Windows installer and the icon it installs.
+  - Inno Setup, installing to `%LOCALAPPDATA%\Programs\zet` with no elevation. Optional PATH
+    entry, Start Menu shortcut, and "Open zet here" context menu.
+
 ### Fixed
 
+- **`zet-ui`** — the window's caption buttons are drawn as geometry, not as characters.
+  - `−`, `□`, and `×` came from IBM Plex Sans, which the chrome loads with no fallback chain:
+    a mark Plex does not carry draws `.notdef` — a box — in the place of a window control. The
+    same characters were also the wrong shapes at the wrong weight. They are now a bar, a
+    hollow square, two overlapping squares, and a cross, rasterised against the device pixel
+    grid so a one-pixel stroke lands on one pixel.
+- **`zet`** — holding a key down repeats it.
+  - `encode_key` returned nothing for anything that was not a press, so a repeat was dropped
+    and the keyboard stopped working the moment a key was held: holding an arrow key walked
+    nowhere and holding Backspace deleted exactly one character.
 - **`zet-render`** — a glyph's tint is scaled by its coverage, not by the whole texel.
   - The fragment shader multiplied the premultiplied tint by all four channels of the sampled
     texel instead of by its alpha. The texel's colour is white, so the tint's colour survived at

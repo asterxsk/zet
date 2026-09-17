@@ -12,12 +12,32 @@ use zet_font::Weight;
 
 use crate::Caption;
 use crate::ChromeInput;
+use crate::TabInfo;
 use crate::geometry::{
     CAPTION_WIDTH, HASH_RATIO, INDICATOR, NAME_GAP, NAME_INSET, NAME_SIZE, NAME_TRACKING,
-    RAIL_CELL, RAIL_CELL_FLOOR, RAIL_WIDTH, ROW_HEIGHT, Rect, Size, TAB_PADDING, TAB_SIZE, TRAVEL,
+    RAIL_CELL, RAIL_CELL_FLOOR, RAIL_WIDTH, ROW_HEIGHT, Rect, Size, TAB_GAP, TAB_MAX_WIDTH,
+    TAB_PADDING, TAB_SIZE, TRAVEL,
 };
 use crate::marks::{self, Mark};
 use crate::paint::{Painter, TextStyle};
+
+/// One tab's cell: where it is, and how much of its name fits on it.
+///
+/// The name is a count rather than a string. A title is already owned by whoever
+/// supplied the [`TabInfo`] and this is a plan for drawing it, so the cell carries the
+/// one number that is not recoverable from outside — how much of it there is room for —
+/// and the drawing reads the characters back off the input.
+pub(crate) struct TabCell {
+    /// The tab's number, which is its identity.
+    pub index: u32,
+    /// The cell.
+    pub rect: Rect,
+    /// How many characters of the tab's title fit.
+    ///
+    /// Zero on a cell with no room for a name, which is every cell in the rail and every
+    /// cell in a run that has been squeezed down to its numbers.
+    pub title: usize,
+}
 
 /// Where the strip's parts are.
 ///
@@ -34,7 +54,7 @@ pub(crate) struct Strip {
     /// The app name's box, when the strip had room for it.
     pub name: Option<Rect>,
     /// The tabs that fit, in order, with their numbers.
-    pub tabs: Vec<(u32, Rect)>,
+    pub tabs: Vec<TabCell>,
     /// The new-tab mark's box, when there was room for it.
     pub plus: Option<Rect>,
     /// The draggable gap.
@@ -121,34 +141,44 @@ fn horizontal(
         NAME_INSET + name_width + NAME_GAP
     };
 
-    let plus_width = tab_width(paint, 1);
-    let run: f32 = input
+    // The new-tab mark is the width of a tab with nothing to say: a number and its
+    // padding. It is the affordance that must not be the thing that overflows, so it
+    // never gives up room and is never the cell that gets squeezed.
+    let plus_width = number_cell(paint, 1);
+    let natural: f32 = input
         .tabs
         .iter()
-        .map(|tab| tab_width(paint, tab.index))
-        .sum::<f32>()
-        + plus_width;
+        .map(|tab| tab_width(paint, tab, TAB_MAX_WIDTH))
+        .sum();
 
     // "The app name is hidden when the tab strip needs the space. Tabs outrank
     // branding." In arithmetic that is one comparison: the name is drawn only when
     // every tab still fits beside it, and when it is not drawn it takes its inset with
     // it and the run starts at the window's edge.
-    let shows_name = !title.is_empty() && name_block + run <= limit;
+    let shows_name = !title.is_empty() && name_block + natural + plus_width <= limit;
     let name = shows_name.then(|| Rect::new(NAME_INSET, 0.0, name_width, ROW_HEIGHT));
 
-    let mut cursor = if shows_name { name_block } else { 0.0 };
+    let start = if shows_name { name_block } else { 0.0 };
+    let cap = tab_cap(paint, input.tabs, (limit - start - plus_width).max(0.0));
+
+    let mut cursor = start;
     let mut tabs = Vec::with_capacity(input.tabs.len());
     for tab in input.tabs {
-        let width = tab_width(paint, tab.index);
+        let width = tab_width(paint, tab, cap);
         // A tab that would run under the new-tab mark is not drawn and cannot be hit.
-        // DESIGN.md gives the horizontal strip no overflow rule — the rail is the
-        // position that compresses — so the honest answer is the cheap one: the tab is
+        // Sizing has already shrunk every cell towards its number to put that off, so
+        // this is only reached when even a row of bare numbers does not fit: the tab is
         // still numbered, it simply has nowhere to be until the window grows or a tab
         // before it closes.
         if cursor + width + plus_width > limit {
             break;
         }
-        tabs.push((tab.index, Rect::new(cursor, 0.0, width, ROW_HEIGHT)));
+        let room = width - number_cell(paint, tab.index) - TAB_GAP;
+        tabs.push(TabCell {
+            index: tab.index,
+            rect: Rect::new(cursor, 0.0, width, ROW_HEIGHT),
+            title: title_fit(paint, &tab.title, room),
+        });
         cursor += width;
     }
 
@@ -208,7 +238,14 @@ fn vertical(
         if y + 2.0 * cell > input.size.height {
             break;
         }
-        tabs.push((tab.index, Rect::new(0.0, y, RAIL_WIDTH, cell)));
+        // The rail carries numbers and no names. It is forty-eight pixels wide and the
+        // whole reason to choose it is that it gives the grid the rest, so a name in it
+        // would be a name in the space the tabs were moved aside to free.
+        tabs.push(TabCell {
+            index: tab.index,
+            rect: Rect::new(0.0, y, RAIL_WIDTH, cell),
+            title: 0,
+        });
         y += cell;
     }
     let plus = (y + cell <= input.size.height).then(|| Rect::new(0.0, y, RAIL_WIDTH, cell));
@@ -224,13 +261,95 @@ fn vertical(
     }
 }
 
-/// How wide a tab's cell is: its index, plus the padding either side.
-fn tab_width(paint: &mut Painter<'_>, index: u32) -> f32 {
+/// How wide a tab's number is, in the weight the number is measured in.
+fn number_width(paint: &mut Painter<'_>, index: u32, style: TextStyle) -> f32 {
     let mut buffer = [0u8; 10];
     let digits = index_text(&mut buffer, index);
-    paint.advance("#", TAB_SIZE * HASH_RATIO, Weight::NORMAL)
-        + paint.advance(digits, TAB_SIZE, Weight::NORMAL)
-        + 2.0 * TAB_PADDING
+    paint.width("#", style.scaled(HASH_RATIO)) + paint.width(digits, style)
+}
+
+/// The style a tab's number is measured in.
+///
+/// MEDIUM, because that is the heaviest the number is ever drawn and the two weights do
+/// not have the same advances. A cell sized for the lighter one would shift its name by
+/// a fraction of a pixel every time the tab became active, which over a row of tabs is
+/// a row that twitches when the user switches between them.
+fn number_style() -> TextStyle {
+    TextStyle::new(TAB_SIZE, Weight::MEDIUM, Rgb::BLACK)
+}
+
+/// How wide the cell is that holds a number and nothing else.
+///
+/// The floor a tab is squeezed to, and the footprint the new-tab mark takes.
+fn number_cell(paint: &mut Painter<'_>, index: u32) -> f32 {
+    number_width(paint, index, number_style()) + 2.0 * TAB_PADDING
+}
+
+/// How wide a tab's cell is: its number, its name when there is room for one, the
+/// padding either side, and never more than `cap`.
+fn tab_width(paint: &mut Painter<'_>, tab: &TabInfo, cap: f32) -> f32 {
+    let floor = number_cell(paint, tab.index);
+    if tab.title.is_empty() {
+        return floor.min(cap);
+    }
+    let natural = floor + TAB_GAP + paint.advance(&tab.title, TAB_SIZE, Weight::NORMAL);
+    // The floor wins over the cap. A cell narrower than its number is a cell that shows
+    // a clipped number, and half a number is worse than a tab that is not on screen.
+    natural.min(cap).max(floor)
+}
+
+/// How wide a tab's cell may be, given how many there are and how much run they share.
+///
+/// Tabs share the strip. When they all fit at their natural width nothing is capped —
+/// the share is larger than any of them wants and the ceiling is the design's own
+/// [`TAB_MAX_WIDTH`]. When they do not, every cell gives up the same amount, so a row
+/// that is running out of room degrades evenly instead of being one wide tab followed by
+/// a row of clipped ones.
+///
+/// The floor is the number-only cell, because a tab showing no number is not a tab. Below
+/// it the share stops shrinking and the run overflows, which is the point at which
+/// [`horizontal`] starts leaving tabs off the end.
+fn tab_cap(paint: &mut Painter<'_>, tabs: &[TabInfo], available: f32) -> f32 {
+    if tabs.is_empty() {
+        return TAB_MAX_WIDTH;
+    }
+    let floor = number_cell(paint, 1);
+    let share = available / tabs.len() as f32;
+    share.clamp(floor.min(TAB_MAX_WIDTH), TAB_MAX_WIDTH)
+}
+
+/// How many characters of `title` fit in `room`, with an ellipsis after them.
+///
+/// Counted rather than returned as a truncated string: a caller that has the title
+/// already can slice it, and this runs once per tab per frame, so the crate's rule about
+/// not allocating in the chrome holds here too.
+///
+/// A title that fits whole is never cut to make room for an ellipsis it does not need:
+/// the room the ellipsis would take is only given up once there is a character it would
+/// stand in for. Reserving it unconditionally costs a name a character at exactly the
+/// width where the name would have fitted, which is the one width a user is most likely
+/// to hit — a title they chose the length of.
+fn title_fit(paint: &mut Painter<'_>, title: &str, room: f32) -> usize {
+    if room <= 0.0 {
+        return 0;
+    }
+    let ellipsis = paint.advance("…", TAB_SIZE, Weight::NORMAL);
+    let mut buffer = [0u8; 4];
+    let mut running = 0.0;
+    let mut chars = 0;
+    let mut whole = 0;
+    let mut cut = 0;
+    for (at, ch) in title.chars().enumerate() {
+        chars = at + 1;
+        running += paint.advance(ch.encode_utf8(&mut buffer), TAB_SIZE, Weight::NORMAL);
+        if running <= room {
+            whole = chars;
+        }
+        if running + ellipsis <= room {
+            cut = chars;
+        }
+    }
+    if whole == chars { whole } else { cut }
 }
 
 /// The decimal digits of a tab index, most significant first.
@@ -298,13 +417,14 @@ pub(crate) fn draw(
         }
     }
 
-    for (index, rect) in &strip.tabs {
-        let active = Some(*index) == input.active;
-        let hovered = input
-            .tabs
-            .iter()
-            .any(|tab| tab.index == *index && tab.hovered);
-        let resting = if hovered {
+    for cell in &strip.tabs {
+        // A cell was planned from a tab that is still in the input, so this cannot miss;
+        // skipping rather than indexing keeps that from being a panic if it ever does.
+        let Some(info) = input.tabs.iter().find(|tab| tab.index == cell.index) else {
+            continue;
+        };
+        let active = Some(cell.index) == input.active;
+        let resting = if info.hovered {
             palette.ink_mid
         } else {
             palette.ink_dim
@@ -315,28 +435,40 @@ pub(crate) fn draw(
         // is leaving is the same curve running down. Nothing else about a tab moves.
         let heavy = match fade {
             Some((_, t)) if active => t,
-            Some((from, t)) if from == *index => 1.0 - t,
+            Some((from, t)) if from == cell.index => 1.0 - t,
             _ if active => 1.0,
             _ => 0.0,
         };
 
-        let mut buffer = [0u8; 10];
-        let digits = index_text(&mut buffer, *index);
         let x = if strip.position == TabPosition::Left {
-            let width = tab_width(paint, *index) - 2.0 * TAB_PADDING;
-            rect.x + (rect.width - width) / 2.0
+            let width = number_cell(paint, cell.index) - 2.0 * TAB_PADDING;
+            cell.rect.x + (cell.rect.width - width) / 2.0
         } else {
-            rect.x + TAB_PADDING
+            cell.rect.x + TAB_PADDING
         };
-        let baseline = paint.baseline_in(*rect, TAB_SIZE);
+        let baseline = paint.baseline_in(cell.rect, TAB_SIZE);
 
         if heavy > 0.002 {
-            let style = TextStyle::new(TAB_SIZE, Weight::MEDIUM, palette.ink).faded(heavy);
-            index_run(paint, x, baseline, digits, style);
+            tab_label(
+                paint,
+                x,
+                baseline,
+                info,
+                cell.title,
+                TextStyle::new(TAB_SIZE, Weight::MEDIUM, palette.ink).faded(heavy),
+                TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink).faded(heavy),
+            );
         }
         if heavy < 0.998 {
-            let style = TextStyle::new(TAB_SIZE, Weight::NORMAL, resting).faded(1.0 - heavy);
-            index_run(paint, x, baseline, digits, style);
+            tab_label(
+                paint,
+                x,
+                baseline,
+                info,
+                cell.title,
+                TextStyle::new(TAB_SIZE, Weight::NORMAL, resting).faded(1.0 - heavy),
+                TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink_mid).faded(1.0 - heavy),
+            );
         }
     }
 
@@ -346,12 +478,47 @@ pub(crate) fn draw(
     }
 }
 
-/// A tab's index: the `#` at seventy percent, then the number, on one baseline.
-fn index_run(paint: &mut Painter<'_>, x: f32, baseline: f32, digits: &str, style: TextStyle) {
-    let hash = style.scaled(HASH_RATIO);
+/// A tab's whole label: the `#` at seventy percent, the number, then as much of the name
+/// as the cell has room for.
+///
+/// The number and the name are drawn as one run so that they cannot disagree about how
+/// present the tab is, which is the one thing the indicator's cross-fade moves.
+///
+/// The name is sliced out of the title the caller already owns — by character, so a
+/// multi-byte one is never cut in half — and an ellipsis is appended when the slice is
+/// short. The cell reserved room for that ellipsis when it counted the characters, so
+/// nothing here can overflow the cell.
+fn tab_label(
+    paint: &mut Painter<'_>,
+    x: f32,
+    baseline: f32,
+    info: &TabInfo,
+    fit: usize,
+    number: TextStyle,
+    name: TextStyle,
+) {
+    let mut buffer = [0u8; 10];
+    let digits = index_text(&mut buffer, info.index);
+    let hash = number.scaled(HASH_RATIO);
     let hash_width = paint.width("#", hash);
     paint.text("#", x, baseline, hash);
-    paint.text(digits, x + hash_width, baseline, style);
+    paint.text(digits, x + hash_width, baseline, number);
+
+    if fit == 0 {
+        return;
+    }
+    let title = info.title.as_str();
+    let cut = title
+        .char_indices()
+        .nth(fit)
+        .map_or(title.len(), |(at, _)| at);
+    let (shown, rest) = title.split_at(cut);
+    let name_x = x + hash_width + paint.width(digits, number) + TAB_GAP;
+    paint.text(shown, name_x, baseline, name);
+    if !rest.is_empty() {
+        let offset = paint.width(shown, name);
+        paint.text("…", name_x + offset, baseline, name);
+    }
 }
 
 /// Draw the three caption marks.
@@ -406,11 +573,11 @@ pub(crate) fn indicator(
     now: f32,
 ) -> Option<(Rect, Rgb)> {
     let palette = *input.palette;
-    let (_, cell) = strip
+    let cell = strip
         .tabs
         .iter()
-        .find(|(index, _)| Some(*index) == input.active)?;
-    let destination = bar_rect(strip.position, *cell);
+        .find(|cell| Some(cell.index) == input.active)?;
+    let destination = bar_rect(strip.position, cell.rect);
     let rect = match travel {
         Some(travel) => travel.from.lerp(destination, progress(now - travel.start)),
         None => destination,
@@ -438,14 +605,14 @@ pub(crate) fn hover_preview(
     if travelling {
         return None;
     }
-    let (_, cell) = strip.tabs.iter().find(|(index, _)| {
-        Some(*index) != input.active
+    let cell = strip.tabs.iter().find(|cell| {
+        Some(cell.index) != input.active
             && input
                 .tabs
                 .iter()
-                .any(|tab| tab.index == *index && tab.hovered)
+                .any(|tab| tab.index == cell.index && tab.hovered)
     })?;
-    Some(bar_rect(strip.position, *cell))
+    Some(bar_rect(strip.position, cell.rect))
 }
 
 /// How far through its travel the indicator is, from zero to one, after `elapsed`

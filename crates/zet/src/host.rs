@@ -123,6 +123,10 @@ pub struct Host {
     /// The moment the host started, for the chrome's clock.
     origin: Instant,
 
+    /// What the OS was last told this window is called, so it is only told when it
+    /// changes. Every frame would be a `WM_SETTEXT` per frame.
+    os_title: String,
+
     /// The grid face's settings as of the last load, so a change is noticed.
     styled: FontSettings,
     /// The chrome's settings as of the last build, so a change is noticed.
@@ -165,6 +169,7 @@ impl Host {
             partial: 0.0,
             blink_at: now,
             origin: now,
+            os_title: APP_NAME.to_owned(),
             styled,
             tabbed,
             placed: Layout::default(),
@@ -327,6 +332,17 @@ impl Host {
         let theme = self.app.theme();
         let cursor_settings = self.app.config().cursor.clone();
         let elapsed = now.duration_since(self.origin).as_secs_f32();
+
+        // The taskbar, Alt-Tab, and the window list are the places a user reads a title
+        // without looking at the window, and six of them reading "zet" say nothing about
+        // which is which. The active tab's name goes there; the drawn strip keeps the
+        // app's own name, because the tab names are already on it.
+        let title = self.os_window_title();
+        if title != self.os_title {
+            window.set_title(&title);
+            self.os_title = title;
+        }
+
         let input = ChromeInput {
             palette: &self.palette,
             tabs: &tabs,
@@ -406,6 +422,27 @@ impl Host {
         // so this asks rather than assumes, and the answer is where the chrome put the
         // grid.
         self.fit();
+    }
+
+    /// What the OS should call this window.
+    ///
+    /// The active tab's name and then the app's, because a taskbar button is too narrow
+    /// for the whole of most titles and the half that survives truncation should be the
+    /// half that differs between two zet windows.
+    ///
+    /// A tab with no name — a program that never set one, which is most of them — gives
+    /// the app's name alone. `zet` is a truer answer than `— zet`.
+    fn os_window_title(&self) -> String {
+        let name = self
+            .app
+            .active()
+            .map(zet_session::Session::title)
+            .unwrap_or_default();
+        if name.is_empty() {
+            APP_NAME.to_owned()
+        } else {
+            format!("{name} — {APP_NAME}")
+        }
     }
 
     /// The tabs, as the strip needs them.

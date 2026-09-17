@@ -284,20 +284,34 @@ fn the_tabs_sit_side_by_side_and_a_cell_is_what_the_sum_of_its_parts_says() {
     assert!((first.y).abs() < f32::EPSILON);
     assert!((first.height - ROW_HEIGHT).abs() < f32::EPSILON);
 
-    // `#1` is the `#` at seventy percent plus one digit plus the padding either side.
-    let expected = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + 2.0 * 12.0;
+    // `#1 Terminal 1`: the `#` at seventy percent, one digit, the gap, ten characters of
+    // name at half the size, and the padding either side. Every character in the test
+    // source is half an em wide, which is what makes this an arithmetic rather than a
+    // measurement.
+    let expected = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + 8.0 + 10.0 * 13.0 * 0.5 + 2.0 * 12.0;
     assert!(
         (first.width - expected).abs() < 1.0e-4,
-        "a single-digit tab is {expected} wide, not {}",
+        "a tab is {expected} wide, not {}",
         first.width
     );
 }
 
 #[test]
 fn a_second_digit_makes_a_tab_wider() {
+    // The names are the same width on purpose, so that what this measures is the extra
+    // digit and nothing else. A tab's width is its number and its name, and the two
+    // halves have to be separable for either to be checkable.
     let palette = Palette::instrument();
-    let one = tabs(&[1]);
-    let ten = tabs(&[10]);
+    let one = vec![TabInfo {
+        index: 1,
+        title: "Terminal".to_owned(),
+        hovered: false,
+    }];
+    let ten = vec![TabInfo {
+        index: 10,
+        title: "Terminal".to_owned(),
+        hovered: false,
+    }];
     let mut narrow = chrome();
     let mut wide = chrome();
 
@@ -319,7 +333,7 @@ fn a_second_digit_makes_a_tab_wider() {
 }
 
 #[test]
-fn the_new_tab_mark_ends_the_run_and_has_a_tab_s_footprint() {
+fn the_new_tab_mark_ends_the_run_and_has_a_bare_tab_s_footprint() {
     let palette = Palette::instrument();
     let tabs = tabs(&[1, 2, 3]);
     let mut chrome = chrome();
@@ -329,7 +343,16 @@ fn the_new_tab_mark_ends_the_run_and_has_a_tab_s_footprint() {
     let plus = plus_rect(&chrome).expect("the new-tab mark is always on the row");
     let last = rects[rects.len() - 1].1;
     assert!((plus.x - last.right()).abs() < f32::EPSILON);
-    assert!((plus.width - rects[0].1.width).abs() < f32::EPSILON);
+    // A tab with nothing to say: `#1` and its padding. The mark is the tab that is about
+    // to exist, and a new tab has no name until a program gives it one — so the mark is
+    // the width of the cell it will land in, not the width of a tab that is running a
+    // title.
+    let bare = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + 2.0 * 12.0;
+    assert!(
+        (plus.width - bare).abs() < 1.0e-4,
+        "the mark is {bare} wide, not {}",
+        plus.width
+    );
 
     let (x, y) = plus.center();
     assert_eq!(chrome.hit(x, y), Hit::NewTab);
@@ -420,6 +443,165 @@ fn the_app_name_is_dropped_before_a_tab_is() {
 }
 
 // ---------------------------------------------------------------------------------
+// Tab names
+// ---------------------------------------------------------------------------------
+
+/// Every character the frame drew at one weight, in order.
+fn run(frame: &Frame, weight: Weight) -> String {
+    drawn_at(frame, weight).into_iter().collect()
+}
+
+/// Everything the frame drew, at both weights, as one string.
+///
+/// A tab is drawn twice over — the active one at MEDIUM and the rest at NORMAL — so a
+/// question about *what text is on the strip* is a question about both runs. Only a
+/// question about the active tab itself can be asked of one weight.
+fn all_text(frame: &Frame) -> String {
+    format!(
+        "{}{}",
+        run(frame, Weight::MEDIUM),
+        run(frame, Weight::NORMAL)
+    )
+}
+
+/// One tab with a name, which is what a shell that sets `OSC 0` produces.
+fn named(index: u32, title: &str) -> Vec<TabInfo> {
+    vec![TabInfo {
+        index,
+        title: title.to_owned(),
+        hovered: false,
+    }]
+}
+
+#[test]
+fn a_tab_shows_its_number_and_then_its_name() {
+    // What the user asked for and what the tab is for: `#3` says which channel, and the
+    // name says what is running on it. The number keeps its weight, so the ordinal is
+    // still the thing that scans; the name is set in the lighter weight beside it.
+    let palette = Palette::instrument();
+    let tabs = named(3, "PowerShell");
+    let mut chrome = chrome();
+    let drawn = draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    assert!(run(&drawn.frame, Weight::MEDIUM).contains("#3"));
+    assert!(
+        all_text(&drawn.frame).contains("PowerShell"),
+        "the name was not drawn: {:?}",
+        all_text(&drawn.frame)
+    );
+
+    // And the cell grew to hold it, rather than the name spilling over the next tab.
+    let cell = tab_rect(&chrome, 3);
+    let bare = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + 2.0 * 12.0;
+    assert!(cell.width > bare, "the cell is still a bare number");
+}
+
+#[test]
+fn a_name_with_no_room_is_cut_and_says_so() {
+    // Truncation has to be visible. A name that ends flush against the next tab reads as
+    // the whole name, and the user has no way to tell that the program is running
+    // something with a longer name than the strip is showing.
+    let palette = Palette::instrument();
+    let tabs = named(1, &"x".repeat(40));
+    let mut chrome = chrome();
+    let drawn = draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    let text = run(&drawn.frame, Weight::NORMAL);
+    assert!(
+        text.contains('…'),
+        "a 40-character name was cut without an ellipsis: {text:?}"
+    );
+    assert!(
+        text.chars().filter(|ch| *ch == 'x').count() < 40,
+        "nothing was cut"
+    );
+}
+
+#[test]
+fn a_long_name_does_not_make_a_wide_tab() {
+    // The ceiling. One program with an enormous title must not take the row: tabs share
+    // it, so Cell::MAX is the widest any of them gets however much room there is.
+    let palette = Palette::instrument();
+    let tabs = named(1, &"y".repeat(200));
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &tabs, window()));
+    assert!(
+        tab_rect(&chrome, 1).width <= 180.0 + 1.0e-4,
+        "a tab grew past its ceiling: {}",
+        tab_rect(&chrome, 1).width
+    );
+}
+
+#[test]
+fn a_crowded_strip_squeezes_every_tab_by_the_same_amount() {
+    // What stops a row of names from being one wide tab and a row of clipped ones. Past
+    // the point where they all fit naturally, every cell gives up the same amount, so
+    // the strip degrades evenly and the tab the user is looking at is not the one that
+    // happens to be first.
+    let palette = Palette::instrument();
+    let many = tabs(&(1..=12).collect::<Vec<u32>>());
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &many, window()));
+
+    let rects = tab_rects(&chrome);
+    assert_eq!(rects.len(), 12, "all twelve should still be on the row");
+    let width = rects[0].1.width;
+    assert!(
+        width < 180.0,
+        "this strip was meant to be too crowded for full-width tabs"
+    );
+    for (index, rect) in &rects {
+        assert!(
+            (rect.width - width).abs() < 1.0e-4,
+            "#{index} is {} wide and #1 is {width}",
+            rect.width
+        );
+    }
+    // And squeezed is not truncated past the point of being useful: every name still
+    // starts. Five characters of "Terminal 1" plus the ellipsis is what the share works
+    // out to, which is enough to tell two shells apart and not enough to read either.
+    let drawn = draw(&mut chrome, &input(&palette, &many, window()));
+    let text = all_text(&drawn.frame);
+    assert!(
+        text.matches('T').count() == 12,
+        "not every name survived the squeeze: {text:?}"
+    );
+}
+
+#[test]
+fn a_tab_with_no_name_is_still_a_tab() {
+    // A program that never sets a title, and a profile with no name: the cell is its
+    // number and nothing else, which is what every tab was before names existed.
+    let palette = Palette::instrument();
+    let tabs = named(1, "");
+    let mut chrome = chrome();
+    let drawn = draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    assert!(run(&drawn.frame, Weight::MEDIUM).contains("#1"));
+    let bare = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + 2.0 * 12.0;
+    assert!((tab_rect(&chrome, 1).width - bare).abs() < 1.0e-4);
+}
+
+#[test]
+fn the_rail_shows_numbers_and_no_names() {
+    // The rail is forty-eight pixels wide and the whole reason to choose it is that it
+    // gives the grid the rest. A name in it would be a name in the space the tabs were
+    // moved aside to free, so the rail is the one position where a tab is only a number.
+    let palette = Palette::instrument();
+    let settings = TabSettings {
+        position: TabPosition::Left,
+        ..TabSettings::default()
+    };
+    let tabs = named(1, "PowerShell");
+    let mut chrome = Chrome::new(&settings, &WindowSettings::default());
+    let drawn = draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    let text = all_text(&drawn.frame);
+    assert!(text.contains('1'), "the number is gone too: {text:?}");
+    assert!(!text.contains('P'), "the rail drew a name: {text:?}");
+}
+
+// ---------------------------------------------------------------------------------
 // Zero tabs
 // ---------------------------------------------------------------------------------
 
@@ -472,7 +654,20 @@ fn numbering_survives_a_close() {
     // Close #2 of three and the two that are left are still #1 and #3. A number
     // identifies a session, and shuffling numbers under the user is worse than a gap.
     let palette = Palette::instrument();
-    let tabs = tabs(&[1, 3]);
+    // Names with no digits in them, so that what this counts is tab numbers and not
+    // every decimal the strip happens to be showing.
+    let tabs = vec![
+        TabInfo {
+            index: 1,
+            title: "Shell".to_owned(),
+            hovered: false,
+        },
+        TabInfo {
+            index: 3,
+            title: "Shell".to_owned(),
+            hovered: false,
+        },
+    ];
     let mut chrome = chrome();
     let drawn = draw(&mut chrome, &input(&palette, &tabs, window()));
 

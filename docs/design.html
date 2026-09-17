@@ -224,12 +224,15 @@
 
       <h2>The tab strip</h2>
 
-      <p>A tab is a number, not a label.</p>
+      <p>A tab is a number and a name. The number says which channel; the name says what is
+      running on it. <code>#3  PowerShell</code> is one cell, and the number is the part that
+      never changes: it is the tab's identity, and the name is what the program on it is doing
+      right now.</p>
 
 <pre><code> horizontal, one row shared with the titlebar
 +---------------------------------------------------------------+
-| zet   #1   #2   #3        (drag region)        _   []   x     |
-|       ~~                                                      |
+| zet   #1 pwsh   #2 vim   #3 dotfiles  (drag)   _   []   x     |
+|       ~~~~                                                    |
 +---------------------------------------------------------------+</code></pre>
 
       <ul>
@@ -240,14 +243,28 @@
         remaining tabs are still #1 and #3. A number identifies a session, and shuffling numbers
         under the user is worse than a gap.</li>
         <li>Single digit up to #9, then #10 and beyond. Tab width grows to fit.</li>
+        <li>The name is what the program set with <code>OSC 0</code>/<code>OSC 2</code>, or the
+        profile's name when it set nothing. It is one weight lighter than the number, so the row
+        still scans by number.</li>
+        <li>A name too long for its cell is cut and given an ellipsis. A name that fits whole is
+        never cut to make room for one.</li>
+        <li>Tab width is capped at 180px. Past the point where the names fit, every cell gives up
+        the same amount, down to a floor of the number alone &mdash; so a crowded strip degrades
+        evenly instead of being one wide tab and a row of clipped ones. Below the floor the run
+        overflows and the tabs past the end are not drawn.</li>
         <li>Active tab: a 2px <code>signal</code> bar on the bottom edge plus <code>ink</code> at
         weight 500.</li>
-        <li>Inactive tab: <code>ink-dim</code>, weight 400, no bar, no background.</li>
-        <li>Hover: the index moves to <code>ink-mid</code>. The indicator bar previews at
+        <li>Inactive tab: <code>ink-dim</code> for the number and <code>ink-mid</code> for the
+        name, weight 400, no bar, no background. The name is brighter than the number at rest:
+        the number is an ordinal, and the name is the thing being read.</li>
+        <li>Hover: the number moves to <code>ink-mid</code>. The indicator bar previews at
         <code>signal-dim</code>. No background fill, ever. Filling a hovered tab is the single most
         common way a tab strip starts looking like everyone else's.</li>
-        <li>New tab: a <code>+</code> at the end of the run, the same footprint as a tab,
+        <li>New tab: a <code>+</code> at the end of the run, the footprint of a tab with no name,
         <code>ink-dim</code>.</li>
+        <li>The OS window title is the active tab's name and then <code>zet</code>, so the taskbar
+        and Alt-Tab distinguish two zet windows. The drawn strip keeps <code>zet</code> in its own
+        slot: the names are already on the tabs.</li>
       </ul>
 
 <pre><code> vertical, a rail on the left
@@ -263,6 +280,9 @@
 
       <ul>
         <li>Rail width 48px, cells 36px tall, index centred.</li>
+        <li>The rail carries numbers and no names. It is 48px wide and the whole reason to choose
+        it is that it gives the grid the rest, so a name in it would be a name in the space the
+        tabs were moved aside to free. This is the one position where a tab is only a number.</li>
         <li>The divider between the rail and the grid is a <code>hairline</code>.</li>
         <li>The active tab carries the same 2px <code>signal</code> bar, moved to the left edge.
         Same language, rotated.</li>

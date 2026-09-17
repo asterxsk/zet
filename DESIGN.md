@@ -120,13 +120,16 @@ setting and follows the Windows accessibility text size value by default.
 
 This is the part of the brief that has to be exactly right.
 
-A tab is a number, not a label.
+A tab is a number and a name. The number says which channel; the name says what is
+running on it. `#3  PowerShell` is one cell, and the number is the part that never
+changes: it is the tab's identity, and the name is what the program on it is doing
+right now.
 
 ```
  horizontal, one row shared with the titlebar
 +---------------------------------------------------------------+
-| zet   #1   #2   #3        (drag region)        _   []   x     |
-|       ~~                                                      |
+| zet   #1 pwsh   #2 vim   #3 dotfiles  (drag)   _   []   x     |
+|       ~~~~                                                    |
 +---------------------------------------------------------------+
 ```
 
@@ -137,12 +140,27 @@ A tab is a number, not a label.
   the remaining tabs are still #1 and #3. A number identifies a session, and
   shuffling numbers under the user is worse than a gap.
 - Single digit up to #9, then `#10` and beyond. Tab width grows to fit.
+- The name is what the program set with `OSC 0`/`OSC 2`, or the profile's name
+  when it set nothing. It is one `ink` step quieter than the number in colour
+  and one weight lighter, so the row still scans by number.
+- A name too long for its cell is cut and given an ellipsis. A name that fits
+  whole is never cut to make room for one.
+- Tab width is capped at 180px. Past the point where the names fit, every cell
+  gives up the same amount, down to a floor of the number alone — so a crowded
+  strip degrades evenly instead of being one wide tab and a row of clipped ones.
+  Below the floor the run overflows and the tabs past the end are not drawn.
 - Active tab: a 2px `signal` bar on the bottom edge plus `ink` at weight 500.
-- Inactive tab: `ink-dim`, weight 400, no bar, no background.
-- Hover: index moves to `ink-mid`. The indicator bar previews at `signal-dim`. No
-  background fill, ever. Filling a hovered tab is the single most common way a tab
-  strip starts looking like everyone else's.
-- New tab: a `+` at the end of the run, same footprint as a tab, `ink-dim`.
+- Inactive tab: `ink-dim` for the number and `ink-mid` for the name, weight 400,
+  no bar, no background. The name is brighter than the number at rest: the
+  number is an ordinal, and the name is the thing being read.
+- Hover: number moves to `ink-mid`. The indicator bar previews at `signal-dim`.
+  No background fill, ever. Filling a hovered tab is the single most common way a
+  tab strip starts looking like everyone else's.
+- New tab: a `+` at the end of the run, the footprint of a tab with no name,
+  `ink-dim`.
+- The OS window title is the active tab's name and then `zet`, so the taskbar and
+  Alt-Tab distinguish two zet windows. The drawn strip keeps `zet` in its own
+  slot: the names are already on the tabs.
 
 ```
  vertical, a rail on the left
@@ -158,6 +176,10 @@ A tab is a number, not a label.
 ```
 
 - Rail width 48px, cells 36px tall, index centered.
+- The rail carries numbers and no names. It is 48px wide and the whole reason to
+  choose it is that it gives the grid the rest, so a name in it would be a name in
+  the space the tabs were moved aside to free. This is the one position where a tab
+  is only a number.
 - The divider between the rail and the grid is a `hairline`.
 - Active tab carries the same 2px `signal` bar, moved to the left edge. Same
   language, rotated.
