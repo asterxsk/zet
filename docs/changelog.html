@@ -616,6 +616,16 @@
       positions the text was gone and the rule was not, drawing a full-width line with nothing over
       it. They are one block, culled once.</p>
 
+      <h4>packaging — uninstalling left zet's own entry in the user <code>PATH</code> if it had been written with a trailing backslash</h4>
+
+      <p>The installer accepts two spellings of the entry — with and without a trailing backslash —
+      and declines to add a second copy of either. The uninstaller knew only the spelling the
+      installer itself writes, so the entry it had declined to duplicate was the entry it then could
+      not find: it reported "not in the user PATH" and removed nothing, leaving a <code>PATH</code>
+      element pointing at a directory that was no longer there. Both directions ask one function
+      where the entry is now, and how long the entry that was found is, rather than each working it
+      out from the directory's own length.</p>
+
       <h2>0.1.0 — unreleased</h2>
 
       <p>The first release, and the first point at which an archive is published. Not yet usable as a

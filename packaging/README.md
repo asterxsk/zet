@@ -83,6 +83,16 @@ alone. It clamps at the first element — published snippets that always delete 
 `position - 1` eat the first character of the next entry when zet's directory happens to
 be first in `PATH`.
 
+Both directions locate the entry through `FindPathEntry`, which is the one place that
+decides what counts as zet's own entry: wrapped in separators so the first and last
+elements match like any other, and accepting a trailing backslash. That last part is why
+it is one function. The installer tolerates the backslash spelling and declines to add a
+second copy of it, so an uninstaller that knew only the spelling the installer writes
+would be unable to remove the entry the installer had just left alone, and would report
+that there was nothing to remove while the stale entry sat in `PATH`. The function hands
+back the length of the entry it matched as well as where it starts, because those two are
+not the same number for that spelling.
+
 **The context menu is per-user.** `HKCU\Software\Classes`, not `HKCR`: `HKCR` writes land
 in `HKLM` and need the elevation this installer refuses to ask for. Both `Directory` and
 `Directory\Background` are registered because right-clicking a folder and right-clicking

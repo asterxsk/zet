@@ -114,11 +114,51 @@ const
   { The user's own PATH lives here. The system PATH is HKLM and is not ours to touch. }
   EnvironmentKey = 'Environment';
 
+{ --- PATH, finding zet's own entry in it -------------------------------------- }
+
+{ Where `Dir` sits in a PATH value, or 0 when it is not in there at all. `At` points at
+  the separator *before* the entry, in the value wrapped in separators, and `EntryLen`
+  comes back as the length of the entry that was found.
+
+  One function because it is one question, asked in both directions, and the two
+  answers have to agree: an entry written with a trailing backslash is one the installer
+  is content to leave alone, and a value the installer declined to duplicate is one the
+  uninstaller then has to be able to find. Written twice, the second copy knew only the
+  spelling this installer writes, so that entry survived an uninstall and went on
+  pointing at a directory that was no longer there.
+
+  Wrapping in separators on both sides is what lets the first and last entries match
+  like any other. The `> 3` guard is what stops `C:\` being trimmed to `C:`.
+
+  `At` being 1 is the case worth naming: the entry is the very first element, so the
+  separator at `At` is the one this function added rather than one that belongs to PATH.
+  A caller that always deletes at `At - 1` eats the first letter of whatever follows —
+  which is what the published snippets do, and how they corrupt a PATH. }
+function FindPathEntry(const Paths, Dir: string; var EntryLen: Integer): Integer;
+var
+  Trimmed, Wrapped: string;
+begin
+  Trimmed := Dir;
+  while (Length(Trimmed) > 3) and (Trimmed[Length(Trimmed)] = '\') do
+    Delete(Trimmed, Length(Trimmed), 1);
+
+  Wrapped := ';' + Uppercase(Paths) + ';';
+  EntryLen := Length(Trimmed);
+  Result := Pos(';' + Uppercase(Trimmed) + ';', Wrapped);
+  if Result = 0 then
+  begin
+    { A trailing backslash in the entry should not make it look absent. }
+    Result := Pos(';' + Uppercase(Trimmed) + '\;', Wrapped);
+    EntryLen := Length(Trimmed) + 1;
+  end;
+end;
+
 { --- PATH, installing --------------------------------------------------------- }
 
 function NeedsPathEntry(const Dir: string): Boolean;
 var
-  Existing, Needle: string;
+  Existing: string;
+  EntryLen: Integer;
 begin
   if not RegQueryStringValue(HKCU, EnvironmentKey, 'Path', Existing) then
   begin
@@ -126,15 +166,7 @@ begin
     Result := True;
     Exit;
   end;
-  { Wrapped in separators on both sides so the first and last entries match too. }
-  Needle := ';' + Uppercase(Dir) + ';';
-  Result := Pos(Needle, ';' + Uppercase(Existing) + ';') = 0;
-  if Result then
-  begin
-    { A trailing backslash on either side should not make it look absent. }
-    Needle := ';' + Uppercase(Dir) + '\;';
-    Result := Pos(Needle, ';' + Uppercase(Existing) + ';') = 0;
-  end;
+  Result := FindPathEntry(Existing, Dir, EntryLen) = 0;
 end;
 
 procedure AddToUserPath(const Dir: string);
@@ -179,8 +211,8 @@ end;
 
 procedure RemoveFromUserPath(const Dir: string);
 var
-  Paths, Trimmed, Needle: string;
-  At: Integer;
+  Paths: string;
+  At, EntryLen: Integer;
 begin
   if not RegQueryStringValue(HKCU, EnvironmentKey, 'Path', Paths) then
   begin
@@ -188,27 +220,21 @@ begin
     Exit;
   end;
 
-  Trimmed := Dir;
-  while (Length(Trimmed) > 3) and (Trimmed[Length(Trimmed)] = '\') do
-    Delete(Trimmed, Length(Trimmed), 1);
-
-  Needle := ';' + Uppercase(Trimmed) + ';';
-  At := Pos(Needle, ';' + Uppercase(Paths) + ';');
+  At := FindPathEntry(Paths, Dir, EntryLen);
   if At = 0 then
   begin
-    Log(Format('"%s" is not in the user PATH, so there is nothing to remove.', [Trimmed]));
+    Log(Format('"%s" is not in the user PATH, so there is nothing to remove.', [Dir]));
     Exit;
   end;
 
-  { `At` points at the separator *before* the entry, in the wrapped string. When the
-    entry is the very first element, At is 1 and that separator is the one this code
-    added, not one that belongs to PATH — deleting the character before it would eat
-    the first letter of whatever follows. Published snippets that always delete at
-    At - 1 corrupt PATH in exactly that case. }
+  { See `FindPathEntry` for what `At` is and why `At > 1` is its own case. The entry is
+    `EntryLen` characters long, which is not always the length of the directory: an
+    entry carrying a trailing backslash is one byte longer than the rest of this code
+    would guess. }
   if At > 1 then
-    Delete(Paths, At - 1, Length(Trimmed) + 1)
+    Delete(Paths, At - 1, EntryLen + 1)
   else
-    Delete(Paths, 1, Length(Trimmed) + 1);
+    Delete(Paths, 1, EntryLen + 1);
 
   { ExpandString, not String: writing a REG_EXPAND_SZ PATH as REG_SZ freezes every
     %VARIABLE% already in it. }
@@ -218,9 +244,9 @@ begin
       Log('The user PATH is now empty, so the value was removed.');
   end
   else if RegWriteExpandStringValue(HKCU, EnvironmentKey, 'Path', Paths) then
-    Log(Format('Removed "%s" from the user PATH.', [Trimmed]))
+    Log(Format('Removed "%s" from the user PATH.', [Dir]))
   else
-    Log(Format('Could not remove "%s" from the user PATH.', [Trimmed]));
+    Log(Format('Could not remove "%s" from the user PATH.', [Dir]));
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

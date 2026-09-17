@@ -412,6 +412,15 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     panel, and the hairline sits twenty-two pixels below the top of the text: for a band of scroll
     positions the text was gone and the rule was not, drawing a full-width line with nothing over
     it. They are one block, culled once.
+- **`packaging/`** — uninstalling left zet's own entry in the user `PATH` if it had been written
+  with a trailing backslash.
+  - The installer accepts two spellings of the entry — with and without a trailing backslash — and
+    declines to add a second copy of either. The uninstaller knew only the spelling the installer
+    itself writes, so the entry it had declined to duplicate was the entry it then could not find:
+    it reported "not in the user PATH" and removed nothing, leaving a `PATH` element pointing at a
+    directory that was no longer there. Both directions ask one function where the entry is now,
+    and how long the entry that was found is, rather than each working it out from the directory's
+    own length.
 
 ## [0.1.0] — unreleased
 
