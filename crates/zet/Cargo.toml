@@ -1,0 +1,63 @@
+[package]
+name = "zet"
+description = "A terminal for Windows, built around the grid"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "zet"
+path = "src/main.rs"
+
+[dependencies]
+zet-vt.workspace = true
+zet-pty.workspace = true
+zet-config.workspace = true
+zet-font.workspace = true
+zet-input.workspace = true
+zet-session.workspace = true
+zet-render.workspace = true
+zet-ui.workspace = true
+zet-app.workspace = true
+
+# The window and the event loop. Everything below this crate is a library that has never
+# seen either, which is what lets the whole terminal be tested without a display.
+winit.workspace = true
+
+thiserror.workspace = true
+
+# The same raw declarations zet-pty uses, for the same reason: two files need a handful
+# of calls and the facade's COM wrappers would be compile time spent for nothing. The
+# clipboard and the accessibility settings are the only things in zet that reach Win32
+# from above the pty layer, and both are small enough to read in one sitting.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    # `OpenClipboard` and the three calls that follow it.
+    "Win32_System_DataExchange",
+    # `GlobalAlloc`/`GlobalLock`, which is the only way to hand a string to the clipboard.
+    "Win32_System_Memory",
+    # `GetSysColor`, which is where the forced-colours highlight actually lives.
+    "Win32_Graphics_Gdi",
+    # `HIGHCONTRASTW` and `HCF_HIGHCONTRASTON`.
+    "Win32_UI_Accessibility",
+    # `SystemParametersInfoW`, `GetSysColor`, and the `SPI_*` constants.
+    "Win32_UI_WindowsAndMessaging",
+    # `RegGetValueW`, for the text-scaling factor.
+    "Win32_System_Registry",
+] }
+
+[lints.rust]
+# `deny` and not `forbid`, because two modules — `platform` and `clipboard` — call Win32
+# directly and Win32 is an unsafe API. A `forbid` cannot be relaxed by a nearer `allow`,
+# so it would mean either no platform integration or a second crate to hold two files.
+# Every unsafe block in there carries a SAFETY comment and nothing else in the binary
+# contains one.
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
