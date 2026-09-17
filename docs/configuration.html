@@ -74,10 +74,13 @@
       is missing takes its default. A key that is not in the schema is an error.</p>
 
       <div class="callout callout--note">
-        <span class="callout__label">The file is read, not written</span>
-        <p>There is no settings panel yet, so nothing writes this file back. <code>zet-config</code>
-        contains the save path and the round-trip that preserves a file's comments, but the binary
-        does not call it. Everything on this page describes the file a hand-editor writes.</p>
+        <span class="callout__label">Two writers, one file</span>
+        <p>The settings panel (<code>Ctrl+Shift+Comma</code>) edits this file in place as you change
+        rows in it, so a setting moved there is a line changed here. The save is a merge against what
+        is already on disk rather than a rewrite: a value you did not change comes out as you wrote
+        it, and so does the comment beside it. What it does not keep is a key the schema does not
+        have — a save writes the shape a load accepts, and a key that is not in the schema is an
+        error, so the file is told about it rather than quietly tidied.</p>
       </div>
 
       <h2>The file</h2>

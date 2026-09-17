@@ -387,6 +387,32 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     range. The unit is *physical* pixels and is not scaled by the display, so a two-pixel bar is a
     hairline at 200% — the range is 1 to 8 now, in one constant rather than three literals.
 
+- **`zet-config`** — a key inside `[window.background]` that the shape does not have was accepted
+  without a word, and then deleted by the next save.
+  - `Background` is the schema's one internally tagged enum, and serde does not carry
+    `deny_unknown_fields` across one: `color = "#101010"` written beside `kind = "solid"` — which is
+    what the gradient example leads you to write — parsed clean with no diagnostic at all. That
+    silence is what made it a loss rather than a mistake. A save keeps only the shape a load
+    accepts, so the key and the comment on it went on the next unrelated settings-panel edit, and a
+    version-controlled config had a diff in it nobody asked for. The loader reports the key now, and
+    says it will be dropped, which is the one thing that makes dropping it honest. Every other
+    section refuses a key it does not have, so this is a check against the kind the file named
+    rather than a second mechanism.
+- **`zet`** — a click on the last column of the grid was reported one column to the left of it on a
+  scaled display.
+  - The host counts the columns the session has by multiplying the grid's logical width by the DPI
+    scale and dividing by the physical cell; the pointer's clamp counted them by dividing by the
+    cell already scaled. At 125% with an eleven-pixel cell those are 125 and 124.99999999999999, and
+    the second one's floor is a column the program has and the pointer cannot reach: `vim` and
+    `htop` got a click one to the left, a drag to the right edge stopped short, and a drag that
+    ended there matched its own anchor and threw the selection away. The two are one function now,
+    asked once, so the number the session was resized to is the number the pointer is clamped to.
+- **`zet-ui`** — a section heading scrolled off the top of the settings panel left its rule behind.
+  - The heading's text and the hairline under it were culled by separate tests against the same
+    panel, and the hairline sits twenty-two pixels below the top of the text: for a band of scroll
+    positions the text was gone and the rule was not, drawing a full-width line with nothing over
+    it. They are one block, culled once.
+
 ## [0.1.0] — unreleased
 
 The first release, and the first point at which an archive is published. Not yet usable as a

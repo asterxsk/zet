@@ -230,7 +230,7 @@ fn a_comment_on_an_inline_table_survives_being_written_out_as_a_section() {
         "config.toml",
         "\
 [window]
-background = { kind = \"solid\", color = \"#101010\" } # my background
+background = { kind = \"gradient\", from = \"#0a0b0d\", to = \"#1a1030\", angle = 90.0 } # my background
 ",
     );
 
@@ -246,6 +246,65 @@ background = { kind = \"solid\", color = \"#101010\" } # my background
     let back = load(&path).expect("loads");
     assert!(back.diagnostics.is_empty(), "{:?}", back.diagnostics);
     assert_eq!(back.config, config);
+}
+
+#[test]
+fn a_key_the_background_does_not_have_is_reported_before_a_save_can_drop_it() {
+    // `Background` is an internally tagged enum, and serde does not carry
+    // `deny_unknown_fields` across one. That made it the single table in the schema that
+    // accepted a key it does not have without saying so — and silence is what turned it
+    // into a loss, because a save keeps only the shape a load accepts. The line went on
+    // the next unrelated settings-panel edit with nothing having warned it would.
+    let dir = scratch("background-key");
+    let path = write(
+        &dir,
+        "config.toml",
+        "\
+[window.background]
+kind = \"solid\"
+# the colour I want
+color = \"#101010\"
+",
+    );
+
+    let loaded = load(&path).expect("loads");
+    assert!(
+        loaded
+            .diagnostics
+            .iter()
+            .any(|it| it.message.contains("window.background.color")),
+        "a key the solid background does not have was accepted in silence: {:?}",
+        loaded.diagnostics
+    );
+
+    let mut config = loaded.config;
+    config.font.size = 17.0;
+    save(&config, &path).expect("saves");
+    let written = read(&path);
+    assert!(
+        !written.contains("#101010"),
+        "the reported key was kept and the diagnostic was wrong:\n{written}"
+    );
+}
+
+#[test]
+fn a_key_a_background_shape_does_have_is_not_reported() {
+    // The check is against the keys of the kind the file named, not against a list of
+    // every key any kind has. A gradient is four keys and none of them is a mistake.
+    let dir = scratch("background-keys-ok");
+    let path = write(
+        &dir,
+        "config.toml",
+        "\
+[window.background]
+kind = \"gradient\"
+from = \"#0a0b0d\"
+to = \"#1a1030\"
+angle = 90.0
+",
+    );
+    let loaded = load(&path).expect("loads");
+    assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
 }
 
 #[test]

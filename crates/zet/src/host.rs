@@ -658,24 +658,17 @@ impl Host {
         let Some(renderer) = self.renderer.as_ref() else {
             return EMPTY_GRID;
         };
-        let metrics = renderer.metrics();
-        if metrics.cell_width <= 0.0 || metrics.cell_height <= 0.0 {
-            return EMPTY_GRID;
-        }
-        let scale = f64::from(self.scale());
-        let grid = self.placed.grid;
-        let width = f64::from(grid.width) * scale;
-        let height = f64::from(grid.height) * scale;
+        // The same count the pointer is clamped to, from the same function, because the
+        // two have to agree: a program told it has more columns than a click can reach
+        // has columns nothing can be clicked in.
+        let (cols, rows) = mouse::cells(self.placed.grid, renderer.metrics(), self.scale());
         // A window too short for one row is a real state — a window being dragged to the
         // top of the screen passes through it — and reporting zero columns would divide
         // by it further down.
-        if width < f64::from(metrics.cell_width) || height < f64::from(metrics.cell_height) {
+        if cols == 0 || rows == 0 {
             return EMPTY_GRID;
         }
-        (
-            (width / f64::from(metrics.cell_width)) as u16,
-            (height / f64::from(metrics.cell_height)) as u16,
-        )
+        (cols, rows)
     }
 
     /// Tell the sessions how much room they have, if that has changed.

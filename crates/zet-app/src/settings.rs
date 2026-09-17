@@ -182,13 +182,13 @@ pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
         setting(
             Id::ReduceMotion,
             "Reduce motion",
-            on_off(config.appearance.follow_reduce_motion),
+            follow(config.appearance.follow_reduce_motion),
             Kind::Toggle,
         ),
         setting(
             Id::ForcedColors,
             "Forced colours",
-            on_off(config.appearance.follow_forced_colors),
+            follow(config.appearance.follow_forced_colors),
             Kind::Toggle,
         ),
         Line::Heading("Tabs"),
@@ -389,6 +389,17 @@ fn on_off(value: bool) -> String {
     if value { "On" } else { "Off" }.to_owned()
 }
 
+/// What a setting the system has an answer to reads as: `Follow system`, or `Off`.
+///
+/// These two are not `on_off`, because `On` beside the label `Reduce motion` says motion
+/// is being reduced, and the flag says something else: that zet will do whatever the
+/// system asked. On a machine where Windows has asked for nothing those come apart, and
+/// the panel would claim the cursor was still while it blinked. The value names the
+/// policy instead, which is the thing the toggle actually chooses between.
+fn follow(value: bool) -> String {
+    if value { "Follow system" } else { "Off" }.to_owned()
+}
+
 /// A config value's spelling with its first letter raised.
 ///
 /// The file's spellings are kebab-case and lowercase, which is right for a file and
@@ -496,6 +507,23 @@ mod tests {
         assert_eq!(at(&lines, Id::CursorThickness), "3 px");
         assert_eq!(at(&lines, Id::CursorBlink), "Off");
         assert_eq!(at(&lines, Id::TextScale), "150%");
+    }
+
+    #[test]
+    fn a_setting_the_system_has_an_answer_to_says_whose_answer_it_is() {
+        // `On` here would be a claim about the machine rather than about zet: the flag
+        // says "do what the system said", and a system that asked for nothing would
+        // leave the panel saying motion was reduced while the cursor blinked.
+        let mut config = config();
+        let following = lines(&config, &parse_bindings(&config));
+        assert_eq!(at(&following, Id::ReduceMotion), "Follow system");
+        assert_eq!(at(&following, Id::ForcedColors), "Follow system");
+
+        config.appearance.follow_reduce_motion = false;
+        config.appearance.follow_forced_colors = false;
+        let ignoring = lines(&config, &parse_bindings(&config));
+        assert_eq!(at(&ignoring, Id::ReduceMotion), "Off");
+        assert_eq!(at(&ignoring, Id::ForcedColors), "Off");
     }
 
     #[test]

@@ -1319,6 +1319,84 @@ fn a_row_scrolled_half_off_the_list_is_not_drawn_over_the_chrome_above_it() {
 }
 
 #[test]
+fn a_heading_scrolled_off_the_panel_takes_its_rule_with_it() {
+    // A section's rule belongs to the heading above it and the two are one block. Asked
+    // separately whether it fits, the rule answers yes for the twenty-two pixels between
+    // the heading's box leaving the panel and the rule's own top arriving, and the frame
+    // gets a full-width hairline with nothing over it — a line that reads as a rule for
+    // whichever row happens to sit above it.
+    let palette = Palette::instrument();
+    let hairline = color(palette.hairline);
+    let mut lines = vec![SettingLine {
+        text: "APPEARANCE",
+        control: None,
+        value: "",
+    }];
+    lines.extend((0..12).map(|_| SettingLine {
+        text: "Size",
+        control: Some(Control::Step),
+        value: "13",
+    }));
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let short = Size {
+        width: 800.0,
+        height: 300.0,
+    };
+    let mut input = input(&palette, &tabs, short);
+    input.settings_open = true;
+    input.settings = &lines;
+
+    // Only this fixture's one section rule spans the whole panel: the panel's own left
+    // edge is one pixel of hairline and a control's border is 118. Each scroll is
+    // recorded with the number of control fills, which is how the last assertion knows
+    // the panel was still populated rather than empty.
+    let ground = color(palette.ground);
+    let mut seen = Vec::new();
+    for scroll in [0.0_f32, 30.0] {
+        input.settings_scroll = scroll;
+        let drawn = draw(&mut chrome, &input);
+        let panel = chrome
+            .regions()
+            .iter()
+            .find_map(|region| match region {
+                crate::Region::Settings(rect) => Some(*rect),
+                _ => None,
+            })
+            .expect("the panel is open");
+        let rules = drawn
+            .frame
+            .quads
+            .iter()
+            .filter(|quad| {
+                // A section rule is the full width of the panel, which is what tells it
+                // apart from the one-pixel edge beside it and from a control's 118-pixel
+                // border. Half a pixel is a tolerance this cannot need and the lint asks
+                // for; the three widths differ by two orders of magnitude.
+                quad.color.map(f32::to_bits) == hairline && (quad.rect[2] - panel.width).abs() < 0.5
+            })
+            .count();
+        let controls = drawn
+            .frame
+            .quads
+            .iter()
+            .filter(|quad| quad.color.map(f32::to_bits) == ground)
+            .count();
+        seen.push((rules, controls));
+    }
+
+    assert_eq!(seen[0].0, 1, "the heading's rule was not drawn with it");
+    // Sixteen pixels of padding is what the heading's box starts below the panel's top
+    // edge, so at this scroll the box is fourteen pixels above it and the rule, twenty-two
+    // below that, is eight pixels inside it.
+    assert_eq!(seen[1].0, 0, "the rule outlived the heading it belongs to");
+    assert!(
+        seen[1].1 > 0,
+        "the panel drew no rows at this scroll, so the rule count proves nothing"
+    );
+}
+
+#[test]
 fn clicking_the_panel_is_not_clicking_the_grid() {
     // The panel floats over the terminal, so a click on its surface must stop there. A
     // click that fell through would type into a program the user was not looking at.

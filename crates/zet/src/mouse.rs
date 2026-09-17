@@ -75,12 +75,41 @@ pub fn cell(x: f64, y: f64, grid: Rect, metrics: &Metrics, scale: f32) -> Option
     // keeps the answer inside the grid the program has, and still lets a click on the
     // last pixel of the window land on the last column, which is what a user aiming at it
     // expects.
-    let cols = (f64::from(grid.width) / cell_width).floor().max(1.0);
-    let rows = (f64::from(grid.height) / cell_height).floor().max(1.0);
+    //
+    // The count is [`cells`]' rather than an arithmetic of this function's own, because
+    // the number the program was resized to is the number this has to clamp to, and two
+    // ways of counting it disagree.
+    let (cols, rows) = cells(grid, metrics, scale);
+    let last = |count: u16| f64::from(count.max(1)) - 1.0;
     Some(Pos::new(
-        row.clamp(0.0, rows - 1.0) as usize,
-        col.clamp(0.0, cols - 1.0) as usize,
+        row.clamp(0.0, last(rows)) as usize,
+        col.clamp(0.0, last(cols)) as usize,
     ))
+}
+
+/// How many whole cells a grid rectangle holds.
+///
+/// One function because it is one number. [`crate::host::Host::grid_size`] asks this how
+/// many columns and rows the session should be told it has, and [`cell`] asks it how far
+/// the pointer is allowed to reach; a terminal whose program has 125 columns and whose
+/// pointer can only reach 124 has a last column that cannot be clicked in, which is a
+/// difference a user meets before anyone reading the code does.
+///
+/// The order of operations is the whole of it. The rectangle is logical pixels and the
+/// cell is physical ones, and multiplying the rectangle by the scale before dividing is
+/// not the same sum as dividing by the cell already scaled: at 125% with an eleven-pixel
+/// cell the first is exactly 125.0 and the second is 124.99999999999999, whose floor is a
+/// column short.
+#[must_use]
+pub fn cells(grid: Rect, metrics: &Metrics, scale: f32) -> (u16, u16) {
+    if metrics.cell_width <= 0.0 || metrics.cell_height <= 0.0 {
+        return (0, 0);
+    }
+    let scale = if scale > 0.0 { f64::from(scale) } else { 1.0 };
+    (
+        (f64::from(grid.width) * scale / f64::from(metrics.cell_width)) as u16,
+        (f64::from(grid.height) * scale / f64::from(metrics.cell_height)) as u16,
+    )
 }
 
 /// A cell's size in logical pixels.
@@ -362,6 +391,40 @@ mod tests {
             cell(300.0, 604.0, grid, &metrics(), 1.0),
             Some(Pos::new(29, 30))
         );
+    }
+
+    #[test]
+    fn the_last_column_the_program_has_is_one_the_pointer_can_reach() {
+        // 1100 logical pixels at 125% is 1375 physical ones, which is exactly 125 cells
+        // of eleven. Dividing by the cell already scaled reads the same sum and gives
+        // 124.99999999999999, whose floor is a column the program has and the pointer
+        // cannot: a click on the rightmost column reported one to its left, a drag to
+        // the edge stopping a column short of where the user let go, and — because the
+        // anchor is clamped too — a press and release on that column agreeing that
+        // nothing was dragged, which throws the selection away.
+        let mut wide = metrics();
+        wide.cell_width = 11.0;
+        let grid = Rect::new(0.0, 0.0, 1100.0, 600.0);
+        assert_eq!(cells(grid, &wide, 1.25), (125, 37));
+        assert_eq!(
+            cell(1095.0, 300.0, grid, &wide, 1.25),
+            Some(Pos::new(18, 124))
+        );
+        assert_eq!(
+            cell(1099.9, 599.9, grid, &wide, 1.25),
+            Some(Pos::new(36, 124)),
+            "the last pixel of the window is the last column, not the one before it"
+        );
+    }
+
+    #[test]
+    fn a_rectangle_too_short_for_a_cell_holds_none() {
+        let grid = Rect::new(0.0, 0.0, 9.0, 19.0);
+        assert_eq!(cells(grid, &metrics(), 1.0), (0, 0));
+        // And a cell of no width at all is not a division by zero.
+        let mut flat = metrics();
+        flat.cell_width = 0.0;
+        assert_eq!(cells(Rect::new(0.0, 0.0, 800.0, 600.0), &flat, 1.0), (0, 0));
     }
 
     #[test]

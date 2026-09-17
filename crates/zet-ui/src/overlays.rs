@@ -138,14 +138,25 @@ pub(crate) fn panel(
         y += lead;
         let Some(control) = setting.control else {
             // A section heading, and the rule under it.
+            //
+            // One decision for the two, on a box that covers both. The rule is the
+            // heading's, and it sits the height of the heading's box below the top of it;
+            // asked separately it can pass the containment test while the text above it
+            // does not, which draws a full-width hairline with nothing over it — a line
+            // that reads as a rule for whichever row happens to sit above it.
             let heading_box = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, HEADING_BOX);
-            if visible(heading_box, rect) {
+            let rule = Rect::new(rect.x, y + HEADING_BOX, rect.width, 1.0);
+            // The box the pair is culled by: the heading's, one hairline taller.
+            let block = Rect::new(
+                heading_box.x,
+                heading_box.y,
+                heading_box.width,
+                HEADING_BOX + 1.0,
+            );
+            if visible(block, rect) {
                 let style = TextStyle::new(HEADING_SIZE, Weight::MEDIUM, palette.ink)
                     .tracking(HEADING_TRACKING);
                 paint.centered(setting.text, heading_box, style);
-            }
-            let rule = Rect::new(rect.x, y + HEADING_BOX, rect.width, 1.0);
-            if visible(rule, rect) {
                 paint.fill(rule, palette.hairline);
             }
             y += height;

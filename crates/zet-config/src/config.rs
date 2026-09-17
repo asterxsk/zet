@@ -540,6 +540,9 @@ fn from_str(
         }
     };
     check(&config, diagnostics);
+    // The one check that reads the text rather than the parsed configuration, because
+    // what it looks for is the thing deserialization threw away.
+    background_keys(text, &config, diagnostics);
     Ok(config)
 }
 
@@ -594,6 +597,48 @@ fn check(config: &Config, diagnostics: &mut Vec<Diagnostic>) {
         diagnostics.push(Diagnostic::error(format!(
             "keys.{action} is not an action zet knows"
         )));
+    }
+}
+
+/// Report keys inside `[window.background]` that the setting it names does not have.
+///
+/// The one hole in "a key that is not in the schema is an error". Every section is a
+/// struct with `deny_unknown_fields`, and `Background` is one too — but it is an
+/// internally tagged enum, and serde does not carry that attribute across one, so
+/// `deny_unknown_fields` is written there and does nothing. Nothing else in the schema is
+/// tagged, so this is a check rather than a mechanism.
+///
+/// It matters because of what [`save`] does with a key the loader ignored: a save keeps
+/// only the shape a load accepts, so `color` written beside `kind = "solid"` — which is
+/// what someone who has read the gradient example would write — is deleted by the next
+/// unrelated settings-panel edit. Being told about it is the difference between a line
+/// that does nothing and a line that disappears.
+fn background_keys(text: &str, config: &Config, diagnostics: &mut Vec<Diagnostic>) {
+    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+        return;
+    };
+    // The inline spelling and the section spelling are one setting, and this is the only
+    // thing that reads them both.
+    let Some(table) = document
+        .get("window")
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|window| window.get("background"))
+        .and_then(toml_edit::Item::as_table_like)
+    else {
+        return;
+    };
+    let (kind, allowed): (&str, &[&str]) = match &config.window.background {
+        Background::Solid => ("solid", &["kind"]),
+        Background::Image { .. } => ("image", &["kind", "path", "opacity"]),
+        Background::Gradient { .. } => ("gradient", &["kind", "from", "to", "angle"]),
+    };
+    for (key, _) in table.iter() {
+        if !allowed.contains(&key) {
+            diagnostics.push(Diagnostic::error(format!(
+                "window.background.{key} is not a setting for kind = {kind:?}; \
+                 the next save will drop it"
+            )));
+        }
     }
 }
 
