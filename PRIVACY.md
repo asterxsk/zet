@@ -29,6 +29,11 @@ connections are theirs, not zet's. zet does not inspect, log, or forward them.
 
 ## The update check
 
+**Not implemented yet.** This section describes the update check zet is being built to make. The
+code for it exists, but nothing in the shipped binary calls it, so as of this date zet makes no
+network requests at all, and the setting below has nothing to turn off. It is published here so
+that the request is described before it is made rather than after.
+
 **What it is.** On launch, zet asks GitHub whether a newer version has been published. This is
 the only request zet makes on its own.
 
@@ -71,6 +76,11 @@ check runs only when you run `zet --check-update` or choose the menu item.
 | `%APPDATA%\zet\config.toml` | Your settings: theme, font, shell profiles, keybindings | To remember your configuration |
 | `%LOCALAPPDATA%\zet\logs\` | Diagnostic logs, if you enable them. Off by default | To help you diagnose a problem you report |
 | `%LOCALAPPDATA%\zet\cache\` | Downloaded update archives before they are applied | To stage an update |
+
+Only the first row is in use so far, and the current build only reads it: there is no settings
+panel to write `config.toml` back yet, and no log or update code wired in. The other two rows
+are what the finished program will use, listed here so that the directories are known before
+they appear.
 
 zet does not read files outside those directories and the ones you point it at — for example a
 theme file you choose, or a working directory you open.

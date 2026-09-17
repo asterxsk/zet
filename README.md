@@ -3,9 +3,11 @@
 A terminal multiplexer for Windows, written in Rust, with its own VT engine and a GPU
 renderer.
 
-> **Status: pre-alpha.** The terminal engine and the process layer work and are tested. There
-> is no window to run them in yet — the renderer, the configuration, and the binary are still
-> to come. Nothing here is usable as a daily driver, and nothing here is worth installing.
+> **Status: pre-alpha.** zet builds and runs: it opens a window, starts a shell, and draws it
+> with its own VT engine and its own GPU renderer. What is missing is the depth around that —
+> the settings file is read but there is no settings panel, `zet-update` is written but not
+> wired to the binary, and the kitty keyboard protocol is not implemented. Nothing here is
+> usable as a daily driver, and nothing here is worth installing.
 
 ## Why
 
@@ -29,14 +31,23 @@ The full product thinking is in [PRODUCT.md](PRODUCT.md); the design decisions a
 
 ## The crates
 
+The workspace is layered, and each crate is built on the ones above it in this list — except
+[`zet-update`](crates/zet-update), which stands alone and is the only crate here published as a
+library in its own right.
+
 | Crate | What it owns |
 |---|---|
 | [`zet-vt`](crates/zet-vt) | The terminal engine: parser, grid, scrollback, reflow, damage |
 | [`zet-pty`](crates/zet-pty) | ConPTY sessions and shell profile discovery |
+| [`zet-config`](crates/zet-config) | TOML configuration, themes, the ANSI palette, hot reload |
+| [`zet-font`](crates/zet-font) | Font loading, rasterisation, the face chain and its fallback order |
+| [`zet-input`](crates/zet-input) | Key and mouse encoding, chords and keybindings |
+| [`zet-session`](crates/zet-session) | A session: a pty and a terminal with a read loop between them |
+| [`zet-render`](crates/zet-render) | The wgpu renderer: the glyph atlas, the grid and chrome pipelines |
+| [`zet-ui`](crates/zet-ui) | The chrome's layout, and the embedded IBM Plex Sans it is drawn in |
+| [`zet-app`](crates/zet-app) | The application state machine: tabs, commands, themes, selection |
+| [`zet`](crates/zet) | The binary: the window, the event loop, and the frame host |
 | [`zet-update`](crates/zet-update) | Version identity, update checks, self-replacement |
-| `zet-render` | The wgpu renderer on DirectX 12 — planned |
-| `zet-config` | TOML configuration, themes, hot reload — planned |
-| `zet` | The binary — planned |
 
 ## Building
 
@@ -46,6 +57,10 @@ Requires Rust 1.90 or newer and the MSVC toolchain.
 cargo build --release
 cargo test --workspace
 ```
+
+That produces `target/release/zet.exe`, which is the whole program — it needs no assets beside
+it, because the chrome's fonts are compiled in. It looks for its configuration at
+`%APPDATA%\zet\config.toml` and starts with defaults if the file is not there.
 
 The tests that talk to GitHub are ignored by default, because a test that needs the network is a
 test that fails on a train:
@@ -100,15 +115,20 @@ Tags are `v`-prefixed. Both `v0.2.0` and `0.2.0` parse, but the workflow creates
 
 ## Updates
 
-zet checks GitHub Releases on launch and tells you when there is a newer version. You choose
-whether to install it, and it takes effect the next time zet starts.
+**Not wired up yet.** [`zet-update`](crates/zet-update) implements the whole of it — the version
+identity, the release lookup, the digest check, and the self-replacement — but nothing in the
+binary calls it, so the current build never touches the network on its own.
+
+When it is wired in, the intent is that zet checks GitHub Releases on launch and tells you when
+there is a newer version, that you choose whether to install it, and that it takes effect the
+next time zet starts.
 
 The archive is verified against a `SHA256SUMS` digest published alongside it before anything is
 written to disk. **The archives are not Authenticode-signed**, so a checksum proves the download
 matches the release — not who published it. What that does and does not buy you is set out in
 [SECURITY.md](SECURITY.md).
 
-To turn the check off and make zet never touch the network on its own:
+The configuration key for it already exists, so setting it now costs nothing:
 
 ```toml
 [update]
@@ -117,9 +137,11 @@ check_on_launch = false
 
 ## Privacy
 
-zet has no telemetry, no accounts, and no server. The update check is the only request it makes
-on its own, and it discloses your IP address to GitHub. [PRIVACY.md](PRIVACY.md) says exactly
-what is sent, what is not, and what is written to your disk.
+zet has no telemetry, no accounts, and no server. The current build makes no network requests at
+all — the update check is the only one it is ever meant to make on its own, and it is not wired
+up yet. When it is, it will disclose your IP address to GitHub and nothing else.
+[PRIVACY.md](PRIVACY.md) says exactly what is sent, what is not, and what is written to your
+disk.
 
 ## Security
 
