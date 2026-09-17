@@ -117,6 +117,28 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 - **`packaging/`** — a per-user Windows installer and the icon it installs.
   - Inno Setup, installing to `%LOCALAPPDATA%\Programs\zet` with no elevation. Optional PATH
     entry, Start Menu shortcut, and "Open zet here" context menu.
+- **`zet-vt` / `zet-input`** — the kitty keyboard protocol, both halves of it.
+  - `zet-vt` tracks the flag stack: `CSI = flags ; mode u` sets, ors, or and-nots the flags,
+    `CSI > flags u` pushes and `CSI < n u` pops, and `CSI ? u` answers with the flags in force.
+    The stack is bounded, so a program that pushes in a loop evicts its own oldest entry rather
+    than growing the terminal's memory, and an empty pop resets every flag. The stack is per
+    screen: a full-screen program that dies without popping leaves nothing behind for the shell
+    underneath, and `ESC c` clears it while `DECSTR` — a soft reset — does not.
+  - `zet-input` encodes against it as `CSI code ; modifiers:event ; text u`, where the code is
+    the key *before* shift. The protocol is explicit about that, and it is the part a naive
+    implementation gets wrong: a program matching `ctrl+shift+a` looks for the code of `a`, so a
+    terminal that sends the code of `A` hands it a chord it will never match.
+  - The functional keys keep their legacy sequences, because in the protocol's own table those
+    *are* the sequences. Keys the legacy table has no bytes for at all — the locks,
+    `PrintScreen`, `Pause`, `Menu`, and `F13` up — are reported the protocol's way always. Text
+    keys move to `CSI u` under `Report all keys`, or under disambiguation alone when the key is
+    one the legacy encoding cannot tell apart. `Enter`, `Tab`, and `Backspace` are never
+    disambiguated, which is the protocol's own carve-out: a shell has to be able to run `reset`.
+  - Event types are only sent when the program asked for them. A release is otherwise not sent
+    at all, because a program that did not ask would read one as a keypress.
+  - `Report alternate keys` is deliberately not implemented, and the bit is dropped rather than
+    echoed back. The host does not carry the physical key, and claiming a feature that is not
+    there is worse than the honest no that the protocol's set-then-query handshake exists to get.
 
 ### Fixed
 
@@ -135,6 +157,32 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     texel instead of by its alpha. The texel's colour is white, so the tint's colour survived at
     full strength and every glyph drew as a solid rectangle of its own colour, in the right
     place and the right size, with only its edges dimmed.
+- **`zet-input` / `zet`** — `Ctrl+Shift+Comma`, the shipped binding for the settings panel, could
+  never fire.
+  - A binding names a *key* and the event carries the character the layout put there, which under
+    shift is `<` — and nothing compared the two. A chord now matches the character shift puts above
+    the key it names, and only that character, and only for keys that are not letters, because a
+    letter's case is the binding rather than a layout's business.
+- **`zet-app`** — `Enter` in the find bar went to the previous match and `Shift+Enter` to the next.
+  - The condition was inverted, and the two keys are one line apart, so it read as working until
+    you were deep enough in the list to notice.
+- **`zet-app`** — the find bar could not hold a space.
+  - The space bar is a named key on this platform rather than a character one, so the bar saw no
+    text and returned false — and the key fell through to the shell underneath, which is where the
+    space went instead.
+- **`zet-app`** — a find match with a row above the viewport was highlighted in the wrong columns.
+  - Its start column was carried over from a row nobody can see, which, when the whole match mapped
+    onto one visible row, handed the selection its corners the wrong way round and painted the gap
+    between them. The same match taller than the window also scrolled its own first row off the top,
+    so following one hid the half you can read.
+- **`zet`** — a lost mouse release left the scrollbar grab set for the rest of the window's life.
+  - Merely moving the mouse over the terminal then scrolled it with no button held. Losing focus and
+    the pointer leaving the window now end every drag.
+- **`zet`** — the settings panel closed twice for one `Escape`, and its chord toggled twice for one
+  press.
+  - The panel's bare-`Escape` branch had no event-kind guard, so the release was handled as well as
+    the press. The same missing guard made the host schedule two redraws for every bound keypress
+    instead of one.
 - **`zet`** — the session is told its size at the end of a frame rather than from the window's
   resize event.
   - A resize event says how many pixels there are; how many columns that is depends on where the
@@ -188,8 +236,6 @@ daily driver.
     sequences that a mode gates rather than a keystroke.
   - Chords and keybindings parsed out of the configuration, so `Ctrl+Shift+T` is a value before
     it is a binding.
-  - The kitty keyboard protocol is not implemented — `zet-vt` does not track its flag stack — so
-    `encode_key` reports the legacy encoding and answers `None` for key release and repeat.
 - **`zet-session`** — one running terminal: a child process on a pseudoconsole, the parser
   chewing its output, and the grid that comes out.
   - A pump thread parked in `Pty::next_chunk` with a timeout, because a ConPTY output pipe never

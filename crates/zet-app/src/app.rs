@@ -540,11 +540,19 @@ impl App {
 
     /// Find the action a key is bound to, if any.
     ///
-    /// The kitty keyboard protocol's `CSI u` disambiguation belongs here rather than in
-    /// the encoder, because whether a chord is a zet shortcut or a byte for the program
-    /// is zet's decision and not the terminal's. It is not implemented: a binding is
-    /// matched on the legacy encoding alone, so a program that negotiates for the
-    /// protocol sees the same shortcut behaviour as one that does not.
+    /// This is asked before the encoder is, so a chord zet has a binding for never
+    /// reaches the program — and that is deliberate even for a program that has
+    /// negotiated the kitty keyboard protocol. The protocol's `CSI u` changes what the
+    /// terminal *sends*; it does not say the terminal stops having a keyboard of its
+    /// own, and a terminal that gave its own shortcuts up the moment a program asked
+    /// for all keys would be one where the settings panel could be unreachable from
+    /// inside whichever full-screen program happened to be running. kitty, which wrote
+    /// the protocol, keeps its own bindings the same way.
+    ///
+    /// What the flags would change is the *matching*, and they are not consulted here:
+    /// a chord is matched on the key and the modifiers the host reports, and a program
+    /// that wanted `Ctrl+Shift+Comma` for itself would need the user to unbind it. The
+    /// panel has a row for every action, so that is a thing the user can do.
     #[must_use]
     pub fn bound(&self, mods: zet_input::Modifiers, key: zet_input::Key) -> Option<Action> {
         self.bindings

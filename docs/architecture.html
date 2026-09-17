@@ -181,11 +181,26 @@
       is the legacy VT / xterm one. Key and mouse encoding live there, plus the paste and focus
       sequences that a mode gates rather than a keystroke.</p>
 
-      <p>The kitty keyboard protocol is not implemented, and what is missing is an input rather than a
-      decision. It is negotiated as a stack of flags, so encoding under it needs the current flag set,
-      and the terminal is the only thing that sees a push happen. Until the terminal engine tracks
-      that stack, <code>encode_key</code> reports the legacy encoding and answers nothing for key
-      release and repeat, because legacy VT has no byte for either.</p>
+      <p>The kitty keyboard protocol is negotiated rather than configured: a program pushes a set of
+      flags, and the terminal reports keys according to whatever is on top. That stack lives in the
+      terminal engine, because the terminal is the only thing that sees a program ask — so the
+      encoder takes the current flag set as an argument rather than holding one, and a key is encoded
+      against the state of the program that is going to read it.</p>
+
+      <p>Which encoding a key gets is a table lookup with a rule on top. The functional keys keep
+      their legacy sequences, because in the protocol's own table those <em>are</em> the sequences;
+      keys the legacy table has no bytes for at all — the locks, <code>PrintScreen</code>,
+      <code>Pause</code>, <code>Menu</code>, and <code>F13</code> up — are reported the protocol's
+      way always. Text keys move to <code>CSI u</code> when the program asked for all keys, or, when
+      it asked only for disambiguation, when the key is one the legacy encoding cannot tell apart.
+      The code point is the key <em>before</em> shift, which is the part a naive implementation gets
+      wrong: a program matching <code>ctrl+shift+a</code> looks for the code of <code>a</code>, and a
+      terminal that sends the code of <code>A</code> hands it a chord it will never match.</p>
+
+      <p><code>Report alternate keys</code> is the one flag deliberately not implemented, and the bit
+      is dropped rather than echoed back. The host does not carry the physical key, and claiming a
+      feature that is not there is worse than the honest no that the protocol's set-then-query
+      handshake exists to get.</p>
 
       <h3>zet-session — one running terminal</h3>
 

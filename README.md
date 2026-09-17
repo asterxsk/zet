@@ -4,9 +4,11 @@ A terminal multiplexer for Windows, written in Rust, with its own VT engine and 
 renderer.
 
 > **Status: pre-alpha.** zet builds and runs: it opens a window, starts a shell, and draws it
-> with its own VT engine and its own GPU renderer. What is missing is the depth around that —
-> `zet-update` is written but not wired to the binary, and the kitty keyboard protocol is not
-> implemented. Nothing here is usable as a daily driver, and nothing here is worth installing.
+> with its own VT engine and its own GPU renderer. It speaks the kitty keyboard protocol in
+> both directions — the flag stack, the query, and the `CSI u` encoding, with `Report alternate
+> keys` the one flag it does not implement. What is missing is the depth around that:
+> `zet-update` is written but not wired to the binary, and there is no update check behind it.
+> Nothing here is usable as a daily driver, and nothing here is worth installing.
 
 ## Why
 

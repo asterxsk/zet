@@ -76,10 +76,11 @@
       <div class="callout">
         <span class="callout__label">Status — pre-alpha</span>
         <p>zet builds and runs: it opens a window, starts a shell, and draws it with its own VT
-        engine and its own GPU renderer. What is missing is the depth around that —
-        <code>zet-update</code> is written but not wired to the binary, and the kitty keyboard
-        protocol is not implemented. Nothing here is usable as a daily driver, and nothing here is
-        worth installing.</p>
+        engine and its own GPU renderer. It speaks the kitty keyboard protocol in both directions —
+        the flag stack, the query, and the <code>CSI u</code> encoding, with <code>Report alternate
+        keys</code> the one flag it does not implement. What is missing is the depth around that:
+        <code>zet-update</code> is written but not wired to the binary, and there is no update check
+        behind it. Nothing here is usable as a daily driver, and nothing here is worth installing.</p>
       </div>
 
       <h2>Why</h2>
@@ -164,7 +165,7 @@
 
       <ul>
         <li>No update checking. <code>zet-update</code> implements the whole path and nothing calls it, so the current build makes no network requests at all.</li>
-        <li>No kitty keyboard protocol. Key release and repeat are answered with nothing, because the legacy encoding has no byte for either.</li>
+        <li>No <code>Report alternate keys</code>. The rest of the kitty keyboard protocol is there; this flag is dropped rather than echoed, because the host does not carry the physical key.</li>
         <li>No published installer and no published release. The Inno Setup script in <code>packaging/</code> builds one; nothing has shipped it.</li>
       </ul>
     </article>

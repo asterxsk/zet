@@ -227,6 +227,40 @@
       <p>Inno Setup, installing to <code>%LOCALAPPDATA%\Programs\zet</code> with no elevation.
       Optional PATH entry, Start Menu shortcut, and "Open zet here" context menu.</p>
 
+      <h4>zet-vt, zet-input — the kitty keyboard protocol, both halves of it</h4>
+
+      <ul>
+        <li><code>zet-vt</code> tracks the flag stack: <code>CSI = flags ; mode u</code> sets, ors,
+        or and-nots the flags, <code>CSI &gt; flags u</code> pushes and <code>CSI &lt; n u</code>
+        pops, and <code>CSI ? u</code> answers with the flags in force. The stack is bounded, so a
+        program that pushes in a loop evicts its own oldest entry rather than growing the terminal's
+        memory, and an empty pop resets every flag. The stack is per screen, so a full-screen program
+        that dies without popping leaves nothing behind for the shell underneath.</li>
+
+        <li><code>zet-input</code> encodes against it as
+        <code>CSI code ; modifiers:event ; text u</code>, where the code is the key <em>before</em>
+        shift. The protocol is explicit about that, and it is the part a naive implementation gets
+        wrong: a program matching <code>ctrl+shift+a</code> looks for the code of <code>a</code>, so
+        a terminal that sends the code of <code>A</code> hands it a chord it will never match.</li>
+
+        <li>The functional keys keep their legacy sequences, because in the protocol's own table
+        those <em>are</em> the sequences. Keys the legacy table has no bytes for at all — the locks,
+        <code>PrintScreen</code>, <code>Pause</code>, <code>Menu</code>, and <code>F13</code> up —
+        are reported the protocol's way always. Text keys move to <code>CSI u</code> under
+        <code>Report all keys</code>, or under disambiguation alone when the key is one the legacy
+        encoding cannot tell apart. <code>Enter</code>, <code>Tab</code>, and <code>Backspace</code>
+        are never disambiguated, which is the protocol's own carve-out: a shell has to be able to run
+        <code>reset</code>.</li>
+
+        <li>Event types are only sent when the program asked for them. A release is otherwise not
+        sent at all, because a program that did not ask would read one as a keypress.</li>
+
+        <li><code>Report alternate keys</code> is deliberately not implemented, and the bit is
+        dropped rather than echoed back. The host does not carry the physical key, and claiming a
+        feature that is not there is worse than the honest no that the protocol's set-then-query
+        handshake exists to get.</li>
+      </ul>
+
       <h3>Fixed</h3>
 
       <h4>zet-ui — the window's caption buttons are drawn as geometry, not as characters</h4>
@@ -249,6 +283,44 @@
       texel instead of by its alpha. The texel's colour is white, so the tint's colour survived at
       full strength and every glyph drew as a solid rectangle of its own colour, in the right place
       and the right size, with only its edges dimmed.</p>
+
+      <h4>zet-input, zet — <code>Ctrl+Shift+Comma</code>, the shipped binding for the settings panel,
+      could never fire</h4>
+
+      <p>A binding names a <em>key</em> and the event carries the character the layout put there,
+      which under shift is <code>&lt;</code> — and nothing compared the two. A chord now matches the
+      character shift puts above the key it names, and only that character, and only for keys that
+      are not letters, because a letter's case is the binding rather than a layout's business.</p>
+
+      <h4>zet-app — <code>Enter</code> in the find bar went to the previous match</h4>
+
+      <p>The condition was inverted, and the two keys are one line apart, so it read as working until
+      you were deep enough in the list to notice.</p>
+
+      <h4>zet-app — the find bar could not hold a space</h4>
+
+      <p>The space bar is a named key on this platform rather than a character one, so the bar saw no
+      text and returned false — and the key fell through to the shell underneath, which is where the
+      space went instead.</p>
+
+      <h4>zet-app — a find match above the viewport was highlighted in the wrong columns</h4>
+
+      <p>Its start column was carried over from a row nobody can see, which, when the whole match
+      mapped onto one visible row, handed the selection its corners the wrong way round and painted
+      the gap between them. The same match taller than the window also scrolled its own first row off
+      the top, so following one hid the half you can read.</p>
+
+      <h4>zet — a lost mouse release left the scrollbar grab set for the rest of the window's
+      life</h4>
+
+      <p>Merely moving the mouse over the terminal then scrolled it with no button held. Losing focus
+      and the pointer leaving the window now end every drag.</p>
+
+      <h4>zet — the settings panel closed twice for one <code>Escape</code></h4>
+
+      <p>The panel's bare-<code>Escape</code> branch had no event-kind guard, so the release was
+      handled as well as the press. The same missing guard made the host schedule two redraws for
+      every bound keypress instead of one.</p>
 
       <h4>zet — the session is told its size at the end of a frame, not from the resize event</h4>
 
@@ -328,9 +400,6 @@
         sequences that a mode gates rather than a keystroke.</li>
         <li>Chords and keybindings parsed out of the configuration, so <code>Ctrl+Shift+T</code> is a
         value before it is a binding.</li>
-        <li>The kitty keyboard protocol is not implemented — the terminal engine does not track its
-        flag stack — so key encoding reports the legacy encoding and answers nothing for key release
-        and repeat.</li>
       </ul>
 
       <h4>zet-session — one running terminal</h4>

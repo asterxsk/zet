@@ -147,6 +147,14 @@
         </tbody>
       </table>
 
+      <p>A chord written with a punctuation name matches under shift whatever the layout puts above
+      that key: <code>Ctrl+Shift+Comma</code> is what to write, and it fires whether your layout
+      produces <code>&lt;</code> there or something else. Writing the shifted character instead —
+      <code>Ctrl+Shift+&lt;</code> — is the same chord on a US layout and a different one everywhere
+      else, so the name is the one to prefer. Letters are the exception and are matched exactly:
+      <code>Ctrl+Shift+T</code> and <code>Ctrl+Shift+t</code> are two different chords, and only one
+      of them is bound.</p>
+
       <h2>Rebinding</h2>
 
       <p>The action name is the key and the chord is the value. Rebinding an action replaces its
@@ -166,8 +174,13 @@ quit = "Ctrl+Shift+Q"</code></pre>
       <ul>
         <li>There are no sequences and no prefix keys. A chord is one key with modifiers, and a
         binding either matches a keystroke or it does not.</li>
-        <li>The kitty keyboard protocol is not implemented, so a program that negotiates for it sees
-        the same shortcut behaviour as one that does not.</li>
+        <li>Zet's own bindings are asked first, before the key is encoded — and that holds even for a
+        program that has negotiated the kitty keyboard protocol. The protocol changes what the
+        terminal <em>sends</em>; it does not say the terminal stops having a keyboard of its own, and
+        a terminal that gave its shortcuts up the moment a program asked for all keys would be one
+        where the settings panel could be unreachable from inside whichever full-screen program
+        happened to be running. A program that wants one of these chords for itself needs the user to
+        unbind it, which the settings panel has a row for.</li>
         <li>The clipboard is plain <code>CF_UNICODETEXT</code> in both directions. There is no rich
         text and no image paste.</li>
       </ul>
