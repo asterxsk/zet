@@ -24,7 +24,7 @@ jobs:
     name: build and publish
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # `zet --version` prints the commit it was built from, which is only true if the
           # checkout is deep enough to resolve one.
