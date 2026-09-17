@@ -126,9 +126,18 @@ mod tests {
             Attrs::DOUBLE_UNDERLINE.underline_style(),
             UnderlineStyle::Double
         );
-        assert_eq!(Attrs::DOTTED_UNDERLINE.underline_style(), UnderlineStyle::Dotted);
-        assert_eq!(Attrs::DASHED_UNDERLINE.underline_style(), UnderlineStyle::Dashed);
-        assert_eq!(Attrs::CURLY_UNDERLINE.underline_style(), UnderlineStyle::Curly);
+        assert_eq!(
+            Attrs::DOTTED_UNDERLINE.underline_style(),
+            UnderlineStyle::Dotted
+        );
+        assert_eq!(
+            Attrs::DASHED_UNDERLINE.underline_style(),
+            UnderlineStyle::Dashed
+        );
+        assert_eq!(
+            Attrs::CURLY_UNDERLINE.underline_style(),
+            UnderlineStyle::Curly
+        );
     }
 
     #[test]
@@ -155,7 +164,10 @@ mod tests {
             Attrs::DOTTED_UNDERLINE,
             Attrs::DASHED_UNDERLINE,
         ] {
-            assert!(style.has_underline(), "{style:?} should count as an underline");
+            assert!(
+                style.has_underline(),
+                "{style:?} should count as an underline"
+            );
             let mut cleared = style;
             cleared.clear_underline();
             assert!(cleared.is_empty(), "{style:?} left residue after clearing");

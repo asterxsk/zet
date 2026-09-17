@@ -326,9 +326,12 @@ impl Term {
 
         if self.modes.insert {
             let blank = self.grid.blank();
-            self.grid
-                .row_mut(self.cursor.row)
-                .insert_cells(cols, col, width.min(cols - col), blank);
+            self.grid.row_mut(self.cursor.row).insert_cells(
+                cols,
+                col,
+                width.min(cols - col),
+                blank,
+            );
             self.invalidate_clusters();
         }
 
@@ -1337,7 +1340,11 @@ mod tests {
         let mut t = open(20, 4);
         feed(&mut t, b"\x1b[38;2;255;128;0mX");
         assert_eq!(t.grid().row(0).get(0).fg, Color::rgb(255, 128, 0));
-        assert_eq!(t.cursor(), Pos::new(0, 1), "the character still lands at column 0");
+        assert_eq!(
+            t.cursor(),
+            Pos::new(0, 1),
+            "the character still lands at column 0"
+        );
     }
 
     #[test]
@@ -1663,10 +1670,17 @@ mod tests {
         feed(&mut t, "中".as_bytes());
         let row = t.grid().row(0);
         assert_eq!(row.get(0).ch, '中');
-        assert!(row.get(1).is_wide_spacer(), "the second half is a spacer cell");
+        assert!(
+            row.get(1).is_wide_spacer(),
+            "the second half is a spacer cell"
+        );
         assert_eq!(at(&t, 0, 2), 'a');
         assert_eq!(at(&t, 0, 7), 'f', "the row is exactly full");
-        assert_eq!(t.cursor(), Pos::new(0, 2), "a wide character takes two columns");
+        assert_eq!(
+            t.cursor(),
+            Pos::new(0, 2),
+            "a wide character takes two columns"
+        );
     }
 
     #[test]
@@ -1716,7 +1730,11 @@ mod tests {
     fn a_combining_mark_attaches_to_the_character_before_it() {
         let mut t = open(10, 2);
         feed(&mut t, "e\u{0301}".as_bytes());
-        assert_eq!(t.cursor(), Pos::new(0, 1), "a combining mark takes no column");
+        assert_eq!(
+            t.cursor(),
+            Pos::new(0, 1),
+            "a combining mark takes no column"
+        );
         assert_eq!(
             t.cluster_at(Pos::new(0, 0)),
             Some("e\u{0301}"),
@@ -1767,7 +1785,11 @@ mod tests {
         feed(&mut t, "abcd".as_bytes());
         feed(&mut t, "中".as_bytes());
         assert_eq!(at(&t, 0, 4), ' ');
-        assert_eq!(at(&t, 1, 0), '中', "the whole character moves to the next line");
+        assert_eq!(
+            at(&t, 1, 0),
+            '中',
+            "the whole character moves to the next line"
+        );
     }
 
     #[test]
@@ -2032,7 +2054,10 @@ mod tests {
             &mut t,
             b"\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H\x1b[1;32m$\x1b[0m cargo build\r\n",
         );
-        feed(&mut t, b"   Compiling zet-vt v0.1.0\r\n    Finished in 0.34s\r\n");
+        feed(
+            &mut t,
+            b"   Compiling zet-vt v0.1.0\r\n    Finished in 0.34s\r\n",
+        );
         feed(&mut t, b"\x1b[?25h\x1b[?1049l");
         assert!(!t.modes().alt_screen);
         assert!(t.modes().cursor_visible);

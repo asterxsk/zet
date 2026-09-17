@@ -11,9 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, S_OK, WAIT_OBJECT_0,
-};
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, S_OK, WAIT_OBJECT_0};
 use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 use windows_sys::Win32::Storage::FileSystem::ReadFile;
 use windows_sys::Win32::System::Console::{
@@ -26,11 +24,11 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-    CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
-    GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-    TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
+    CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+    DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, INFINITE,
+    InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
+    ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 use crate::PtyError;
@@ -387,7 +385,14 @@ fn create_console(
     let mut from_us = HANDLE::default();
     // SAFETY: both out-parameters are valid, and `attributes` is a fully initialised
     // SECURITY_ATTRIBUTES with the length field set to its own size.
-    let ok = unsafe { CreatePipe(&raw mut to_console, &raw mut from_us, &raw const attributes, 0) };
+    let ok = unsafe {
+        CreatePipe(
+            &raw mut to_console,
+            &raw mut from_us,
+            &raw const attributes,
+            0,
+        )
+    };
     if ok == 0 {
         return Err(last_error("creating the input pipe"));
     }
@@ -396,7 +401,14 @@ fn create_console(
     let mut to_us = HANDLE::default();
     let mut from_console = HANDLE::default();
     // SAFETY: as above.
-    let ok = unsafe { CreatePipe(&raw mut to_us, &raw mut from_console, &raw const attributes, 0) };
+    let ok = unsafe {
+        CreatePipe(
+            &raw mut to_us,
+            &raw mut from_console,
+            &raw const attributes,
+            0,
+        )
+    };
     if ok == 0 {
         // SAFETY: both handles came from a successful `CreatePipe` and are not owned by
         // anything yet.
@@ -617,8 +629,10 @@ fn start_process(
     // SAFETY: the process information structure is plain data, so an all-zero bit
     // pattern is a valid value for it.
     let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
-    let flags =
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED;
+    let flags = EXTENDED_STARTUPINFO_PRESENT
+        | CREATE_UNICODE_ENVIRONMENT
+        | CREATE_NEW_PROCESS_GROUP
+        | CREATE_SUSPENDED;
 
     // SAFETY: the program and command line are null-terminated UTF-16 buffers that
     // outlive the call, `startup` is a valid STARTUPINFOEXW of the declared size, and
@@ -654,7 +668,8 @@ fn start_process(
     // that the job never sees.
     // SAFETY: both handles are live: `info.hProcess` from `CreateProcessW`, and the job
     // owned by the caller.
-    let assigned = unsafe { AssignProcessToJobObject(job.as_raw_handle() as HANDLE, info.hProcess) };
+    let assigned =
+        unsafe { AssignProcessToJobObject(job.as_raw_handle() as HANDLE, info.hProcess) };
     if assigned == 0 {
         // SAFETY: the thread handle came from `CreateProcessW` and is closed once.
         unsafe { CloseHandle(info.hThread) };
@@ -705,7 +720,11 @@ fn build_command_line(program: &Path, args: &[OsString]) -> Vec<u16> {
 /// this wrong is how a path with a space in it becomes two arguments.
 fn push_quoted(line: &mut Vec<u16>, value: &OsStr) {
     let utf16: Vec<u16> = value.encode_wide().collect();
-    if !utf16.is_empty() && !utf16.iter().any(|c| *c == u16::from(b' ') || *c == u16::from(b'\t') || *c == u16::from(b'"')) {
+    if !utf16.is_empty()
+        && !utf16
+            .iter()
+            .any(|c| *c == u16::from(b' ') || *c == u16::from(b'\t') || *c == u16::from(b'"'))
+    {
         line.extend_from_slice(&utf16);
         return;
     }
@@ -757,7 +776,10 @@ mod tests {
 
     #[test]
     fn a_simple_path_is_not_quoted() {
-        assert_eq!(quote(r"C:\Windows\System32\cmd.exe"), r"C:\Windows\System32\cmd.exe");
+        assert_eq!(
+            quote(r"C:\Windows\System32\cmd.exe"),
+            r"C:\Windows\System32\cmd.exe"
+        );
     }
 
     #[test]

@@ -347,13 +347,7 @@ impl Grid {
         }
     }
 
-    fn erase_row_range(
-        &mut self,
-        row: usize,
-        start: usize,
-        end: usize,
-        blank: Cell,
-    ) {
+    fn erase_row_range(&mut self, row: usize, start: usize, end: usize, blank: Cell) {
         if row >= self.rows {
             return;
         }
@@ -494,7 +488,11 @@ impl Grid {
                 cursor_logical = logical.len();
                 cursor_offset = current.len() + cursor.col;
             }
-            let width = if row.is_wrapped() { old_cols } else { row.content_len() };
+            let width = if row.is_wrapped() {
+                old_cols
+            } else {
+                row.content_len()
+            };
             for col in 0..width {
                 current.push(row.get(col));
             }
@@ -583,7 +581,11 @@ mod tests {
         let cols = grid.cols();
         let bg = grid.erase_bg();
         for (i, ch) in s.chars().enumerate() {
-            let cell = Cell { ch, bg, ..Cell::blank() };
+            let cell = Cell {
+                ch,
+                bg,
+                ..Cell::blank()
+            };
             grid.row_mut(row).write_at(cols, col + i, &cell, 1);
         }
     }
@@ -604,7 +606,11 @@ mod tests {
         let g = Grid::new(24, 2);
         assert_eq!(g.next_tab(0), 8);
         assert_eq!(g.next_tab(8), 16);
-        assert_eq!(g.next_tab(16), 23, "past the last stop the cursor goes to the edge");
+        assert_eq!(
+            g.next_tab(16),
+            23,
+            "past the last stop the cursor goes to the edge"
+        );
         assert_eq!(g.prev_tab(20), 16);
         assert_eq!(g.prev_tab(8), 0);
     }
@@ -617,7 +623,9 @@ mod tests {
         write(&mut g, 2, 0, "three");
         g.scroll_up(1);
         assert_eq!(g.scrollback_len(), 1);
-        let first = g.scrollback_row(0).expect("a line should have scrolled off");
+        let first = g
+            .scrollback_row(0)
+            .expect("a line should have scrolled off");
         assert_eq!((0..3).map(|c| first.get(c).ch).collect::<String>(), "one");
         assert_eq!(text(&g, 0), "two  ");
         assert_eq!(text(&g, 1), "three");
@@ -628,7 +636,12 @@ mod tests {
         let mut g = Grid::new(20, 2);
         let red = Color::indexed(NamedColor::Red.index());
         let cols = g.cols();
-        let cell = Cell { ch: 'x', fg: red, bg: red, ..Cell::blank() };
+        let cell = Cell {
+            ch: 'x',
+            fg: red,
+            bg: red,
+            ..Cell::blank()
+        };
         g.row_mut(0).write_at(cols, 0, &cell, 1);
         g.scroll_up(1);
         let row = g.scrollback_row(0).unwrap();
@@ -665,7 +678,11 @@ mod tests {
         write(&mut g, 3, 0, "bot");
         g.scroll_up(1);
         assert_eq!(g.scrollback_len(), 0, "a region scroll is not history");
-        assert_eq!(text(&g, 0), "top  ", "the line outside the region must not move");
+        assert_eq!(
+            text(&g, 0),
+            "top  ",
+            "the line outside the region must not move"
+        );
         assert_eq!(text(&g, 3), "bot  ");
         assert_eq!(text(&g, 2), "     ", "the region scrolled");
     }
@@ -736,7 +753,11 @@ mod tests {
         }
         g.erase_in_display(1, Pos::new(1, 2));
         assert_eq!(text(&g, 0), "    ");
-        assert_eq!(text(&g, 1), "   d", "the erase stops at the cursor, not at the line");
+        assert_eq!(
+            text(&g, 1),
+            "   d",
+            "the erase stops at the cursor, not at the line"
+        );
         assert_eq!(text(&g, 2), "abcd");
     }
 
@@ -768,7 +789,11 @@ mod tests {
         g.scroll_up(1);
         assert_eq!(g.scrollback_len(), 1);
         g.clear_screen(false);
-        assert_eq!(g.scrollback_len(), 1, "ED 2 must not eat the user's history");
+        assert_eq!(
+            g.scrollback_len(),
+            1,
+            "ED 2 must not eat the user's history"
+        );
         g.clear_screen(true);
         assert_eq!(g.scrollback_len(), 0, "ED 3 is the one that clears history");
     }

@@ -42,7 +42,7 @@ pub mod discovery;
 mod win;
 
 #[cfg(windows)]
-pub use win::{Pty, SpawnConfig, DEFAULT_BUFFER};
+pub use win::{DEFAULT_BUFFER, Pty, SpawnConfig};
 
 use std::path::PathBuf;
 

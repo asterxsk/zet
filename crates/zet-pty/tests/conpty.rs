@@ -85,7 +85,8 @@ fn a_size_change_is_accepted_while_the_child_is_running() {
     // Give the child a moment to attach before changing its window.
     std::thread::sleep(Duration::from_millis(500));
     pty.resize(120, 40).expect("the resize should be accepted");
-    pty.resize(80, 24).expect("the resize back should be accepted");
+    pty.resize(80, 24)
+        .expect("the resize back should be accepted");
     pty.shutdown().expect("the session should shut down");
 }
 
@@ -104,7 +105,8 @@ fn typing_reaches_the_child() {
         }
     }
 
-    pty.write(b"echo zet-typed\r\n").expect("the write should succeed");
+    pty.write(b"echo zet-typed\r\n")
+        .expect("the write should succeed");
 
     let mut after = Vec::new();
     let deadline = Instant::now() + PATIENCE;
@@ -134,7 +136,11 @@ fn the_exit_code_of_the_child_is_reported() {
         .expect("the session should start");
     let code = pty.wait(PATIENCE);
     pty.shutdown().expect("the session should shut down");
-    assert_eq!(code, Some(7), "the child's own exit code should come through");
+    assert_eq!(
+        code,
+        Some(7),
+        "the child's own exit code should come through"
+    );
 }
 
 #[test]
@@ -142,7 +148,10 @@ fn killing_the_session_ends_a_child_that_would_otherwise_run_forever() {
     let pty = Pty::spawn(&SpawnConfig::new(cmd(), 80, 24).args(["/c", "ping -n 60 127.0.0.1"]))
         .expect("the session should start");
     std::thread::sleep(Duration::from_millis(500));
-    assert!(pty.wait(Duration::from_millis(50)).is_none(), "it should still be running");
+    assert!(
+        pty.wait(Duration::from_millis(50)).is_none(),
+        "it should still be running"
+    );
 
     pty.kill().expect("the kill should succeed");
     assert!(

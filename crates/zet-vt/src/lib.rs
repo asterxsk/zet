@@ -55,6 +55,6 @@ pub use cell::{Cell, CellFlags};
 pub use color::{Color, ColorSpec, NamedColor};
 pub use damage::Damage;
 pub use grid::{Grid, Pos};
-pub use parser::{Params, Perform, Parser, Private};
+pub use parser::{Params, Parser, Perform, Private};
 pub use row::Row;
-pub use term::{MouseEncoding, MouseMode, Modes, Pen, Term};
+pub use term::{Modes, MouseEncoding, MouseMode, Pen, Term};

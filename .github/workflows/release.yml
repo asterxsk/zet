@@ -1,0 +1,95 @@
+name: Release
+
+# Tag-driven: `git tag v0.2.0 && git push origin v0.2.0` is the whole release procedure.
+#
+# NOTE: this workflow builds `-p zet`, the binary crate, which does not exist yet. It is
+# committed ahead of that crate so that the publishing path is reviewable and so that the
+# first release is a tag rather than a debugging session. It will fail until `crates/zet`
+# lands.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# The default token is read-only. Publishing a release needs write, and nothing else here
+# needs anything at all.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `zet --version` prints the commit it was built from, which is only true if the
+          # checkout is deep enough to resolve one.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The tag and the manifest are two places that both claim a version. If they
+      # disagree, the release publishes a binary that reports a different version from the
+      # one it was released under, and the updater then offers it forever: every launch
+      # downloads the same archive, installs a binary that still calls itself old, and
+      # asks again. Cheaper to refuse the tag.
+      - name: The tag and Cargo.toml agree on the version
+        shell: pwsh
+        run: |
+          $version = $null
+          $inWorkspacePackage = $false
+          foreach ($line in Get-Content Cargo.toml) {
+            if ($line -match '^\s*\[') {
+              $inWorkspacePackage = $line.Trim() -eq '[workspace.package]'
+              continue
+            }
+            if ($inWorkspacePackage -and $line -match '^\s*version\s*=\s*"([^"]+)"') {
+              $version = $Matches[1]
+              break
+            }
+          }
+          if (-not $version) { throw 'no version found under [workspace.package]' }
+
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          if ($tag -ne $version) {
+            throw "tag v$tag does not match the workspace version $version"
+          }
+          Write-Host "releasing $version"
+
+      - name: Build
+        run: cargo build --release --locked -p zet
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $target = 'x86_64-pc-windows-msvc'
+          $name = "zet-$version-$target.exe"
+          Copy-Item "target/release/zet.exe" $name
+          # A digest, published beside the archive. The updater refuses an archive whose
+          # SHA-256 does not match this file, so a truncated or substituted download never
+          # becomes the binary that runs.
+          $digest = (Get-FileHash $name -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/SHA256SUMS", "$digest  $name`n")
+          Get-Content SHA256SUMS
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # NOT `--prerelease`. The updater reads `/releases/latest`, which skips anything
+          # GitHub marks as a pre-release, so marking a 0.x release that way would publish
+          # a version no existing install could ever see.
+          gh release create '${{ github.ref_name }}' `
+            --title 'zet ${{ github.ref_name }}' `
+            --generate-notes `
+            --verify-tag `
+            "zet-*.exe" `
+            SHA256SUMS

@@ -79,10 +79,8 @@ impl Profile {
 /// is the one thing guaranteed to be there.
 pub fn discover() -> Vec<Profile> {
     let mut found = Vec::new();
-    let system_root = std::env::var_os("SystemRoot").map_or_else(
-        || PathBuf::from(r"C:\Windows"),
-        PathBuf::from,
-    );
+    let system_root =
+        std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
     let system32 = system_root.join("System32");
 
     // 1. The locations that do not depend on PATH.
@@ -213,8 +211,7 @@ fn search_extensions(name: &str) -> Vec<String> {
     if Path::new(name).extension().is_some() {
         return vec![String::new()];
     }
-    let pathext = std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
+    let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_owned());
     let mut extensions = vec![String::new()];
     extensions.extend(
         pathext
@@ -463,8 +460,7 @@ mod tests {
 
     #[test]
     fn a_distribution_name_is_taken_whole_up_to_the_first_space() {
-        let distros =
-            parse_wsl_list(utf16le("Ubuntu-24.04  Stopped  2\n").as_slice());
+        let distros = parse_wsl_list(utf16le("Ubuntu-24.04  Stopped  2\n").as_slice());
         assert_eq!(distros[0].name, "Ubuntu-24.04");
     }
 
@@ -490,14 +486,27 @@ mod tests {
         let profiles = vec![
             Profile::new("cmd", "Command Prompt", cmd.clone(), Source::KnownLocation),
             Profile::new("cmd-again", "Command Prompt", cmd.clone(), Source::Path),
-            Profile::new("wsl:Ubuntu", "Ubuntu (WSL)", PathBuf::from("wsl.exe"), Source::Wsl)
-                .with_args(["-d", "Ubuntu"]),
-            Profile::new("wsl:Debian", "Debian (WSL)", PathBuf::from("wsl.exe"), Source::Wsl)
-                .with_args(["-d", "Debian"]),
+            Profile::new(
+                "wsl:Ubuntu",
+                "Ubuntu (WSL)",
+                PathBuf::from("wsl.exe"),
+                Source::Wsl,
+            )
+            .with_args(["-d", "Ubuntu"]),
+            Profile::new(
+                "wsl:Debian",
+                "Debian (WSL)",
+                PathBuf::from("wsl.exe"),
+                Source::Wsl,
+            )
+            .with_args(["-d", "Debian"]),
         ];
         let kept = dedupe(profiles);
         assert_eq!(kept.len(), 3, "the second cmd.exe is the same shell");
-        assert_eq!(kept[2].args, vec![OsString::from("-d"), OsString::from("Debian")]);
+        assert_eq!(
+            kept[2].args,
+            vec![OsString::from("-d"), OsString::from("Debian")]
+        );
     }
 
     #[test]
@@ -538,6 +547,10 @@ mod tests {
         let before = ids.len();
         ids.sort_unstable();
         ids.dedup();
-        assert_eq!(ids.len(), before, "a duplicate id would collide in the config file");
+        assert_eq!(
+            ids.len(),
+            before,
+            "a duplicate id would collide in the config file"
+        );
     }
 }

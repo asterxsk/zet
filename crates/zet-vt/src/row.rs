@@ -44,7 +44,13 @@ impl Row {
     /// A blank row whose cells carry `bg`, for an erase that must leave a colour behind.
     pub fn blank_with(cols: usize, bg: Color) -> Self {
         Row {
-            cells: vec![Cell { bg, ..Cell::blank() }; cols],
+            cells: vec![
+                Cell {
+                    bg,
+                    ..Cell::blank()
+                };
+                cols
+            ],
             wrapped: false,
         }
     }
@@ -116,7 +122,13 @@ impl Row {
     /// width of the terminal, even on a row that was trimmed for the scrollback.
     pub fn reset(&mut self, cols: usize, bg: Color) {
         self.cells.clear();
-        self.cells.resize(cols, Cell { bg, ..Cell::blank() });
+        self.cells.resize(
+            cols,
+            Cell {
+                bg,
+                ..Cell::blank()
+            },
+        );
         self.wrapped = false;
     }
 
@@ -130,7 +142,10 @@ impl Row {
         if self.cells.len() < end {
             self.cells.resize(end, Cell::blank());
         }
-        let blank = Cell { bg, ..Cell::blank() };
+        let blank = Cell {
+            bg,
+            ..Cell::blank()
+        };
         for cell in &mut self.cells[start..end] {
             *cell = blank;
         }
@@ -265,7 +280,15 @@ mod tests {
     use crate::color::NamedColor;
 
     fn write(row: &mut Row, cols: usize, col: usize, ch: char, width: usize) -> usize {
-        row.write_at(cols, col, &Cell { ch, ..Cell::blank() }, width)
+        row.write_at(
+            cols,
+            col,
+            &Cell {
+                ch,
+                ..Cell::blank()
+            },
+            width,
+        )
     }
 
     #[test]
@@ -297,7 +320,10 @@ mod tests {
     fn a_wide_character_is_dropped_at_the_last_column_not_split() {
         let mut row = Row::new(4);
         let used = write(&mut row, 4, 3, '\u{4e2d}', 2);
-        assert_eq!(used, 0, "a wide character must not be split across the edge");
+        assert_eq!(
+            used, 0,
+            "a wide character must not be split across the edge"
+        );
         assert_eq!(row.get(3).ch, ' ');
     }
 
@@ -318,7 +344,10 @@ mod tests {
         write(&mut row, 10, 0, '\u{4e2d}', 2);
         write(&mut row, 10, 0, 'a', 1);
         assert_eq!(row.get(0).ch, 'a');
-        assert!(!row.get(1).is_wide_spacer(), "the orphaned spacer must be cleared");
+        assert!(
+            !row.get(1).is_wide_spacer(),
+            "the orphaned spacer must be cleared"
+        );
         assert_eq!(row.get(1).ch, ' ');
     }
 
@@ -346,7 +375,11 @@ mod tests {
         let mut row = Row::new(8);
         write(&mut row, 8, 0, 'a', 1);
         row.reset_range(8, 1..5, Color::indexed(NamedColor::Blue.index()));
-        assert_eq!(row.content_len(), 5, "a coloured background must survive trimming");
+        assert_eq!(
+            row.content_len(),
+            5,
+            "a coloured background must survive trimming"
+        );
     }
 
     #[test]
@@ -392,7 +425,10 @@ mod tests {
         row.insert_cells(4, 0, 99, Cell::blank());
         assert_eq!(row.len(), 4);
         let s: String = (0..4).map(|i| row.get(i).ch).collect();
-        assert_eq!(s, "    ", "inserting past the width pushes every cell off the row");
+        assert_eq!(
+            s, "    ",
+            "inserting past the width pushes every cell off the row"
+        );
     }
 
     #[test]

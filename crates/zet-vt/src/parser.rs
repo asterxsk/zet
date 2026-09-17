@@ -97,7 +97,10 @@ impl Params {
     /// "omitted or zero means one" behaviour that most cursor commands use write
     /// `.max(1)` themselves, because that rule does not hold for every command.
     pub fn value_or(&self, index: usize, default: u16) -> u16 {
-        self.get(index).and_then(|v| v.first()).copied().unwrap_or(default)
+        self.get(index)
+            .and_then(|v| v.first())
+            .copied()
+            .unwrap_or(default)
     }
 
     /// Whether parameter `index` was written at all.
@@ -231,7 +234,14 @@ pub trait Perform {
     fn execute(&mut self, _byte: u8) {}
 
     /// A complete control sequence.
-    fn csi_dispatch(&mut self, _params: &Params, _intermediates: &[u8], _private: Option<Private>, _action: char) {}
+    fn csi_dispatch(
+        &mut self,
+        _params: &Params,
+        _intermediates: &[u8],
+        _private: Option<Private>,
+        _action: char,
+    ) {
+    }
 
     /// An escape sequence that is not a control sequence.
     fn esc_dispatch(&mut self, _intermediates: &[u8], _byte: u8) {}
@@ -240,7 +250,14 @@ pub trait Perform {
     fn osc_dispatch(&mut self, _params: &[&[u8]]) {}
 
     /// The start of a device control string.
-    fn dcs_hook(&mut self, _params: &Params, _intermediates: &[u8], _private: Option<Private>, _action: char) {}
+    fn dcs_hook(
+        &mut self,
+        _params: &Params,
+        _intermediates: &[u8],
+        _private: Option<Private>,
+        _action: char,
+    ) {
+    }
 
     /// One byte of device control string payload.
     fn dcs_put(&mut self, _byte: u8) {}
@@ -410,7 +427,10 @@ impl Parser {
                         self.state = State::OscString;
                     }
                     0x30..=0x4f | 0x51..=0x57 | 0x59 | 0x5a | 0x5c | 0x60..=0x7e => {
-                        perform.esc_dispatch(&self.intermediates[..self.nintermediates as usize], byte);
+                        perform.esc_dispatch(
+                            &self.intermediates[..self.nintermediates as usize],
+                            byte,
+                        );
                         self.state = State::Ground;
                     }
                     0x7f => {}
@@ -425,7 +445,10 @@ impl Parser {
                     }
                     0x20..=0x2f => self.collect_intermediate(byte),
                     0x30..=0x7e => {
-                        perform.esc_dispatch(&self.intermediates[..self.nintermediates as usize], byte);
+                        perform.esc_dispatch(
+                            &self.intermediates[..self.nintermediates as usize],
+                            byte,
+                        );
                         self.state = State::Ground;
                     }
                     _ => {}
@@ -787,7 +810,13 @@ mod tests {
         fn execute(&mut self, byte: u8) {
             self.executed.push(byte);
         }
-        fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], private: Option<Private>, action: char) {
+        fn csi_dispatch(
+            &mut self,
+            params: &Params,
+            intermediates: &[u8],
+            private: Option<Private>,
+            action: char,
+        ) {
             let p = (0..params.len())
                 .map(|i| params.get(i).unwrap_or_default().to_vec())
                 .collect();
@@ -885,7 +914,11 @@ mod tests {
     #[test]
     fn a_missing_parameter_reads_as_its_default_not_as_zero() {
         let r = parse(b"\x1b[;5H");
-        assert_eq!(r.csi[0].0[0], vec![0], "an explicitly empty parameter is zero");
+        assert_eq!(
+            r.csi[0].0[0],
+            vec![0],
+            "an explicitly empty parameter is zero"
+        );
         assert_eq!(r.csi[0].0[1], vec![5]);
     }
 
@@ -914,13 +947,19 @@ mod tests {
     #[test]
     fn semicolon_truecolor_sgr_is_two_parameters() {
         let r = parse(b"\x1b[38;2;255;128;0m");
-        assert_eq!(r.csi[0].0, vec![vec![38], vec![2], vec![255], vec![128], vec![0]]);
+        assert_eq!(
+            r.csi[0].0,
+            vec![vec![38], vec![2], vec![255], vec![128], vec![0]]
+        );
     }
 
     #[test]
     fn a_private_marker_after_parameters_makes_the_sequence_ignorable() {
         let r = parse(b"\x1b[1;?2m");
-        assert!(r.csi.is_empty(), "malformed input must not dispatch anything");
+        assert!(
+            r.csi.is_empty(),
+            "malformed input must not dispatch anything"
+        );
         assert_eq!(r.printed, "");
     }
 
@@ -986,13 +1025,19 @@ mod tests {
         p.advance_slice(b"\x1b]8;;https://exa", &mut r);
         assert!(r.osc.is_empty());
         p.advance_slice(b"mple.com\x07", &mut r);
-        assert_eq!(r.osc[0], vec![b"8".to_vec(), Vec::new(), b"https://example.com".to_vec()]);
+        assert_eq!(
+            r.osc[0],
+            vec![b"8".to_vec(), Vec::new(), b"https://example.com".to_vec()]
+        );
     }
 
     #[test]
     fn an_unterminated_osc_is_dropped_and_the_next_escape_still_works() {
         let r = parse(b"\x1b]0;no terminator\x1b[31m");
-        assert!(r.osc.is_empty(), "an OSC without a terminator must not fire");
+        assert!(
+            r.osc.is_empty(),
+            "an OSC without a terminator must not fire"
+        );
         assert_eq!(r.csi.len(), 1);
         assert_eq!(r.csi[0].3, 'm');
     }
@@ -1006,7 +1051,10 @@ mod tests {
     #[test]
     fn a_pastable_selection_osc_round_trips() {
         let r = parse(b"\x1b]52;c;aGVsbG8=\x07");
-        assert_eq!(r.osc[0], vec![b"52".to_vec(), b"c".to_vec(), b"aGVsbG8=".to_vec()]);
+        assert_eq!(
+            r.osc[0],
+            vec![b"52".to_vec(), b"c".to_vec(), b"aGVsbG8=".to_vec()]
+        );
     }
 
     #[test]
@@ -1087,7 +1135,10 @@ mod tests {
         p.advance_slice(b"\x1b[1;3", &mut r);
         p.reset();
         p.advance_slice(b"ok", &mut r);
-        assert_eq!(r.printed, "ok", "the abandoned CSI must not consume this text");
+        assert_eq!(
+            r.printed, "ok",
+            "the abandoned CSI must not consume this text"
+        );
         assert!(r.csi.is_empty());
     }
 
