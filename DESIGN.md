@@ -101,6 +101,11 @@ percentages, scroll positions, and row counts all align on the same column width
 which is the single detail that makes the chrome read as instrumentation rather
 than as an app.
 
+**This is not built.** `zet_font::GlyphSpec` has no way to ask for an OpenType
+feature, so the numbers are set in Plex Sans's default proportional figures and the
+digits in a font size do not line up with the digits in a tab index. Spacing them by
+hand would be a lie about the font's own metrics, so it is left and recorded here.
+
 Scale, at 100% DPI:
 
 | Role | Size | Weight | Tracking |
@@ -190,15 +195,16 @@ right now.
 
 When no terminal is open the strip does not collapse to a thin line and does not
 show an empty state message. It is simply absent. The window is a titlebar, a
-hairline, and an empty grid holding one centered line:
-
-```
-  No terminals.  Ctrl+T for PowerShell 7,  Ctrl+Shift+T to choose a profile.
-```
+hairline, and the grid with the whole height back.
 
 The whole row that held tabs is gone. The window is 40px shorter. This is the
 brief's requirement and it should feel like the app got lighter, not like something
 is missing.
+
+A centered line naming the two chords was the plan, and it is not there, because the
+state it would appear in is unreachable: `close-tab` quits when the last tab closes,
+so a window with no terminals is a window that is on its way out. An empty state for
+a state nobody can reach is a line nobody reads.
 
 ## Cursor
 
@@ -410,12 +416,18 @@ imported and ship exactly as published.
 |---|---|---|
 | zet dark | `#0a0b0d` | Default. Graphite, amber signal, neutral ANSI |
 | zet light | `#faf9f7` | Warm paper ground, ink at `#14161a`, signal darkened to `#a35f00` |
-| zet contrast | `#000000` | Pure black, pure white ink, every ANSI color at 7:1 or better |
+| zet contrast | `#000000` | Pure black, pure white ink, every body-text ANSI color at 4.5:1 or better |
 | Nord | as published | |
 | Gruvbox dark | as published | |
 | Tokyo Night | as published | |
 | Catppuccin Mocha | as published | |
 | Solarized Light | as published | |
+
+The floor is 4.5:1, WCAG AA for normal text, and indices 0 and 8 are exempt from it.
+That is not a hole in the rule: a palette's "black" is the colour a program paints a
+*background* with, and requiring it to be legible against a near-black ground would
+force it to be light, at which point it is no longer black and the programs that use
+it as a shadow stop working. Every other index is a colour a program prints text in.
 
 High contrast mode is not a theme. When Windows reports forced colors, zet switches
 to `zet contrast` and overrides the chrome palette to pure black, pure white ink,

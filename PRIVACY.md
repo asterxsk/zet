@@ -69,6 +69,11 @@ check_on_launch = false
 With that set, zet makes no network request at all until you explicitly ask for one. A manual
 check runs only when you run `zet --check-update` or choose the menu item.
 
+**Neither of those exists yet.** The binary accepts `-d`/`--directory`, `-h`/`--help`, and
+`-V`/`--version`, and refuses any other argument by name; the settings panel offers no update
+row and there is no menu. Nothing calls `zet-update` at all, so the current build makes no
+network request under any circumstances. This paragraph is the intent for when it is wired in.
+
 ## What zet writes to your disk
 
 | Location | Contents | Why |

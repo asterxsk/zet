@@ -194,6 +194,11 @@
       scroll positions, and row counts all align on the same column width, which is the single detail
       that makes the chrome read as instrumentation rather than as an app.</p>
 
+      <p><strong>This is not built.</strong> <code>zet_font::GlyphSpec</code> has no way to ask for an
+      OpenType feature, so the numbers are set in Plex Sans's default proportional figures and the
+      digits in a font size do not line up with the digits in a tab index. Spacing them by hand would
+      be a lie about the font's own metrics, so it is left and recorded here.</p>
+
       <table>
         <caption>Scale at 100% DPI</caption>
         <thead>
@@ -293,19 +298,19 @@
       <h3>Zero tabs</h3>
 
       <p>When no terminal is open the strip does not collapse to a thin line and does not show an
-      empty state message. It is simply absent. The window is a titlebar, a hairline, and an empty
-      grid holding one centred line:</p>
-
-<pre><code>  No terminals.  Ctrl+T for PowerShell 7,  Ctrl+Shift+T to choose a profile.</code></pre>
+      empty state message. It is simply absent. The window is a titlebar, a hairline, and the grid
+      with the whole height back.</p>
 
       <p>The whole row that held tabs is gone. The window is 40px shorter. It should feel like the
       app got lighter, not like something is missing.</p>
 
       <div class="callout callout--note">
-        <span class="callout__label">The line above does not match the keymap</span>
-        <p>This is the design document's text, reproduced as it stands. The shipped default binds
-        <code>new-tab</code> to <code>Ctrl+Shift+T</code>; nothing is bound to <code>Ctrl+T</code>.
-        See <a href="keybindings.html">Keybindings</a> for the bindings that exist.</p>
+        <span class="callout__label">The empty state is not there</span>
+        <p>A centred line naming the two chords was the plan and a line naming
+        <code>Ctrl+T</code> is what an early draft of this document printed. Neither is in the
+        build, because the state they would appear in is unreachable: <code>close-tab</code> quits
+        when the last tab closes, so a window with no terminals is a window on its way out. An empty
+        state for a state nobody can reach is a line nobody reads.</p>
       </div>
 
       <h2>Cursor</h2>
@@ -538,7 +543,7 @@
         <tbody>
           <tr><td><span class="swatch" style="background:#0a0b0d"></span></td><td>zet dark</td><td class="k">#0a0b0d</td><td>Default. Graphite, amber signal, neutral ANSI.</td></tr>
           <tr><td><span class="swatch" style="background:#faf9f7"></span></td><td>zet light</td><td class="k">#faf9f7</td><td>Warm paper ground, ink at <code>#14161a</code>, signal darkened to <code>#a35f00</code>.</td></tr>
-          <tr><td><span class="swatch" style="background:#000000"></span></td><td>zet contrast</td><td class="k">#000000</td><td>Pure black, pure white ink.</td></tr>
+          <tr><td><span class="swatch" style="background:#000000"></span></td><td>zet contrast</td><td class="k">#000000</td><td>Pure black, pure white ink. Every body-text ANSI colour at 4.5:1 or better.</td></tr>
           <tr><td><span class="swatch" style="background:#2e3440"></span></td><td>Nord</td><td>as published</td><td>Imported.</td></tr>
           <tr><td><span class="swatch" style="background:#282828"></span></td><td>Gruvbox dark</td><td>as published</td><td>Imported.</td></tr>
           <tr><td><span class="swatch" style="background:#1a1b26"></span></td><td>Tokyo Night</td><td>as published</td><td>Imported.</td></tr>

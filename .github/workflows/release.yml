@@ -26,8 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          # `zet --version` prints the commit it was built from, which is only true if the
-          # checkout is deep enough to resolve one.
+          # `--verify-tag` has to be able to see the tag, and `--generate-notes` has to be
+          # able to see the one before it. A shallow checkout has neither.
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
