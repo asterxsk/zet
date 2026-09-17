@@ -127,6 +127,8 @@ pub struct App {
     reduce_motion: bool,
     /// How much the font size has been nudged from the configured one, in points.
     font_nudge: f32,
+    /// The directory every tab in this window starts in, if the command line named one.
+    start_directory: Option<PathBuf>,
 }
 
 impl App {
@@ -166,7 +168,22 @@ impl App {
             forced_contrast: false,
             reduce_motion: false,
             font_nudge: 0.0,
+            start_directory: None,
         })
+    }
+
+    /// Start every tab this window opens in `directory`.
+    ///
+    /// A property of the window rather than of its first tab, because the window is what
+    /// the directory was chosen for: zet launched from "Open zet here" belongs to that
+    /// folder, and a new tab in it that opened somewhere else would be the surprising
+    /// thing rather than the consistent one.
+    ///
+    /// Nothing is checked here. A directory that does not exist fails when the first
+    /// shell is started, which is where the error can name the program that would not
+    /// start as well as the place it was told to start in.
+    pub fn set_start_directory(&mut self, directory: Option<PathBuf>) {
+        self.start_directory = directory;
     }
 
     /// Read the config from its usual place and build an app around it.
@@ -340,9 +357,13 @@ impl App {
             .find(|profile| profile.id == id)
             .ok_or_else(|| AppError::NoShell(id.to_owned()))?
             .clone();
-        let number = self
-            .sessions
-            .open(&profile, cols, rows, None, Arc::clone(&self.waker))?;
+        let number = self.sessions.open(
+            &profile,
+            cols,
+            rows,
+            self.start_directory.clone(),
+            Arc::clone(&self.waker),
+        )?;
         self.blink.restart(Instant::now(), false);
         Ok(number)
     }
