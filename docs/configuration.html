@@ -187,7 +187,7 @@ check-on-launch = true</code></pre>
           <tr><td class="k">appearance.follow-reduce-motion</td><td>bool</td><td class="k">true</td><td>Whether to honor the system's reduce-motion setting.</td></tr>
           <tr><td class="k">appearance.follow-forced-colors</td><td>bool</td><td class="k">true</td><td>Whether to switch to the contrast theme when Windows reports forced colours.</td></tr>
           <tr><td class="k">keys</td><td>table</td><td colspan="2">A table of action name to chord. See <a href="keybindings.html">Keybindings</a>.</td></tr>
-          <tr><td class="k">update.check-on-launch</td><td>bool</td><td class="k">true</td><td>Whether zet asks GitHub for a newer version at launch. Not read by the current build; nothing calls the updater.</td></tr>
+          <tr><td class="k">update.check-on-launch</td><td>bool</td><td class="k">true</td><td>Whether zet asks GitHub for a newer version at launch. Not read by the current build: the launch check is not written yet.</td></tr>
         </tbody>
       </table>
 
@@ -320,12 +320,23 @@ quit = "Ctrl+Shift+Q"</code></pre>
 
       <p><code>update.check-on-launch</code> is the entire privacy control, which is why
       <a href="privacy.html">Privacy</a> points at this key rather than at a settings screen. It
-      defaults to <code>true</code>, which is the intent for the finished program. In the current
-      build it makes no difference either way, because nothing in the binary reads it and nothing
-      calls the updater.</p>
+      defaults to <code>true</code>, which is the intent for the finished program.</p>
+
+      <p>In the current build it makes no difference either way, because the check it gates is not
+      written and nothing reads the key. What does exist is the manual half:</p>
+
+<pre><code>zet --check-update</code></pre>
+
+      <p>That asks GitHub whether a newer version has been published and prints the answer. It
+      ignores this key, because the key is about the check zet makes <em>on its own</em> and a flag
+      you typed is not that. It downloads nothing and exits; installing what it finds means running
+      the installer again.</p>
 
 <pre><code>[update]
 check-on-launch = false</code></pre>
+
+      <p>Setting that is what will turn the automatic check off once it exists. Until then it is a
+      key with nothing behind it.</p>
     </article>
   </main>
 </div>

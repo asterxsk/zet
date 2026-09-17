@@ -29,13 +29,16 @@ connections are theirs, not zet's. zet does not inspect, log, or forward them.
 
 ## The update check
 
-**Not implemented yet.** This section describes the update check zet is being built to make. The
-code for it exists, but nothing in the shipped binary calls it, so as of this date zet makes no
-network requests at all, and the setting below has nothing to turn off. It is published here so
-that the request is described before it is made rather than after.
+**Partly implemented.** `zet --check-update` makes this request today, and it is the only way to
+make it: the automatic check on launch is still to come, so `[update] check_on_launch` below has
+nothing to turn off yet. What is described here is the whole of the intent, published so that the
+request is described before it is made rather than after.
 
-**What it is.** On launch, zet asks GitHub whether a newer version has been published. This is
-the only request zet makes on its own.
+**What it is.** `zet --check-update` asks GitHub whether a newer version has been published and
+prints the answer. It makes no other request, downloads nothing, and changes nothing on disk.
+
+**What it will be.** The same request, made once on launch, when `[update] check-on-launch` is
+left at its default of `true`. That is the one request zet would make on its own.
 
 **Where it goes.** `api.github.com`, operated by GitHub, Inc. (a subsidiary of Microsoft
 Corporation).
@@ -57,22 +60,25 @@ contents, command history, or a list of installed shells. There is no analytics 
 GitHub is an independent controller for this data; we do not receive it and cannot retrieve it.
 
 **Downloads.** If you accept an update, the release archive is downloaded from
-`github.com` / `objects.githubusercontent.com`. The same disclosure applies.
+`github.com` / `objects.githubusercontent.com`. The same disclosure applies. **Nothing downloads
+anything today.** There is no install path in the binary and no way to accept an update from
+inside zet; a new version is installed by running the installer again.
 
-**Turning it off.** The update check can be disabled in `config.toml`:
+**Turning it off.** Once the launch check exists, it will be disabled in `config.toml`:
 
 ```toml
 [update]
 check_on_launch = false
 ```
 
-With that set, zet makes no network request at all until you explicitly ask for one. A manual
-check runs only when you run `zet --check-update` or choose the menu item.
+With that set, zet would make no request on its own, and `zet --check-update` would remain the
+only way to make one — a request you asked for by name.
 
-**Neither of those exists yet.** The binary accepts `-d`/`--directory`, `-h`/`--help`, and
-`-V`/`--version`, and refuses any other argument by name; the settings panel offers no update
-row and there is no menu. Nothing calls `zet-update` at all, so the current build makes no
-network request under any circumstances. This paragraph is the intent for when it is wired in.
+**That is the state today, minus the check.** The key exists and is read by nothing: no code
+path in the binary consults it, because the launch check it gates is not written. The binary
+accepts `-d`/`--directory`, `-h`/`--help`, `-V`/`--version`, and `--check-update`, and refuses
+any other argument by name. The settings panel has no update row. So the only request zet can
+make is one you typed.
 
 ## What zet writes to your disk
 

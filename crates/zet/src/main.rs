@@ -40,18 +40,25 @@ zet — a terminal for Windows, built around the grid
 
 USAGE:
     zet [--directory <path>]
+    zet --check-update
 
 OPTIONS:
     -d, --directory <path>    Start the shell in this directory
     -h, --help                Print this
     -V, --version             Print the version
+        --check-update        Ask GitHub whether a newer version has been published
 
 `--directory` is not a setting and nothing else here is one either. Everything zet can
 be configured to do is in its config file — the key bindings, the theme, the font, and
 the window — and the settings panel (Ctrl+Shift+Comma) edits the same file in place,
 comment by comment, so the two can never disagree. The directory is not a setting, it
 is where you were standing when you typed the command: it is what the folder right-click
-menu passes, and it applies to every tab the window opens.";
+menu passes, and it applies to every tab the window opens.
+
+`--check-update` is the one thing here that touches the network, and it is the only flag
+that does not start a terminal. Nothing else in zet makes a request on its own: the
+launch check that `[update] check-on-launch` is written for is not wired in yet, so this
+is the only way to make zet ask. See PRIVACY.md for what the request discloses.";
 
 fn main() -> ExitCode {
     match parse(std::env::args().skip(1)) {
@@ -67,6 +74,7 @@ fn main() -> ExitCode {
             println!("{}", zet_update::version_line());
             ExitCode::SUCCESS
         }
+        Args::CheckUpdate => check_update(),
         Args::Bad(reason) => {
             eprintln!("zet: {reason}");
             eprintln!("{USAGE}");
@@ -84,6 +92,8 @@ enum Args {
     Help,
     /// Print the version.
     Version,
+    /// Ask whether a newer version has been published.
+    CheckUpdate,
     /// Something zet does not understand, and why.
     Bad(String),
 }
@@ -105,6 +115,7 @@ fn parse(mut arguments: impl Iterator<Item = String>) -> Args {
         match argument.as_str() {
             "-h" | "--help" => return Args::Help,
             "-V" | "--version" => return Args::Version,
+            "--check-update" => return Args::CheckUpdate,
             "-d" | "--directory" => {
                 let Some(path) = arguments.next() else {
                     return Args::Bad(format!("`{argument}` needs a directory after it"));
@@ -115,6 +126,48 @@ fn parse(mut arguments: impl Iterator<Item = String>) -> Args {
         }
     }
     Args::Run { directory }
+}
+
+/// Ask GitHub whether a newer version has been published, and say what came back.
+///
+/// The config file is deliberately not read. `[update] check-on-launch` is about the
+/// check zet makes *on its own*, and this is not that: a user who turned the automatic
+/// one off and then typed this asked for the request by name. Not reading the file also
+/// means this works on a machine whose config will not parse, which is exactly when
+/// someone might be running it.
+///
+/// A check that cannot be completed exits non-zero, so a script can tell "there is
+/// nothing newer" from "there is no answer". Whether there *is* a newer version does not
+/// change the exit code — this reports, it does not decide.
+fn check_update() -> ExitCode {
+    let checker = zet_update::Checker::new(zet_update::Http::default(), zet_update::DEFAULT_REPO);
+    match checker.check() {
+        Ok(found) => {
+            // The version and not the whole `Update`: what to print is the one number,
+            // and taking it here is what keeps the wording testable without a server —
+            // which matters, because everything else in this function is a socket.
+            let newer = found.as_ref().map(|update| update.version().to_string());
+            print!("{}", check_report(newer.as_deref()));
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("zet: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// What to print after a check, given the version it found, if it found one.
+fn check_report(newer: Option<&str>) -> String {
+    let this = zet_update::version_line();
+    match newer {
+        None => format!("{this} is the newest release\n"),
+        Some(version) => format!(
+            "zet {version} is available; you have {this}\n\
+             https://github.com/{}/releases/latest\n",
+            zet_update::DEFAULT_REPO,
+        ),
+    }
 }
 
 /// Start the terminal, and say why if it cannot.
@@ -253,6 +306,36 @@ mod tests {
     }
 
     #[test]
+    fn check_update_is_its_own_flag_and_starts_nothing() {
+        // It has no short form on purpose: `-c` reads like `--config` or `--continue`,
+        // and this is the one flag here that makes a network request.
+        assert!(matches!(args(&["--check-update"]), Args::CheckUpdate));
+        assert!(matches!(args(&["-c"]), Args::Bad(_)));
+    }
+
+    #[test]
+    fn a_check_that_finds_nothing_says_which_build_is_current() {
+        // The build and not just the version, for the same reason `--version` names the
+        // commit: `0.1.0` is a range of binaries and someone reading this needs to know
+        // which one they are on.
+        let line = check_report(None);
+        assert_eq!(line.lines().count(), 1);
+        assert!(line.contains(&zet_update::version_line()), "{line}");
+        assert!(line.ends_with("newest release\n"), "{line}");
+    }
+
+    #[test]
+    fn a_check_that_finds_something_names_it_and_says_where_to_get_it() {
+        let line = check_report(Some("9.9.9"));
+        assert!(line.contains("zet 9.9.9 is available"), "{line}");
+        assert!(line.contains(&zet_update::version_line()), "{line}");
+        assert!(
+            line.contains("github.com/asterxsk/zet/releases/latest"),
+            "{line}"
+        );
+    }
+
+    #[test]
     fn an_unknown_argument_is_refused_rather_than_ignored() {
         // The failure this prevents: a user types a flag that looks plausible, zet
         // starts anyway, and nothing they asked for happens. Saying so is the difference
@@ -284,7 +367,7 @@ mod tests {
         // Kept in step by hand, so the list of flags is written down twice in one file
         // and the second copy is a test. A flag that exists but is undocumented is the
         // one a user cannot find.
-        for flag in ["--help", "--version", "--directory"] {
+        for flag in ["--help", "--version", "--directory", "--check-update"] {
             assert!(USAGE.contains(flag), "{flag} is missing from the usage");
         }
     }

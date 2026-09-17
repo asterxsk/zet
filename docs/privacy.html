@@ -106,15 +106,20 @@
       <h2>The update check</h2>
 
       <div class="callout">
-        <span class="callout__label">Not implemented yet</span>
-        <p>This section describes the update check zet is being built to make. The code for it exists,
-        but nothing in the shipped binary calls it, so as of this date zet makes no network requests
-        at all, and the setting below has nothing to turn off. It is published here so that the request
-        is described before it is made rather than after.</p>
+        <span class="callout__label">Partly implemented</span>
+        <p><code>zet --check-update</code> makes this request today, and it is the only way to make
+        it: the automatic check on launch is still to come, so the setting below has nothing to turn
+        off yet. What is described here is the whole of the intent, published so that the request is
+        described before it is made rather than after.</p>
       </div>
 
-      <p><strong>What it is.</strong> On launch, zet asks GitHub whether a newer version has been
-      published. This is the only request zet makes on its own.</p>
+      <p><strong>What it is.</strong> <code>zet --check-update</code> asks GitHub whether a newer
+      version has been published and prints the answer. It makes no other request, downloads
+      nothing, and changes nothing on disk.</p>
+
+      <p><strong>What it will be.</strong> The same request, made once on launch, when
+      <code>[update] check-on-launch</code> is left at its default of <code>true</code>. That is the
+      one request zet would make on its own.</p>
 
       <p><strong>Where it goes.</strong> <code>api.github.com</code>, operated by GitHub, Inc. (a
       subsidiary of Microsoft Corporation).</p>
@@ -145,23 +150,26 @@
 
       <p><strong>Downloads.</strong> If you accept an update, the release archive is downloaded from
       <code>github.com</code> / <code>objects.githubusercontent.com</code>. The same disclosure
-      applies.</p>
+      applies. <strong>Nothing downloads anything today.</strong> There is no install path in the
+      binary and no way to accept an update from inside zet; a new version is installed by running
+      the installer again.</p>
 
-      <p><strong>Turning it off.</strong> The update check can be disabled in
+      <p><strong>Turning it off.</strong> Once the launch check exists, it will be disabled in
       <code>config.toml</code>:</p>
 
 <pre><code>[update]
 check-on-launch = false</code></pre>
 
-      <p>With that set, zet makes no network request at all until you explicitly ask for one.</p>
+      <p>With that set, zet would make no request on its own, and <code>zet --check-update</code>
+      would remain the only way to make one — a request you asked for by name.</p>
 
       <div class="callout callout--note">
-        <span class="callout__label">A manual check has no way in yet</span>
-        <p>The policy describes a manual check as <code>zet --check-update</code>. That option does
-        not exist: the binary accepts <code>-d</code>/<code>--directory</code>, <code>-h</code>/<code>--help</code>,
-        and <code>-V</code>/<code>--version</code>, and refuses any other argument by name. There is
-        no menu item either, and the settings panel does not offer one. The behaviour described
-        above is the intent for when the updater is wired in, not something this build can do.</p>
+        <span class="callout__label">That is the state today, minus the check</span>
+        <p>The key exists and is read by nothing: no code path in the binary consults it, because the
+        launch check it gates is not written. The binary accepts <code>-d</code>/<code>--directory</code>,
+        <code>-h</code>/<code>--help</code>, <code>-V</code>/<code>--version</code>, and
+        <code>--check-update</code>, and refuses any other argument by name. The settings panel has
+        no update row. So the only request zet can make is one you typed.</p>
       </div>
 
       <h2>What zet writes to your disk</h2>

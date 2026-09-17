@@ -222,6 +222,23 @@
       belongs to that folder, and a new tab in it that started somewhere else would be the surprising
       thing. The Windows installer registers a shell context menu that uses it.</p>
 
+      <h4>zet — <code>--check-update</code> asks GitHub whether a newer version exists</h4>
+
+      <ul>
+        <li>The manual half of the update check, and the only thing in the binary that touches the
+        network. It prints the answer and exits; it downloads nothing and changes nothing on disk,
+        so a check you did not act on costs one request and no more.</li>
+
+        <li>It deliberately does not read the config file. <code>[update] check-on-launch</code> is
+        about the check zet makes <em>on its own</em>, and a flag the user typed is not that — which
+        also means this works on a machine whose config will not parse, exactly when someone might
+        want it.</li>
+
+        <li>A check that cannot be completed exits non-zero, so a script can tell "there is nothing
+        newer" from "there is no answer". Whether there <em>is</em> a newer version does not change
+        the exit code: this reports, it does not decide.</li>
+      </ul>
+
       <h4>packaging/ — a per-user Windows installer and the icon it installs</h4>
 
       <p>Inno Setup, installing to <code>%LOCALAPPDATA%\Programs\zet</code> with no elevation.

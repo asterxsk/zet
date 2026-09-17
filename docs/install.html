@@ -220,11 +220,15 @@ ISCC.exe /DVersion=0.1.0 /O"dist" packaging\zet.iss</code></pre>
 
       <h2>Updates</h2>
 
-      <p>Not wired up. <code>zet-update</code> implements the version identity, the release lookup,
-      the digest check, and the self-replacement, and the binary now calls exactly one thing in it
-      — <code>version_line</code>, for <code>zet --version</code>. The checking, the download, and
-      the replacement are all still uncalled, so this build never touches the network. The configuration key for the check exists already, so
-      setting it now costs nothing — see
+      <p><strong>Half wired up.</strong> Run <code>zet --check-update</code> and zet asks GitHub
+      whether a newer version has been published, prints the answer, and exits. That is a request
+      you typed, and it is the only one this build can make; installing what it finds is still a
+      matter of running the installer again.</p>
+
+      <p>The other half is the check on launch, and it is not written. <code>zet-update</code> also
+      knows how to download a release, verify it against its published digest, and replace the
+      running binary, and none of that is reachable from the binary yet. The configuration key for
+      the launch check exists and is read by nothing, so setting it now costs nothing — see
       <a href="configuration.html#update">the update section of Configuration</a>.</p>
     </article>
   </main>

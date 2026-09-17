@@ -7,7 +7,7 @@ renderer.
 > with its own VT engine and its own GPU renderer. It speaks the kitty keyboard protocol in
 > both directions — the flag stack, the query, and the `CSI u` encoding, with `Report alternate
 > keys` the one flag it does not implement. What is missing is the depth around that:
-> `zet-update` is written but not wired to the binary, and there is no update check behind it.
+> the update check exists as `zet --check-update` but does not yet run on launch.
 > Nothing here is usable as a daily driver, and nothing here is worth installing.
 
 ## Why
@@ -116,32 +116,43 @@ Tags are `v`-prefixed. Both `v0.2.0` and `0.2.0` parse, but the workflow creates
 
 ## Updates
 
-**Not wired up yet.** [`zet-update`](crates/zet-update) implements the whole of it — the version
-identity, the release lookup, the digest check, and the self-replacement — and the binary now
-calls exactly one thing in it: `version_line`, for `zet --version`. The checking, the download,
-and the replacement are all still uncalled, so the current build never touches the network.
+**Half wired up.** [`zet-update`](crates/zet-update) implements the whole of it — the version
+identity, the release lookup, the digest check, and the self-replacement — and the binary calls
+two things in it: `version_line`, for `zet --version`, and the release lookup, for
+`zet --check-update`. That last one is a request you type; it prints whether a newer version has
+been published and then exits, and it is the only request zet can make.
 
-When it is wired in, the intent is that zet checks GitHub Releases on launch and tells you when
-there is a newer version, that you choose whether to install it, and that it takes effect the
-next time zet starts.
+The other half is the check on launch, and it is not written. `zet-update` also knows how to
+download a release, verify it against its published digest, and replace the running binary, and
+none of that is reachable from the binary yet either. So the current build never touches the
+network unless you ask it to.
+
+When the rest is wired in, the intent is that zet checks GitHub Releases on launch and tells you
+when there is a newer version, that you choose whether to install it, and that it takes effect
+the next time zet starts.
 
 The archive is verified against a `SHA256SUMS` digest published alongside it before anything is
 written to disk. **The archives are not Authenticode-signed**, so a checksum proves the download
 matches the release — not who published it. What that does and does not buy you is set out in
 [SECURITY.md](SECURITY.md).
 
-The configuration key for it already exists, so setting it now costs nothing:
+The configuration key for the launch check already exists and is read by nothing, so setting it
+now costs nothing:
 
 ```toml
 [update]
 check_on_launch = false
 ```
 
+`zet --check-update` ignores it either way: the key is about the check zet makes *on its own*, and
+a flag you typed is not that.
+
 ## Privacy
 
-zet has no telemetry, no accounts, and no server. The current build makes no network requests at
-all — the update check is the only one it is ever meant to make on its own, and it is not wired
-up yet. When it is, it will disclose your IP address to GitHub and nothing else.
+zet has no telemetry, no accounts, and no server. The only request it can make is the one behind
+`zet --check-update`, and it happens only when you type it: the check on launch is the only one
+zet is ever meant to make on its own, and it is not wired up yet. When it is, it will disclose
+your IP address to GitHub and nothing else.
 [PRIVACY.md](PRIVACY.md) says exactly what is sent, what is not, and what is written to your
 disk.
 
