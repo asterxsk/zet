@@ -31,7 +31,7 @@
 
 use zet_vt::{KeyboardFlags, Modes, MouseEncoding, MouseMode};
 
-use crate::chord::{Key, Modifiers};
+use crate::chord::{Key, Modifiers, character_of, unshifted};
 use crate::key::{KeyEvent, KeyKind};
 use crate::mouse::{MouseAction, MouseButton, MouseEvent};
 
@@ -299,31 +299,6 @@ fn literal(key: Key, held: Modifiers, modes: &Modes) -> Option<Vec<u8>> {
     }
 }
 
-/// The character a key produces, for the keys that produce one.
-///
-/// The named punctuation is mapped back to its character here so that the control
-/// codes above can be applied to it: `Ctrl+[` and `Ctrl+BracketLeft` are the same
-/// keystroke and must produce the same 0x1b.
-fn character_of(key: Key) -> Option<char> {
-    match key {
-        Key::Char(c) => Some(c),
-        Key::Space => Some(' '),
-        Key::Plus => Some('+'),
-        Key::Minus => Some('-'),
-        Key::Comma => Some(','),
-        Key::Period => Some('.'),
-        Key::Slash => Some('/'),
-        Key::Semicolon => Some(';'),
-        Key::Quote => Some('\''),
-        Key::Backquote => Some('`'),
-        Key::Backslash => Some('\\'),
-        Key::BracketLeft => Some('['),
-        Key::BracketRight => Some(']'),
-        Key::Equal => Some('='),
-        _ => None,
-    }
-}
-
 /// The control byte for a character, if it has one.
 ///
 /// Ctrl+A through Ctrl+Z are the letters' positions in the alphabet, and the
@@ -410,9 +385,8 @@ fn kitty_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
     // its own rather than a condition on the others.
     let all = flags.contains(KeyboardFlags::ALL_KEYS);
     let numbered = key_code(event.key).is_some() && !has_legacy_bytes(event.key);
-    let escaped = all
-        || numbered
-        || (flags.contains(KeyboardFlags::DISAMBIGUATE) && ambiguous(event));
+    let escaped =
+        all || numbered || (flags.contains(KeyboardFlags::DISAMBIGUATE) && ambiguous(event));
 
     if !escaped && p.event.is_none() {
         return None;
@@ -594,50 +568,6 @@ fn key_code(key: Key) -> Option<u32> {
         Key::Menu => 57_363,
         _ => u32::from(unshifted(character_of(key)?)),
     })
-}
-
-/// The unshifted form of a character, which is the one the protocol names the key by.
-///
-/// The protocol is explicit that the code is the key *before* shift: a program
-/// matching a shortcut for `ctrl+shift+a` looks for the code of `a`, and a terminal
-/// that sends the code of `A` hands it a chord it will never match. The host passes
-/// on the key the layout produced, which under shift is the shifted character, so the
-/// shift has to come back off here — and only here, because the bytes the legacy
-/// encoding sends are the shifted ones and have to stay that way.
-///
-/// Letters are exact and the same on every layout: shift on a letter is its upper
-/// case wherever there are letters. The rest is the pairing the protocol was defined
-/// against, the digits and the punctuation above them on a PC-101 keyboard, which is
-/// what every other terminal sends. A character in neither table is sent as itself,
-/// which is the right answer for every key shift does not move.
-fn unshifted(ch: char) -> char {
-    if ch.is_ascii_uppercase() {
-        return ch.to_ascii_lowercase();
-    }
-    match ch {
-        '!' => '1',
-        '@' => '2',
-        '#' => '3',
-        '$' => '4',
-        '%' => '5',
-        '^' => '6',
-        '&' => '7',
-        '*' => '8',
-        '(' => '9',
-        ')' => '0',
-        '_' => '-',
-        '+' => '=',
-        '{' => '[',
-        '}' => ']',
-        '|' => '\\',
-        ':' => ';',
-        '"' => '\'',
-        '<' => ',',
-        '>' => '.',
-        '?' => '/',
-        '~' => '`',
-        _ => ch,
-    }
 }
 
 /// The code points of the text a key produced, when the program asked for them.
@@ -2009,7 +1939,13 @@ mod tests {
         // the modifier parameter, which is why the parameter appears even with
         // nothing held: a sub-field needs a field to be a sub-field of.
         let arrow = press(Key::Up, Modifiers::empty());
-        assert_eq!(kitty_bytes(&with_kind(Key::Up, Modifiers::empty(), KeyKind::Repeat), KeyboardFlags::ALL_KEYS), "\x1b[A");
+        assert_eq!(
+            kitty_bytes(
+                &with_kind(Key::Up, Modifiers::empty(), KeyKind::Repeat),
+                KeyboardFlags::ALL_KEYS
+            ),
+            "\x1b[A"
+        );
         assert_eq!(
             kitty_bytes(
                 &with_kind(Key::Up, Modifiers::empty(), KeyKind::Repeat),
@@ -2100,7 +2036,10 @@ mod tests {
             "A",
             "shift on its own still produces text"
         );
-        assert_eq!(kitty_bytes(&press(Key::Char('a'), Modifiers::empty()), flags), "a");
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('a'), Modifiers::empty()), flags),
+            "a"
+        );
     }
 
     #[test]
@@ -2124,8 +2063,14 @@ mod tests {
         // Under the all-keys flag there is no exception: every key is an escape code,
         // and the protocol says so in as many words.
         let all = KeyboardFlags::ALL_KEYS;
-        assert_eq!(kitty_bytes(&press(Key::Enter, Modifiers::empty()), all), "\x1b[13u");
-        assert_eq!(kitty_bytes(&press(Key::Tab, Modifiers::empty()), all), "\x1b[9u");
+        assert_eq!(
+            kitty_bytes(&press(Key::Enter, Modifiers::empty()), all),
+            "\x1b[13u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Tab, Modifiers::empty()), all),
+            "\x1b[9u"
+        );
         assert_eq!(
             kitty_bytes(&press(Key::Backspace, Modifiers::empty()), all),
             "\x1b[127u"
@@ -2135,9 +2080,18 @@ mod tests {
     #[test]
     fn the_all_keys_flag_reports_every_key_including_the_ones_that_were_text() {
         let flags = KeyboardFlags::ALL_KEYS;
-        assert_eq!(kitty_bytes(&press(Key::Char('a'), Modifiers::empty()), flags), "\x1b[97u");
-        assert_eq!(kitty_bytes(&press(Key::Char('a'), Modifiers::SHIFT), flags), "\x1b[97;2u");
-        assert_eq!(kitty_bytes(&press(Key::Space, Modifiers::empty()), flags), "\x1b[32u");
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('a'), Modifiers::empty()), flags),
+            "\x1b[97u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Char('a'), Modifiers::SHIFT), flags),
+            "\x1b[97;2u"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Space, Modifiers::empty()), flags),
+            "\x1b[32u"
+        );
         // A lock key is not text and has no character, so the protocol gives it a
         // number in the private use area.
         assert_eq!(
@@ -2170,8 +2124,14 @@ mod tests {
         );
         // F1 through F12 have a sequence of their own and keep it, because that is the
         // sequence the protocol's table gives them too.
-        assert_eq!(kitty_bytes(&press(Key::F(1), Modifiers::empty()), flags), "\x1bOP");
-        assert_eq!(kitty_bytes(&press(Key::F(5), Modifiers::empty()), flags), "\x1b[15~");
+        assert_eq!(
+            kitty_bytes(&press(Key::F(1), Modifiers::empty()), flags),
+            "\x1bOP"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::F(5), Modifiers::empty()), flags),
+            "\x1b[15~"
+        );
     }
 
     #[test]
@@ -2181,9 +2141,18 @@ mod tests {
         // under the protocol, which is why a program that opts in does not stop
         // understanding its own terminfo entry.
         let flags = KeyboardFlags::DISAMBIGUATE | KeyboardFlags::ALL_KEYS;
-        assert_eq!(kitty_bytes(&press(Key::Up, Modifiers::empty()), flags), "\x1b[A");
-        assert_eq!(kitty_bytes(&press(Key::Up, Modifiers::CTRL), flags), "\x1b[1;5A");
-        assert_eq!(kitty_bytes(&press(Key::Insert, Modifiers::empty()), flags), "\x1b[2~");
+        assert_eq!(
+            kitty_bytes(&press(Key::Up, Modifiers::empty()), flags),
+            "\x1b[A"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Up, Modifiers::CTRL), flags),
+            "\x1b[1;5A"
+        );
+        assert_eq!(
+            kitty_bytes(&press(Key::Insert, Modifiers::empty()), flags),
+            "\x1b[2~"
+        );
         assert_eq!(
             kitty_bytes(&press(Key::Delete, Modifiers::SHIFT), flags),
             "\x1b[3;2~"
@@ -2209,10 +2178,7 @@ mod tests {
 
         // Without the flag, or without the all-keys flag it is defined against, the
         // text is not read at all.
-        assert_eq!(
-            kitty_bytes(&shift_a, KeyboardFlags::ALL_KEYS),
-            "\x1b[97;2u"
-        );
+        assert_eq!(kitty_bytes(&shift_a, KeyboardFlags::ALL_KEYS), "\x1b[97;2u");
         assert_eq!(
             kitty_bytes(&shift_a, KeyboardFlags::ASSOCIATED_TEXT),
             "A",

@@ -315,8 +315,10 @@ pub enum Caption {
 ///
 /// What the pointer is mapped onto is the distance the thumb can *travel* rather than the
 /// track's height. The thumb is a proportion of the track and shrinks as the scrollback
-/// grows, so a track-height divisor would put the two ends out of reach by exactly the
-/// thumb's height — and the further back the history, the further out of reach.
+/// grows, so the two only agree at the top: with a track-height divisor the thumb's top
+/// would have to reach the bottom of the track to mean "the end", and it stops a thumb's
+/// height short of it — the further back the history, the smaller the thumb and the wider
+/// the band near the end that no drag can cross.
 ///
 /// `None` when the thumb cannot move: a thumb as tall as its track is a scrollback with
 /// nothing scrolled off, and there is no division to do.
@@ -368,9 +370,15 @@ impl Default for ScrollState {
 
 /// What the chrome remembered from one frame to the next.
 enum Region {
-    Tab { index: u32, rect: Rect },
+    Tab {
+        index: u32,
+        rect: Rect,
+    },
     NewTab(Rect),
-    Caption { caption: Caption, rect: Rect },
+    Caption {
+        caption: Caption,
+        rect: Rect,
+    },
     Drag(Rect),
     Settings(Rect),
     Setting {
@@ -378,7 +386,10 @@ enum Region {
         part: SettingPart,
         rect: Rect,
     },
-    Scrollbar { track: Rect, thumb: Rect },
+    Scrollbar {
+        track: Rect,
+        thumb: Rect,
+    },
 }
 
 impl Region {

@@ -732,7 +732,11 @@ impl Host {
         // binding is read here rather than left to the app. Nothing else is intercepted:
         // a key with no binding is a key for the shell, and that is the whole of the
         // keymap's design.
-        if self.app.bound(translated.mods, translated.key) == Some(Action::Settings) {
+        // Through `action_for` rather than `bound`, because a chord is not an event:
+        // asking the keymap directly would toggle the panel open on the press and shut
+        // again on the release, which is one keystroke the user cannot see the effect
+        // of.
+        if self.app.action_for(&translated) == Some(Action::Settings) {
             self.settings_open = !self.settings_open;
             self.settings_scroll = 0.0;
             self.capturing = None;
@@ -765,7 +769,15 @@ impl Host {
         // remembering the chord you opened it with is the whole of that promise. Bare
         // `Escape` only — a modified one is somebody else's key, and the shell may well
         // be waiting for it.
-        if self.settings_open && translated.key == Key::Escape && translated.mods.is_empty() {
+        //
+        // And a press only. The key going up is not a second Escape: without this the
+        // documented two-stage Escape is defeated from the first press, because the
+        // release closes a panel the press had already left open.
+        if self.settings_open
+            && translated.kind != KeyKind::Release
+            && translated.key == Key::Escape
+            && translated.mods.is_empty()
+        {
             self.settings_open = false;
             self.settings_focus = None;
             self.capturing = None;
@@ -779,7 +791,12 @@ impl Host {
         // the font, or scrolling the view changes what is on screen and then stops
         // talking. Without this the bar would appear only once something else happened
         // to print.
-        let ran_an_action = self.app.bound(translated.mods, translated.key).is_some();
+        //
+        // The question is asked of the app rather than of the keymap, so that the
+        // answer is the same one the app acts on: a release matches a chord and runs
+        // nothing, and a frame requested for it would be a redraw of a screen nothing
+        // changed.
+        let ran_an_action = self.app.action_for(&translated).is_some();
         let commands = self.app.key(&translated);
         if ran_an_action && let Some(window) = self.window() {
             window.request_redraw();
@@ -882,6 +899,21 @@ impl Host {
             }
             zet_app::Effect::None => {}
         }
+    }
+
+    /// Let go of everything the pointer was holding.
+    ///
+    /// Both drags in this window are the same shape: a press takes hold of something
+    /// and every move afterwards moves it, until a release says otherwise. That makes
+    /// the release load-bearing, and a release this window does not receive leaves the
+    /// drag running for ever — the next move would scroll the view or sweep a
+    /// selection with no button held at all.
+    ///
+    /// There is nothing to settle when one ends early: the view is already where the
+    /// drag put it, and a half-swept selection is a selection.
+    fn end_drags(&mut self) {
+        self.scroll_grab = None;
+        self.pressed_at = None;
     }
 
     /// The pointer moved.
@@ -1015,10 +1047,8 @@ impl Host {
                     // it, which pages. The grab point is where in the thumb the pointer
                     // went down, so the thumb does not jump to re-centre itself under it.
                     zet_ui::Scrollbar::Thumb => {
-                        self.scroll_grab = self
-                            .chrome
-                            .scrollbar()
-                            .map(|(_, thumb)| y as f32 - thumb.y);
+                        self.scroll_grab =
+                            self.chrome.scrollbar().map(|(_, thumb)| y as f32 - thumb.y);
                         0
                     }
                 };
@@ -1037,12 +1067,7 @@ impl Host {
                 // The list drawn this frame and the list read here are the same function
                 // of the same configuration, so the index names the same row. A row that
                 // is not there is not reachable — the chrome hit-tests what it drew.
-                if let Some(id) = self
-                    .app
-                    .settings()
-                    .get(line)
-                    .and_then(zet_app::Line::id)
-                {
+                if let Some(id) = self.app.settings().get(line).and_then(zet_app::Line::id) {
                     // Clicking a row is also how the keyboard gets there: the pointer and
                     // the keyboard are two ways to the same highlight, and a panel where
                     // they were two different states would need two of everything.
@@ -1362,7 +1387,9 @@ impl ApplicationHandler<Wake> for Host {
             self.app.set_families(families);
             // The panel is the only thing that reads them, and a panel that is not open
             // does not need the frame.
-            if self.settings_open && let Some(window) = self.window.clone() {
+            if self.settings_open
+                && let Some(window) = self.window.clone()
+            {
                 window.request_redraw();
             }
             return;
@@ -1400,6 +1427,13 @@ impl ApplicationHandler<Wake> for Host {
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
+                if !focused {
+                    // A drag does not survive the window losing focus, and it cannot
+                    // be waited out: the button coming up is delivered to whoever has
+                    // the pointer, which by then is not this window, so the release
+                    // this is meant to end on is one that will never arrive.
+                    self.end_drags();
+                }
                 // A focus change is one of the moments the accessibility settings are
                 // re-read. A user who has just been in the Settings app is likely to
                 // have changed one, and this is what makes the change take effect
@@ -1418,7 +1452,13 @@ impl ApplicationHandler<Wake> for Host {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => self.moved(position.x, position.y),
-            WindowEvent::CursorLeft { .. } => self.pointer = None,
+            WindowEvent::CursorLeft { .. } => {
+                self.pointer = None;
+                // Same reason as losing focus, and it is the commoner case: a drag
+                // taken off the edge of the window is a drag whose release happens
+                // somewhere this window is not listening.
+                self.end_drags();
+            }
             WindowEvent::MouseInput { state, button, .. } => self.button(state, button, loop_),
             WindowEvent::MouseWheel { delta, .. } => self.wheel(delta),
             _ => {}
@@ -1535,7 +1575,11 @@ mod tests {
         assert_eq!(next_focus(3, Some(1), true), Some(2));
         assert_eq!(next_focus(3, Some(2), true), None, "past the end is out");
         assert_eq!(next_focus(3, None, false), None, "backwards from nowhere");
-        assert_eq!(next_focus(3, Some(0), false), None, "backwards past the top");
+        assert_eq!(
+            next_focus(3, Some(0), false),
+            None,
+            "backwards past the top"
+        );
         assert_eq!(next_focus(3, Some(2), false), Some(1));
 
         // One row is the case where "in", "out" and "wrapped" are all the same index.

@@ -22,6 +22,7 @@ use zet_input::{Chord, Key, KeyEvent, KeyKind, Modifiers, encode_key, encode_pas
 use zet_pty::discovery::{self, Profile};
 use zet_render::Selection;
 use zet_session::{Session, SessionError, Sessions, Waker};
+use zet_vt::search::Match;
 use zet_vt::{Modes, Pos};
 
 use crate::action::Action;
@@ -345,8 +346,7 @@ impl App {
     /// The size the grid font should be drawn at, including any keyboard nudge.
     #[must_use]
     pub fn font_size(&self) -> f32 {
-        (self.config.font.size + self.font_nudge)
-            .clamp(settings::MIN_SIZE, settings::MAX_SIZE)
+        (self.config.font.size + self.font_nudge).clamp(settings::MIN_SIZE, settings::MAX_SIZE)
     }
 
     // ---------------------------------------------------------------------------
@@ -493,21 +493,35 @@ impl App {
     /// terminal, which is the default and the reason the keymap is a short list rather
     /// than a complete description of the keyboard.
     pub fn key(&mut self, event: &KeyEvent) -> Vec<Command> {
-        // A binding runs on the way down and on every auto-repeat, and never on the way
-        // up. `bound` answers for a chord and not for an event, so asking it directly
-        // would run the action twice for one press — once when the key went down and
-        // again when it came up, which is two tabs for one `Ctrl+Shift+T`.
-        //
-        // Holding a bound chord down therefore repeats it, which is what a user holding
-        // `Ctrl+Shift+T` is asking for. `encode_key` already answers `None` for a
-        // release, so the two halves of this agree about what a release is.
-        if event.kind != KeyKind::Release
-            && let Some(action) = self.bound(event.mods, event.key)
-        {
+        if let Some(action) = self.action_for(event) {
             return self.run(action);
         }
         self.type_into_session(event);
         Vec::new()
+    }
+
+    /// The action a key event runs, if it runs one.
+    ///
+    /// A binding runs on the way down and on every auto-repeat, and never on the way
+    /// up. [`App::bound`] answers for a chord and not for an event, so asking *it*
+    /// would run the action twice for one press — once when the key went down and
+    /// again when it came up, which is two tabs for one `Ctrl+Shift+T`.
+    ///
+    /// Holding a bound chord down therefore repeats it, which is what a user holding
+    /// `Ctrl+Shift+T` is asking for. `encode_key` already answers `None` for a
+    /// release, so the two halves of this agree about what a release is.
+    ///
+    /// This is a method rather than a condition written out twice because the host
+    /// asks the same question for a different reason: it wants to know whether it owes
+    /// a frame, since an action changes the screen and then stops talking while typing
+    /// is answered by the program's echo. A host that answered it differently from the
+    /// app — by forgetting the release, say — would draw twice for one press.
+    #[must_use]
+    pub fn action_for(&self, event: &KeyEvent) -> Option<Action> {
+        if event.kind == KeyKind::Release {
+            return None;
+        }
+        self.bound(event.mods, event.key)
     }
 
     /// Send typed text to the active terminal, as though it had been pasted.
@@ -686,7 +700,10 @@ impl App {
                 return true;
             }
             Key::Enter if typed => {
-                self.find_step(!event.mods.is_empty());
+                // Plain Enter goes forward and Shift+Enter goes back, which is what
+                // every find bar does. `typed` admits exactly those two, so the shift
+                // is the whole of the difference between them.
+                self.find_step(event.mods.is_empty());
                 return true;
             }
             Key::Backspace if typed => {
@@ -746,18 +763,13 @@ impl App {
         };
         let want = {
             let grid = session.term().grid();
-            let rows = grid.rows();
             let top = grid
                 .scrollback_len()
                 .saturating_sub(session.scroll_offset());
-            let bottom = top + rows - 1;
-            if found.start.row < top {
-                found.start.row
-            } else if found.end.row > bottom {
-                (found.end.row + 1).saturating_sub(rows)
-            } else {
+            let Some(want) = reveal_row(found, top, grid.rows()) else {
                 return;
-            }
+            };
+            want
         };
         // The offset counts from the live screen rather than from the top of the
         // history, so the row wanted at the top and the number of rows behind it are
@@ -779,6 +791,7 @@ impl App {
         };
         let grid = session.term().grid();
         let rows = grid.rows();
+        let cols = grid.cols();
         let top = grid
             .scrollback_len()
             .saturating_sub(session.scroll_offset());
@@ -791,10 +804,7 @@ impl App {
             if self.find.is_active(index) {
                 active = Some(marks.len());
             }
-            marks.push(Selection::new(
-                Pos::new(found.start.row.saturating_sub(top), found.start.col),
-                Pos::new(found.end.row.saturating_sub(top), found.end.col),
-            ));
+            marks.push(clip_match(*found, top, rows, cols));
         }
         (marks, active)
     }
@@ -902,6 +912,61 @@ impl App {
         self.reported = (reduce_motion, high_contrast);
         self.apply();
     }
+}
+
+/// Where the view has to be scrolled to so that `found` is on screen, or `None` when
+/// it already is.
+///
+/// `top` is the history row at the top of the viewport and `rows` is how many the
+/// viewport has. A match above the fold becomes the top row; one below becomes the
+/// bottom row; and one taller than the window is shown from its first row, because a
+/// match you can see the start of is a match you can read — scroll far enough to put
+/// its last row on the bottom row and its first row is off the top, which is the one
+/// case where following the rule blindly hides the whole point of going there.
+///
+/// Pure, and separated from the session it scrolls, because the arithmetic is where
+/// this was wrong and the arithmetic is what a test can hold down.
+fn reveal_row(found: Match, top: usize, rows: usize) -> Option<usize> {
+    let bottom = top + rows - 1;
+    if found.start.row < top {
+        Some(found.start.row)
+    } else if found.end.row > bottom {
+        Some(
+            (found.end.row + 1)
+                .saturating_sub(rows)
+                .min(found.start.row),
+        )
+    } else {
+        None
+    }
+}
+
+/// One of the find bar's matches, in the coordinates the renderer draws in.
+///
+/// A match with a row above the viewport is cut off at the top, and what is left of it
+/// starts at the beginning of the first visible row: the column it began at belongs to
+/// a line nobody can see. Carrying it over would bound the visible part by a column
+/// from another line, or — when the whole match maps onto one row — give the selection
+/// corners the wrong way round and paint everything between them. The same at the
+/// other end.
+fn clip_match(found: Match, top: usize, rows: usize, cols: usize) -> Selection {
+    let start = Pos::new(
+        found.start.row.saturating_sub(top),
+        if found.start.row < top {
+            0
+        } else {
+            found.start.col
+        },
+    );
+    let end = Pos::new(
+        found.end.row.saturating_sub(top).min(rows - 1),
+        if found.end.row >= top + rows {
+            cols - 1
+        } else {
+            found.end.col
+        },
+    );
+    Selection::new(start, end)
 }
 
 /// Turn the config file's `[keys]` table into chords.
@@ -1255,5 +1320,118 @@ mod tests {
         let _ = app.key(&key(Key::Char('T'), Modifiers::CTRL | Modifiers::SHIFT));
         let session = app.active().expect("the new tab");
         assert_eq!((session.cols(), session.rows()), (120, 40));
+    }
+
+    // ---------------------------------------------------------------------------
+    // The find bar
+    // ---------------------------------------------------------------------------
+
+    /// The bar, with a query typed into it and a grid searched for matches.
+    ///
+    /// The grid is fed straight into the bar rather than through a session: what is
+    /// being tested is the bar's half of the pair — the query, the cursor, and the
+    /// keys it takes — and a real shell printing `beta` on demand is a race.
+    fn finding(query: &str, lines: &[&str], rows: usize) -> App {
+        let mut app = app();
+        let mut term = zet_vt::Term::new(20, rows);
+        let mut parser = zet_vt::Parser::new();
+        for (index, line) in lines.iter().enumerate() {
+            if index > 0 {
+                parser.advance_slice(b"\r\n", &mut term);
+            }
+            parser.advance_slice(line.as_bytes(), &mut term);
+        }
+        app.find.open();
+        for ch in query.chars() {
+            app.find.push(ch);
+        }
+        app.find.search(term.grid(), 0);
+        app
+    }
+
+    fn match_at(start: (usize, usize), end: (usize, usize)) -> Match {
+        Match {
+            start: Pos::new(start.0, start.1),
+            end: Pos::new(end.0, end.1),
+        }
+    }
+
+    #[test]
+    fn enter_goes_forward_and_shift_enter_goes_back() {
+        // Both are one key, and the shipped bug had them the wrong way round, which is
+        // the kind of thing that reads as working until you are on the third match.
+        let mut app = finding("beta", &["beta one", "beta two", "beta three"], 8);
+        assert!(app.find_key(&key(Key::Enter, Modifiers::empty())));
+        assert_eq!(app.find().position(), Some(2), "plain Enter went backwards");
+        assert!(app.find_key(&key(Key::Enter, Modifiers::SHIFT)));
+        assert_eq!(app.find().position(), Some(1), "Shift+Enter went forwards");
+    }
+
+    #[test]
+    fn the_find_bar_takes_the_space_bar_as_text() {
+        // The space bar is a named key rather than a character on this platform, so a
+        // bar that only reads `event.text` from character keys cannot hold a space and
+        // the key falls through to the shell underneath.
+        let mut app = finding("", &["hello world"], 8);
+        let event = KeyEvent {
+            text: Some(" ".to_string()),
+            ..key(Key::Space, Modifiers::empty())
+        };
+        assert!(app.find_key(&event));
+        assert_eq!(app.find().query(), " ");
+    }
+
+    #[test]
+    fn a_match_that_starts_above_the_viewport_starts_at_the_first_visible_column() {
+        // The bug this holds down: the start column was carried over from a row nobody
+        // can see, and when the whole match mapped onto one row the corners came out
+        // reversed and the highlight painted the gap between them instead.
+        let found = match_at((1, 12), (2, 3));
+        let mark = clip_match(found, 2, 10, 80);
+        assert_eq!(mark.bounds(), ((0, 0), (0, 3)));
+    }
+
+    #[test]
+    fn a_match_that_ends_below_the_viewport_stops_at_the_last_visible_column() {
+        let found = match_at((8, 4), (12, 6));
+        let mark = clip_match(found, 0, 10, 80);
+        assert_eq!(mark.bounds(), ((8, 4), (9, 79)));
+    }
+
+    #[test]
+    fn a_match_inside_the_viewport_is_moved_and_not_clipped() {
+        let found = match_at((5, 2), (5, 6));
+        let mark = clip_match(found, 3, 10, 80);
+        assert_eq!(mark.bounds(), ((2, 2), (2, 6)));
+    }
+
+    #[test]
+    fn a_match_already_on_screen_is_not_a_reason_to_scroll() {
+        let found = match_at((4, 2), (4, 6));
+        assert_eq!(reveal_row(found, 0, 10), None);
+        assert_eq!(reveal_row(found, 4, 10), None, "it is on the top row");
+        assert_eq!(reveal_row(found, 4, 1), None, "it is the only row");
+    }
+
+    #[test]
+    fn a_match_above_the_fold_is_put_on_the_top_row() {
+        let found = match_at((2, 2), (3, 6));
+        assert_eq!(reveal_row(found, 5, 10), Some(2));
+    }
+
+    #[test]
+    fn a_match_below_the_fold_is_put_on_the_bottom_row() {
+        let found = match_at((20, 2), (21, 6));
+        // Row 12 at the top puts row 21 — the match's last — on the bottom of ten.
+        assert_eq!(reveal_row(found, 5, 10), Some(12));
+    }
+
+    #[test]
+    fn a_match_taller_than_the_window_is_shown_from_its_first_row() {
+        // The bug this holds down: `(end + 1) - rows` with no case for a match taller
+        // than the window scrolls its start off the top, so following a match the user
+        // can only half see hides the half they were following.
+        let found = match_at((10, 0), (40, 0));
+        assert_eq!(reveal_row(found, 0, 10), Some(10));
     }
 }

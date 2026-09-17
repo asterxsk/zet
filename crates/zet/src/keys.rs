@@ -253,6 +253,13 @@ fn named_keycode(code: PhysicalKey) -> Option<Key> {
 /// line editor. A control character is dropped: it encodes a modifier rather than
 /// something the user typed, and echoing `\u{1}` into a prompt is visible garbage.
 fn text_of(logical: &WinitKey) -> Option<String> {
+    // The space bar is a named key on this platform and is still text: it is what the
+    // user typed, and a consumer that reads the text to find out what was typed — the
+    // find bar is the one — wants it. Leaving it out meant a query could hold every
+    // character except the commonest separator there is.
+    if matches!(logical, WinitKey::Named(NamedKey::Space)) {
+        return Some(" ".to_string());
+    }
     let WinitKey::Character(text) = logical else {
         return None;
     };
@@ -399,11 +406,13 @@ mod tests {
         // Space has a named spelling and can also arrive as text. The two are different
         // keys on purpose — the encoder treats them identically — and what matters is
         // that neither is dropped.
+        let named =
+            plain(&WinitKey::Named(NamedKey::Space), KeyCode::Space).expect("space translates");
+        assert_eq!(named.key, Key::Space);
         assert_eq!(
-            plain(&WinitKey::Named(NamedKey::Space), KeyCode::Space)
-                .expect("space translates")
-                .key,
-            Key::Space
+            named.text.as_deref(),
+            Some(" "),
+            "and it carries its text, which is the only thing a text field reads"
         );
         assert_eq!(
             plain(&character(" "), KeyCode::Space)

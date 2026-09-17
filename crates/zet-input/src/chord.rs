@@ -275,14 +275,114 @@ impl Chord {
 
     /// Whether this chord is what was just pressed.
     ///
-    /// The comparison is exact, including the case of a character: `Ctrl+Shift+T`
-    /// names [`Key::Char`]`('T')`, because that is the character the layout produces
-    /// and the host is expected to report the same one. A chord written with the
-    /// wrong case is a binding that never fires, which is a better failure than one
-    /// that fires on a keystroke the user did not describe.
+    /// The comparison is exact, with one exception, and the exception is about which
+    /// half of a key a binding names.
+    ///
+    /// A binding names a *key*, and the twelve punctuation keys have names of their
+    /// own — `Comma`, `Period`, `Slash`. The event for `Shift+,` carries the character
+    /// the layout put there, which is `<`, and the event for a chord without shift
+    /// carries `,`. Both are the same key on the same board, so under shift a chord
+    /// matches the character its key produces as well as the key itself. Without this
+    /// `Ctrl+Shift+Comma` — which is what the shipped binding for the settings panel
+    /// is called, and what anyone would write — is a binding that can never fire.
+    ///
+    /// Letters are deliberately not in that. `Ctrl+Shift+T` names
+    /// [`Key::Char`]`('T')`, because that is the character the layout produces, and
+    /// the event carries `T`; the exact comparison already gets it right. A chord
+    /// written with the wrong case is a binding that never fires, which is a better
+    /// failure than one that fires on a keystroke the user did not describe.
     #[must_use]
     pub fn matches(&self, mods: Modifiers, key: Key) -> bool {
-        self.mods == mods && self.key == key
+        if self.mods != mods {
+            return false;
+        }
+        self.key == key || (mods.contains(Modifiers::SHIFT) && self.matches_shifted(key))
+    }
+
+    /// Whether `key` is the character shift puts above this chord's key.
+    fn matches_shifted(&self, key: Key) -> bool {
+        let Key::Char(ch) = key else {
+            return false;
+        };
+        // A letter is its own answer — see the rule in `matches` — and this crate has
+        // no table for the rest of the world's layouts either, so what is compared is
+        // the character with the shift taken back off it against the character the
+        // named key produces. `<` comes back as `,` and meets `Key::Comma`; `1` with
+        // shift is `!` and comes back to meet [`Key::Char`]`('1')`.
+        if ch.is_alphabetic() {
+            return false;
+        }
+        character_of(self.key).is_some_and(|base| unshifted(ch) == base)
+    }
+}
+
+/// The character a key produces, for the keys that produce one.
+///
+/// The named punctuation is mapped back to its character here so that it and the
+/// character it names are one fact: `Ctrl+[` and `Ctrl+BracketLeft` are the same
+/// keystroke and must come out as the same thing, whether that is the 0x1b the
+/// encoder sends or the `[` a binding is matched on.
+pub(crate) fn character_of(key: Key) -> Option<char> {
+    match key {
+        Key::Char(c) => Some(c),
+        Key::Space => Some(' '),
+        Key::Plus => Some('+'),
+        Key::Minus => Some('-'),
+        Key::Comma => Some(','),
+        Key::Period => Some('.'),
+        Key::Slash => Some('/'),
+        Key::Semicolon => Some(';'),
+        Key::Quote => Some('\''),
+        Key::Backquote => Some('`'),
+        Key::Backslash => Some('\\'),
+        Key::BracketLeft => Some('['),
+        Key::BracketRight => Some(']'),
+        Key::Equal => Some('='),
+        _ => None,
+    }
+}
+
+/// The unshifted form of a character, which is the one the protocol names the key by.
+///
+/// The protocol is explicit that the code is the key *before* shift: a program
+/// matching a shortcut for `ctrl+shift+a` looks for the code of `a`, and a terminal
+/// that sends the code of `A` hands it a chord it will never match. The host passes
+/// on the key the layout produced, which under shift is the shifted character, so the
+/// shift has to come back off here — and only here, because the bytes the legacy
+/// encoding sends are the shifted ones and have to stay that way.
+///
+/// Letters are exact and the same on every layout: shift on a letter is its upper
+/// case wherever there are letters. The rest is the pairing the protocol was defined
+/// against, the digits and the punctuation above them on a PC-101 keyboard, which is
+/// what every other terminal sends. A character in neither table is sent as itself,
+/// which is the right answer for every key shift does not move.
+pub(crate) fn unshifted(ch: char) -> char {
+    if ch.is_ascii_uppercase() {
+        return ch.to_ascii_lowercase();
+    }
+    match ch {
+        '!' => '1',
+        '@' => '2',
+        '#' => '3',
+        '$' => '4',
+        '%' => '5',
+        '^' => '6',
+        '&' => '7',
+        '*' => '8',
+        '(' => '9',
+        ')' => '0',
+        '_' => '-',
+        '+' => '=',
+        '{' => '[',
+        '}' => ']',
+        '|' => '\\',
+        ':' => ';',
+        '"' => '\'',
+        '<' => ',',
+        '>' => '.',
+        '?' => '/',
+        '~' => '`',
+        _ => ch,
     }
 }
 
@@ -535,5 +635,42 @@ mod tests {
         assert!(!c.matches(Modifiers::empty(), Key::Char('t')));
         assert!(!c.matches(Modifiers::CTRL, Key::Char('T')));
         assert!(!c.matches(Modifiers::CTRL, Key::Tab));
+    }
+
+    #[test]
+    fn a_chord_naming_a_punctuation_key_fires_on_the_character_shift_puts_there() {
+        // The shipped settings binding, and the reason this rule exists: on a US
+        // layout the event for `Ctrl+Shift+,` carries `'<'`.
+        let c = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Comma);
+        assert!(c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('<')));
+        assert!(c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Comma));
+    }
+
+    #[test]
+    fn the_punctuation_rule_needs_shift_and_needs_the_same_key() {
+        let c = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Comma);
+        // Without shift the event carries `,`, and there is nothing to take back off.
+        assert!(!c.matches(Modifiers::CTRL, Key::Char(',')));
+        // Shift on some other key is some other key.
+        assert!(!c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('>')));
+        // And the modifiers still have to be the ones the binding named.
+        assert!(!c.matches(Modifiers::SHIFT, Key::Char('<')));
+    }
+
+    #[test]
+    fn a_letter_is_never_matched_by_its_other_case() {
+        // `Ctrl+Shift+T` names `'T'`; `'t'` is a different chord and stays one, and
+        // the punctuation rule must not quietly widen it.
+        let c = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('T'));
+        assert!(!c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('t')));
+        let lower = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('t'));
+        assert!(!lower.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('T')));
+    }
+
+    #[test]
+    fn a_shifted_digit_meets_the_digit_it_sits_on() {
+        let c = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('1'));
+        assert!(c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('!')));
+        assert!(!c.matches(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('@')));
     }
 }
