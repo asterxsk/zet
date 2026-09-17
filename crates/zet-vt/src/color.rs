@@ -19,7 +19,6 @@ const DEFAULT: u32 = 0x0000_0000;
 const INDEXED_TAG: u32 = 0x0100_0000;
 const RGB_TAG: u32 = 0x0200_0000;
 const TAG_MASK: u32 = 0xFF00_0000;
-const PAYLOAD_MASK: u32 = 0x00FF_FFFF;
 
 impl Color {
     /// The theme's default foreground or background, depending on the field.
@@ -44,7 +43,7 @@ impl Color {
     pub const fn spec(self) -> ColorSpec {
         match self.0 & TAG_MASK {
             DEFAULT => ColorSpec::Default,
-            INDEXED_TAG => ColorSpec::Indexed((self.0 & PAYLOAD_MASK) as u8),
+            INDEXED_TAG => ColorSpec::Indexed((self.0 & 0xFF) as u8),
             _ => ColorSpec::Rgb(
                 ((self.0 >> 16) & 0xFF) as u8,
                 ((self.0 >> 8) & 0xFF) as u8,

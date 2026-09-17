@@ -1,6 +1,5 @@
 //! A single line of cells.
 
-use crate::attrs::Attrs;
 use crate::cell::{Cell, CellFlags};
 use crate::color::Color;
 
@@ -38,6 +37,14 @@ impl Row {
     pub fn blank(cols: usize) -> Self {
         Row {
             cells: vec![Cell::blank(); cols],
+            wrapped: false,
+        }
+    }
+
+    /// A blank row whose cells carry `bg`, for an erase that must leave a colour behind.
+    pub fn blank_with(cols: usize, bg: Color) -> Self {
+        Row {
+            cells: vec![Cell { bg, ..Cell::blank() }; cols],
             wrapped: false,
         }
     }
@@ -80,6 +87,19 @@ impl Row {
         &self.cells
     }
 
+    /// Every cell, mutably, widened to at least `cols`.
+    ///
+    /// Erases and clears run over the whole width of the terminal even on a row that
+    /// was trimmed for the scrollback, so this grows the row rather than handing back a
+    /// short slice. Handing back the short slice is how a cleared row keeps a stripe of
+    /// old text past the point where the program thought it had erased.
+    pub fn cells_mut(&mut self, cols: usize) -> &mut [Cell] {
+        if self.cells.len() < cols {
+            self.cells.resize(cols, Cell::blank());
+        }
+        &mut self.cells
+    }
+
     /// Force the row to exactly `cols` cells, filling with blanks or dropping the tail.
     pub fn resize(&mut self, cols: usize) {
         self.cells.resize(cols, Cell::blank());
@@ -116,23 +136,17 @@ impl Row {
         }
     }
 
-    /// Write a narrow or leading-wide character at `col`, returning how many columns it used.
+    /// Write the character in `template` at `col`, returning how many columns it used.
+    ///
+    /// The styling travels as a whole [`Cell`] rather than as four loose arguments,
+    /// which keeps this down to one argument per independent thing it needs: where, what
+    /// shape, and how wide.
     ///
     /// Writing over the trailing half of a wide character also clears its leading half,
     /// and writing over the leading half clears the trailing spacer. Skipping that is
     /// what leaves half-glyphs and stray spaces behind the cursor in terminals that
     /// treat a cell as independent of its neighbour.
-    pub fn write_at(
-        &mut self,
-        cols: usize,
-        col: usize,
-        ch: char,
-        fg: Color,
-        bg: Color,
-        attrs: Attrs,
-        link: u16,
-        width: usize,
-    ) -> usize {
+    pub fn write_at(&mut self, cols: usize, col: usize, template: &Cell, width: usize) -> usize {
         if col >= cols {
             return 0;
         }
@@ -151,7 +165,13 @@ impl Row {
 
         {
             let cell = self.get_mut(col);
-            cell.set_char(ch, fg, bg, attrs, link);
+            cell.set_char(
+                template.ch,
+                template.fg,
+                template.bg,
+                template.attrs,
+                template.link,
+            );
             if width == 2 {
                 cell.flags.insert(CellFlags::WIDE_CHAR);
             }
@@ -161,10 +181,10 @@ impl Row {
             let spacer = self.get_mut(col + 1);
             *spacer = Cell {
                 ch: ' ',
-                fg,
-                bg,
-                attrs,
-                link,
+                fg: template.fg,
+                bg: template.bg,
+                attrs: template.attrs,
+                link: template.link,
                 flags: CellFlags::WIDE_CHAR_SPACER,
             };
         }
@@ -245,16 +265,7 @@ mod tests {
     use crate::color::NamedColor;
 
     fn write(row: &mut Row, cols: usize, col: usize, ch: char, width: usize) -> usize {
-        row.write_at(
-            cols,
-            col,
-            ch,
-            Color::DEFAULT,
-            Color::DEFAULT,
-            Attrs::empty(),
-            0,
-            width,
-        )
+        row.write_at(cols, col, &Cell { ch, ..Cell::blank() }, width)
     }
 
     #[test]

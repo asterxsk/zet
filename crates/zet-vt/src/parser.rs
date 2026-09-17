@@ -765,12 +765,15 @@ const fn is_utf8_continuation(byte: u8) -> bool {
 mod tests {
     use super::*;
 
+    /// One `csi_dispatch`: its parameters, intermediates, private marker and action.
+    type Csi = (Vec<Vec<u16>>, Vec<u8>, Option<Private>, char);
+
     /// Records everything the parser emits so tests can assert on the shape of it.
     #[derive(Default)]
     struct Recorder {
         printed: String,
         executed: Vec<u8>,
-        csi: Vec<(Vec<Vec<u16>>, Vec<u8>, Option<Private>, char)>,
+        csi: Vec<Csi>,
         esc: Vec<(Vec<u8>, u8)>,
         osc: Vec<Vec<Vec<u8>>>,
         dcs: Vec<(char, Vec<u8>)>,
@@ -1018,7 +1021,6 @@ mod tests {
 
     #[test]
     fn dcs_intermediates_reach_the_hook() {
-        let mut p = Parser::new();
         struct Grab(Option<(char, Vec<u8>)>);
         impl Perform for Grab {
             fn print(&mut self, _ch: char) {}
@@ -1026,6 +1028,8 @@ mod tests {
                 self.0 = Some((action, i.to_vec()));
             }
         }
+
+        let mut p = Parser::new();
         let mut g = Grab(None);
         p.advance_slice(b"\x1bP$q\x1b\\", &mut g);
         assert_eq!(g.0, Some(('q', vec![b'$'])));
@@ -1123,9 +1127,9 @@ mod tests {
         // full of binary garbage looks like.
         let mut p = Parser::new();
         let mut r = Recorder::default();
-        for round in 0..8u32 {
+        for round in 0..8u8 {
             for b in 0..=u8::MAX {
-                p.advance(b.wrapping_add(round as u8), &mut r);
+                p.advance(b.wrapping_add(round), &mut r);
             }
         }
     }
@@ -1151,9 +1155,6 @@ mod tests {
 
     #[test]
     fn value_or_distinguishes_omitted_from_zero() {
-        let r = parse(b"\x1b[0;5H");
-        // Re-derive the params by re-parsing, since Recorder flattens them.
-        let mut p = Parser::new();
         struct Grab(Option<(u16, u16, bool, bool)>);
         impl Perform for Grab {
             fn print(&mut self, _ch: char) {}
@@ -1166,9 +1167,14 @@ mod tests {
                 ));
             }
         }
+
+        // Re-derive the parameters by re-parsing, since `Recorder` flattens them.
+        let mut p = Parser::new();
         let mut g = Grab(None);
         p.advance_slice(b"\x1b[0;5H", &mut g);
         assert_eq!(g.0, Some((0, 5, true, false)));
+
+        let r = parse(b"\x1b[0;5H");
         assert!(!r.csi.is_empty());
     }
 }
