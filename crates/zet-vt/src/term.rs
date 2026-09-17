@@ -551,9 +551,19 @@ impl Term {
             1002 => self.set_mouse(enable, MouseMode::Drag),
             1003 => self.set_mouse(enable, MouseMode::Motion),
             1004 => self.modes.focus_events = enable,
-            1005 => self.modes.mouse_encoding = MouseEncoding::Utf8,
-            1006 => self.modes.mouse_encoding = MouseEncoding::Sgr,
-            1015 => self.modes.mouse_encoding = MouseEncoding::Urxvt,
+            1005 | 1006 | 1015 => {
+                let encoding = match param {
+                    1005 => MouseEncoding::Utf8,
+                    1006 => MouseEncoding::Sgr,
+                    _ => MouseEncoding::Urxvt,
+                };
+                // The three are alternatives, not layers, so this follows the same rule
+                // the reporting modes do: setting one replaces another, and resetting
+                // one only clears it if it is the one in force. A program that turns
+                // off `1006` on its way out must not take `1015` out from under a
+                // wrapper that is still using it.
+                self.set_mouse_encoding(enable, encoding);
+            }
             1048 => {
                 if enable {
                     self.save_cursor();
@@ -565,10 +575,18 @@ impl Term {
                 // The save has to happen before the switch. The alternate screen has
                 // its own cursor, so saving after entering it would remember the wrong
                 // position and lose the user's place in the shell.
+                //
+                // Both halves are guarded on the switch actually happening. A second
+                // `1049h` while already on the alternate screen would otherwise save
+                // the alternate screen's cursor over the primary one, and the matching
+                // `1049l` would then restore the user to wherever a full-screen program
+                // left its own cursor - which is the one place they were never at.
                 if enable {
-                    self.save_cursor();
+                    if self.alt.is_none() {
+                        self.save_cursor();
+                    }
                     self.enter_alt_screen();
-                } else {
+                } else if self.alt.is_some() {
                     self.exit_alt_screen();
                     self.restore_cursor();
                 }
@@ -590,6 +608,19 @@ impl Term {
             self.modes.mouse = mode;
         } else if self.modes.mouse == mode {
             self.modes.mouse = MouseMode::None;
+        }
+    }
+
+    /// Switch the mouse encoding on, or off when it is the one currently in force.
+    ///
+    /// The same argument as [`Self::set_mouse`]: `1005`, `1006`, and `1015` name three
+    /// ways of writing the same coordinates, so the last one set wins and a reset only
+    /// applies to the one it names.
+    fn set_mouse_encoding(&mut self, enable: bool, encoding: MouseEncoding) {
+        if enable {
+            self.modes.mouse_encoding = encoding;
+        } else if self.modes.mouse_encoding == encoding {
+            self.modes.mouse_encoding = MouseEncoding::X10;
         }
     }
 
@@ -1812,6 +1843,34 @@ mod tests {
     }
 
     #[test]
+    fn a_second_switch_to_the_alternate_screen_keeps_the_saved_cursor() {
+        // A full-screen program running another one sends its own `1049h` while the
+        // screen is already alternate. Saving the cursor again there would store the
+        // alternate screen's position over the shell's, and the `1049l` on the way out
+        // would drop the user wherever the inner program happened to leave its own.
+        let mut t = open(10, 4);
+        feed(&mut t, b"primary\x1b[?1049h\x1b[?1049halt\x1b[?1049l");
+        assert_eq!(
+            t.cursor(),
+            Pos::new(0, 7),
+            "the cursor must come back to where the shell left it"
+        );
+    }
+
+    #[test]
+    fn a_second_leave_of_the_alternate_screen_does_not_move_the_cursor() {
+        let mut t = open(10, 4);
+        feed(&mut t, b"primary\x1b[?1049h\x1b[?1049l");
+        feed(&mut t, b"\x1b[2;3H");
+        feed(&mut t, b"\x1b[?1049l");
+        assert_eq!(
+            t.cursor(),
+            Pos::new(1, 2),
+            "a `1049l` that leaves nothing restores nothing"
+        );
+    }
+
+    #[test]
     fn a_cursor_hidden_by_a_full_screen_program_comes_back_on_the_way_out() {
         let mut t = open(10, 4);
         feed(&mut t, b"\x1b[?1049h\x1b[?25l");
@@ -1889,6 +1948,35 @@ mod tests {
             t.modes().mouse_encoding,
             MouseEncoding::Sgr,
             "the encoding is a separate mode"
+        );
+    }
+
+    #[test]
+    fn resetting_a_mouse_encoding_goes_back_to_the_default_form() {
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[?1000h\x1b[?1006h");
+        assert_eq!(t.modes().mouse_encoding, MouseEncoding::Sgr);
+        feed(&mut t, b"\x1b[?1006l");
+        assert_eq!(
+            t.modes().mouse_encoding,
+            MouseEncoding::X10,
+            "1006l is the only thing that turns 1006 off"
+        );
+        assert_eq!(
+            t.modes().mouse,
+            MouseMode::Button,
+            "the reporting mode is a separate mode and is untouched"
+        );
+    }
+
+    #[test]
+    fn resetting_a_mouse_encoding_that_is_not_in_force_leaves_the_one_that_is() {
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[?1006h\x1b[?1005l");
+        assert_eq!(
+            t.modes().mouse_encoding,
+            MouseEncoding::Sgr,
+            "a wrapper's 1005l must not take 1006 out from under the program using it"
         );
     }
 

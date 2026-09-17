@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 
 use crate::attrs::Attrs;
-use crate::cell::Cell;
+use crate::cell::{Cell, CellFlags};
 use crate::color::Color;
 use crate::damage::Damage;
 use crate::row::Row;
@@ -259,6 +259,7 @@ impl Grid {
             self.screen.remove(bottom);
             self.screen.insert(row, blank.clone());
         }
+        self.break_wrap_at(row, bottom);
         self.damage.mark_rows(top..bottom + 1);
     }
 
@@ -274,7 +275,22 @@ impl Grid {
             self.screen.remove(row);
             self.screen.insert(bottom, blank.clone());
         }
+        self.break_wrap_at(row, bottom);
         self.damage.mark_rows(top..bottom + 1);
+    }
+
+    /// Drop the soft-wrap flags an insert or delete has just invalidated.
+    ///
+    /// Both operations move rows sideways past each other, so whatever the row above
+    /// the edit was continuing into is not what now follows it, and the row pushed to
+    /// the bottom of the region has had its own continuation pushed out with it. Both
+    /// flags would otherwise survive and claim a logical line spanning rows that the
+    /// user can see are separate — which a copy then joins and a search matches across.
+    fn break_wrap_at(&mut self, row: usize, bottom: usize) {
+        if row > 0 {
+            self.screen[row - 1].set_wrapped(false);
+        }
+        self.screen[bottom].set_wrapped(false);
     }
 
     /// Erase the whole screen.
@@ -321,12 +337,10 @@ impl Grid {
                     self.erase_row_range(row, 0, self.cols, blank);
                 }
             }
-            // Everything including the scrollback. The grid clears it; the terminal
-            // decides whether a program is allowed to.
+            // The saved lines only, which is what `ED 3` means and what a program
+            // sends when it wants to drop its history without disturbing what the
+            // user is looking at. Nothing on screen changes, so nothing is damaged.
             3 => {
-                for row in 0..self.rows {
-                    self.erase_row_range(row, 0, self.cols, blank);
-                }
                 self.scrollback.clear();
             }
             _ => {}
@@ -358,6 +372,13 @@ impl Grid {
         }
         for cell in &mut r.cells_mut(cols)[start.min(cols)..end.min(cols)] {
             *cell = blank;
+        }
+        // A row cleared from end to end holds no first half of anything, so it is no
+        // longer the continuation of the row above it. Leaving the flag set makes a
+        // later reflow or copy treat a blank row as part of a logical line, which
+        // shows up as a line that gains a screenful of spaces when the window widens.
+        if start == 0 && end >= cols {
+            r.set_wrapped(false);
         }
         self.damage.mark_row(row);
     }
@@ -517,26 +538,37 @@ impl Grid {
             if line.is_empty() {
                 chunk.resize(new_cols);
                 rebuilt.push(chunk);
-            } else {
-                for (i, cell) in line.iter().enumerate() {
-                    let col = i % new_cols;
-                    if col == 0 && i > 0 {
-                        chunk.set_wrapped(true);
-                        rebuilt.push(core::mem::replace(&mut chunk, Row::new(new_cols)));
-                        chunk = Row::new(new_cols);
-                    }
-                    *chunk.get_mut(col) = *cell;
+                if li == cursor_logical {
+                    cursor_new_row = start;
+                    cursor_new_col = 0;
                 }
-                chunk.set_wrapped(false);
-                rebuilt.push(chunk);
+                continue;
             }
-            if li == cursor_logical {
-                // A cursor can sit one past the last character, holding a pending wrap.
-                // There is no cell there, so it lands on the last character instead.
-                let offset = cursor_offset.min(line.len().saturating_sub(1));
-                cursor_new_row = start + offset / new_cols;
-                cursor_new_col = offset % new_cols;
+            // A cursor can sit one past the last character, holding a pending wrap.
+            // There is no cell there, so it lands on the last character instead.
+            let offset = cursor_offset.min(line.len() - 1);
+            let mut col = 0usize;
+            for (i, cell) in line.iter().enumerate() {
+                // A wide character occupies two cells, and the second one is a
+                // spacer that draws nothing on its own. If the leading half landed in
+                // the last column of the new width, the spacer would open the next
+                // row and the glyph would be drawn cut in half at the right edge, so
+                // the pair moves to the next row whole instead.
+                let wide = cell.flags.contains(CellFlags::WIDE_CHAR);
+                if col > 0 && (col >= new_cols || (wide && col + 1 >= new_cols)) {
+                    chunk.set_wrapped(true);
+                    rebuilt.push(core::mem::replace(&mut chunk, Row::new(new_cols)));
+                    col = 0;
+                }
+                if li == cursor_logical && i == offset {
+                    cursor_new_row = rebuilt.len();
+                    cursor_new_col = col;
+                }
+                *chunk.get_mut(col) = *cell;
+                col += 1;
             }
+            chunk.set_wrapped(false);
+            rebuilt.push(chunk);
         }
 
         // Anchor the bottom of the screen to the bottom of the content, then pull the
@@ -588,6 +620,25 @@ mod tests {
             };
             grid.row_mut(row).write_at(cols, col + i, &cell, 1);
         }
+    }
+
+    /// Write one character of the width it actually draws at, so that a wide character
+    /// gets its `WIDE_CHAR` flag and its spacer the way the terminal's own output path
+    /// gives it one.
+    fn write_wide(grid: &mut Grid, row: usize, col: usize, ch: char) -> usize {
+        let cols = grid.cols();
+        let bg = grid.erase_bg();
+        let cell = Cell {
+            ch,
+            bg,
+            ..Cell::blank()
+        };
+        grid.row_mut(row).write_at(cols, col, &cell, 2)
+    }
+
+    /// Whether `row` continues into the row below it.
+    fn wrapped(grid: &Grid, row: usize) -> bool {
+        grid.row(row).is_wrapped()
     }
 
     #[test]
@@ -948,5 +999,128 @@ mod tests {
             })
             .collect();
         assert_eq!(all, vec!["old ", "new ", "    "]);
+    }
+
+    #[test]
+    fn ed_three_drops_the_history_and_leaves_the_screen_alone() {
+        let mut g = Grid::new(4, 2);
+        write(&mut g, 0, 0, "old");
+        g.scroll_up(1);
+        write(&mut g, 0, 0, "new");
+        assert_eq!(g.scrollback_len(), 1);
+
+        g.erase_in_display(3, Pos::new(0, 0));
+
+        assert_eq!(g.scrollback_len(), 0, "ED 3 is the history eraser");
+        assert_eq!(
+            text(&g, 0),
+            "new ",
+            "a program clearing its scrollback must not blank the screen"
+        );
+    }
+
+    #[test]
+    fn erasing_a_whole_row_clears_its_wrap_flag() {
+        let mut g = Grid::new(5, 3);
+        write(&mut g, 0, 0, "abcde");
+        g.row_mut(0).set_wrapped(true);
+        write(&mut g, 1, 0, "f");
+
+        g.erase_in_display(2, Pos::new(0, 0));
+
+        assert!(!wrapped(&g, 0), "a blank row continues into nothing");
+        assert_eq!(text(&g, 0), "     ");
+    }
+
+    #[test]
+    fn erasing_part_of_a_row_leaves_its_wrap_flag_alone() {
+        // Only a whole-row erase unlinks a row. Erasing a prefix leaves the tail,
+        // which is still the first half of what runs onto the next row.
+        let mut g = Grid::new(5, 3);
+        write(&mut g, 0, 0, "abcde");
+        g.row_mut(0).set_wrapped(true);
+
+        g.erase_in_line(1, Pos::new(0, 2));
+
+        assert_eq!(text(&g, 0), "   de");
+        assert!(wrapped(&g, 0));
+    }
+
+    #[test]
+    fn deleting_lines_breaks_the_wrap_flag_above_the_edit() {
+        let mut g = Grid::new(5, 4);
+        write(&mut g, 0, 0, "abcde");
+        g.row_mut(0).set_wrapped(true);
+        write(&mut g, 1, 0, "1");
+        write(&mut g, 2, 0, "2");
+
+        g.delete_lines(1, 1);
+
+        assert!(
+            !wrapped(&g, 0),
+            "row 0 no longer continues into what the delete pulled up"
+        );
+        assert_eq!(text(&g, 1), "2    ");
+    }
+
+    #[test]
+    fn inserting_lines_breaks_the_wrap_flag_above_the_edit() {
+        let mut g = Grid::new(5, 4);
+        write(&mut g, 0, 0, "abcde");
+        g.row_mut(0).set_wrapped(true);
+        write(&mut g, 1, 0, "1");
+
+        g.insert_lines(1, 1);
+
+        assert!(!wrapped(&g, 0), "row 0 continues into a blank line now");
+        assert_eq!(text(&g, 1), "     ");
+        assert_eq!(text(&g, 2), "1    ");
+    }
+
+    #[test]
+    fn inserting_lines_breaks_the_wrap_flag_on_the_row_pushed_to_the_bottom() {
+        let mut g = Grid::new(5, 4);
+        write(&mut g, 2, 0, "abcde");
+        g.row_mut(2).set_wrapped(true);
+        write(&mut g, 3, 0, "1");
+
+        g.insert_lines(0, 1);
+
+        // The line that was at row 2 is now at row 3, and its continuation fell off
+        // the bottom of the region rather than following it.
+        assert!(!wrapped(&g, 3));
+    }
+
+    #[test]
+    fn reflow_moves_a_wide_character_whole_rather_than_splitting_it() {
+        // Joining the two rows gives `abcd`, a blank, then the wide character. Split
+        // every three cells and the leading half lands in the last column of a row
+        // with its spacer opening the next one, so the renderer draws a half glyph at
+        // the right edge and a stray blank below it.
+        let mut g = Grid::new(5, 4);
+        write(&mut g, 0, 0, "abcd");
+        g.row_mut(0).set_wrapped(true);
+        assert_eq!(write_wide(&mut g, 1, 0, '中'), 2, "it fits at the start");
+
+        let mut cursor = Pos::new(1, 1);
+        g.resize(3, 4, &mut cursor);
+
+        let rows: Vec<String> = (0..g.total_rows())
+            .map(|i| {
+                let r = g.row_from_history(i).unwrap();
+                (0..g.cols()).map(|c| r.get(c).ch).collect()
+            })
+            .collect();
+        assert_eq!(rows[0], "abc");
+        assert_eq!(
+            rows[1], "d  ",
+            "one column left is not room for a wide character"
+        );
+        assert_eq!(rows[2], "中  ", "so it moves to the next row instead");
+        let wide = g.row_from_history(2).unwrap();
+        assert!(
+            wide.get(0).flags.contains(CellFlags::WIDE_CHAR) && wide.get(1).is_wide_spacer(),
+            "the leading half and its spacer must stay side by side"
+        );
     }
 }

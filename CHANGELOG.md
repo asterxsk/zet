@@ -182,6 +182,68 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-vt`** — erasing after setting a background leaves the background behind, which is what
+  `BCE` means and what zet was not doing.
+  - The pen carried a background colour and the grid carried a second copy of its own, and nothing
+    kept the two together. `ED`, `EL`, `ECH`, and the blank rows a scroll inserts all fill with the
+    grid's copy, so `\x1b[41m\x1b[K` painted the theme's background over the rest of the line
+    instead of red, and the same held for `\x1b[44m\x1b[2J` and for every scroll under a colour.
+    They are one value now: every path that moves the pen re-syncs the grid's, and `apply_sgr`
+    ends by re-syncing in case the parameter loop left the two apart.
+- **`zet-input`** — a binding written in the config file matched nothing on a keyboard that
+  reported the same key differently.
+  - A chord is text: `Comma`, `BracketLeft`, `Plus`, or the character `[`. The host reports its
+    own variant for the same physical key, Shift moves the character that sits above it, and Caps
+    Lock inverts the case of the letter `winit` reports — so `Ctrl+Shift+T` was unreachable with
+    Caps Lock lit, `Ctrl+Plus` was dead on every keyboard without a numpad, and the documented
+    equivalence of `Ctrl+[` and `Ctrl+BracketLeft` was not true. Matching now compares the key and
+    the modifiers separately, treats a letter as case-insensitive, and knows which keys carry
+    Shift as part of their own name so that a bound `{` is not defeated by the Shift that produces
+    one.
+- **`zet-vt`** — a reflow could cut a double-width character in half.
+  - Narrowing the window re-joined the logical line and re-split it every *n* cells, and a wide
+    character landing on the last of those cells put its leading half at the right edge with its
+    spacer opening the next row — a half glyph clipped by the window and a stray blank beneath it,
+    which stayed on screen until something overwrote it. The pair now moves to the next row whole.
+- **`zet-vt`** — erasing a row left its soft-wrap flag set.
+  - A cleared row still claimed to continue into the row below, so a later reflow or copy treated
+    it as part of a logical line: a screen cleared with `\x1b[2J` came back from a resize with a
+    blank row's worth of spaces spliced into the middle of a line. An erase that covers a row from
+    end to end now clears the flag; an erase of part of a row leaves it, because the tail is still
+    the first half of what runs onto the next row.
+- **`zet-vt`** — inserting or deleting lines left a stale soft-wrap flag above the edit.
+  - `IL` and `DL` move rows sideways past each other, so whatever the row above the edit was
+    continuing into is not what follows it any more — and the row pushed to the bottom of the
+    region had its continuation pushed out with it. Both flags survived, which made a copy join two
+    lines the user can see are separate and a search match across them.
+- **`zet-vt`** — `ED 3` blanked the screen as well as dropping the scrollback.
+  - The mode ran the whole `ED 2` row loop first. It is the history eraser, and the programs that
+    send it — shell integrations, `tmux clear-history` — want their history gone without changing
+    what the user is looking at.
+- **`zet-vt`** — a second `CSI ?1049h` overwrote the saved cursor with the alternate screen's.
+  - `enter_alt_screen` returns early when the screen is already alternate, but the save above it
+    did not, so the nesting a full-screen program creating another one produces ended with the
+    matching `1049l` restoring the user to wherever the inner program had left its own cursor.
+    Both halves are now guarded on the switch actually happening.
+- **`zet-vt`** — `CSI ?1005l`, `?1006l`, and `?1015l` turned the mouse encoding *on*.
+  - The three name three ways of writing the same coordinates and the mode setter ignored the
+    direction, so a program resetting `1006` on its way out left SGR encoding in force and zet went
+    on sending `CSI < b;x;y M` to something expecting the legacy bytes. They now follow the same
+    rule the reporting modes do: the last one set wins, and a reset only applies to the one it
+    names.
+- **`zet-app` / `zet`** — holding a chord bound to a toggle flipped the toggle on every repeat.
+  - `action_for` rejected only releases, so a held `Ctrl+Shift+F` opened the find bar and shut it
+    again at the auto-repeat rate, leaving it in whichever state the key happened to come up in —
+    and the same for the settings panel and the tab strip's position. An action now says whether
+    holding it is a request to repeat: a step (another tab, a larger font, another screen of
+    scrollback) repeats, and a toggle runs once per press.
+- **`zet`** — the settings panel swallowed `Tab` past its last row, so the panel never handed the
+  keyboard back.
+  - `Tab` off the end set the focus to `None`, and `None` was also what the panel starts in — so
+    the next `Tab` re-entered at the top row and was swallowed too, and the shell could not be
+    given a `Tab` at all while the panel was open. The two states are now told apart: a panel that
+    has been tabbed out of takes nothing the panel names, and a click or the chord is what takes
+    the keyboard back.
 - **`zet-ui`** — the tabular-figures rule in DESIGN.md is met, and the note saying it was not is
   wrong.
   - `zet-ui` recorded that the chrome's numbers were drawn in Plex Sans's default *proportional*

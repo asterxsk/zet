@@ -94,6 +94,21 @@ impl Action {
         }
     }
 
+    /// Whether holding the chord down should run this again.
+    ///
+    /// Auto-repeat is what a user holding a key is asking for when the action is a
+    /// step — another tab, a larger font, another screen of scrollback. A toggle is
+    /// the one shape where it is not: the press opens the thing and the repeat closes
+    /// it, so holding the key leaves the user looking at whichever state the repeat
+    /// rate happened to stop on, which is not a state they chose.
+    #[must_use]
+    pub const fn repeats(self) -> bool {
+        !matches!(
+            self,
+            Action::Find | Action::Settings | Action::ToggleTabPosition
+        )
+    }
+
     /// The action a config file named, or `None` for a name nothing knows.
     #[must_use]
     pub fn from_name(name: &str) -> Option<Self> {
@@ -131,5 +146,20 @@ mod tests {
             None,
             "names are case-sensitive"
         );
+    }
+
+    #[test]
+    fn only_the_toggles_refuse_to_repeat() {
+        // Everything a user might reasonably lean on a key for, which is the whole
+        // list minus the three things that flip a piece of chrome.
+        let one_shot: Vec<&str> = Action::ALL
+            .into_iter()
+            .filter(|action| !action.repeats())
+            .map(Action::name)
+            .collect();
+        assert_eq!(one_shot, ["find", "settings", "toggle-tab-position"]);
+        assert!(Action::FontLarger.repeats());
+        assert!(Action::NewTab.repeats());
+        assert!(Action::ScrollPageDown.repeats());
     }
 }

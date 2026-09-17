@@ -496,19 +496,26 @@ impl App {
         if let Some(action) = self.action_for(event) {
             return self.run(action);
         }
-        self.type_into_session(event);
+        // A bound chord belongs to zet even on the event `action_for` declined to run
+        // it for. Falling through to the program there would type the chord into the
+        // shell, so holding `Ctrl+Shift+F` past the first repeat would send the find
+        // bar's own binding to the prompt.
+        if event.kind == KeyKind::Release || self.bound(event.mods, event.key).is_none() {
+            self.type_into_session(event);
+        }
         Vec::new()
     }
 
     /// The action a key event runs, if it runs one.
     ///
-    /// A binding runs on the way down and on every auto-repeat, and never on the way
+    /// A binding runs on the way down and on auto-repeat, and never on the way
     /// up. [`App::bound`] answers for a chord and not for an event, so asking *it*
     /// would run the action twice for one press — once when the key went down and
     /// again when it came up, which is two tabs for one `Ctrl+Shift+T`.
     ///
-    /// Holding a bound chord down therefore repeats it, which is what a user holding
-    /// `Ctrl+Shift+T` is asking for. `encode_key` already answers `None` for a
+    /// Holding a bound chord down repeats it when the action is a step, which is what
+    /// a user holding `Ctrl+Shift+T` is asking for, and does not when the action is a
+    /// toggle — see [`Action::repeats`]. `encode_key` already answers `None` for a
     /// release, so the two halves of this agree about what a release is.
     ///
     /// This is a method rather than a condition written out twice because the host
@@ -521,7 +528,11 @@ impl App {
         if event.kind == KeyKind::Release {
             return None;
         }
-        self.bound(event.mods, event.key)
+        let action = self.bound(event.mods, event.key)?;
+        if event.kind == KeyKind::Repeat && !action.repeats() {
+            return None;
+        }
+        Some(action)
     }
 
     /// Send typed text to the active terminal, as though it had been pasted.
@@ -1102,6 +1113,37 @@ mod tests {
             app.tab_numbers().len(),
             3,
             "holding a bound chord should repeat it, which is the whole point of holding it"
+        );
+    }
+
+    #[test]
+    fn a_held_toggle_runs_once_and_does_not_reach_the_program_afterwards() {
+        // The bar is opened by the press. A repeat that ran the action again would shut
+        // it, and letting the repeat fall through to the shell instead would type the
+        // chord into the prompt — so the key has to stay zet's while doing nothing.
+        let mut app = app();
+        let _ = app.open_tab(80, 24).expect("a shell starts");
+        let chord = Modifiers::CTRL | Modifiers::SHIFT;
+        assert_eq!(
+            app.action_for(&key(Key::Char('F'), chord)),
+            Some(Action::Find)
+        );
+        assert_eq!(
+            app.action_for(&KeyEvent {
+                kind: KeyKind::Repeat,
+                ..key(Key::Char('F'), chord)
+            }),
+            None,
+            "a toggle must not run again on the repeat"
+        );
+
+        let commands = app.key(&KeyEvent {
+            kind: KeyKind::Repeat,
+            ..key(Key::Char('F'), chord)
+        });
+        assert!(
+            commands.is_empty(),
+            "the repeat ran something: {commands:?}"
         );
     }
 

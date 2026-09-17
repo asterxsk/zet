@@ -209,6 +209,16 @@ pub struct Host {
     /// focus is different from a window whose focus is nowhere in particular. The arrow
     /// keys belong to the shell until this is set.
     settings_focus: Option<usize>,
+
+    /// Whether the keyboard has been walked off the end of the panel's rows.
+    ///
+    /// `settings_focus` alone cannot say which of the two `None`s it is, and the two
+    /// want opposite things from the next `Tab`: a panel that has just opened takes it
+    /// as a request to enter at the top row, and a panel the user has already tabbed
+    /// out of has to let it reach the shell or the panel is a place you can only leave
+    /// by remembering the chord that opened it. Cleared whenever focus is taken again,
+    /// by the chord or by a click.
+    settings_left: bool,
 }
 
 impl Host {
@@ -254,6 +264,7 @@ impl Host {
             settings_scroll: 0.0,
             capturing: None,
             settings_focus: None,
+            settings_left: false,
         }
     }
 
@@ -741,6 +752,7 @@ impl Host {
             self.settings_scroll = 0.0;
             self.capturing = None;
             self.settings_focus = None;
+            self.settings_left = false;
             self.redraw();
             return;
         }
@@ -810,7 +822,9 @@ impl Host {
     /// everywhere else, and `Tab` past the last row hands the keyboard back to the shell
     /// rather than wrapping. That is what "it never traps focus" has to mean: a panel
     /// that kept `Tab` until you remembered the chord you opened it with would be a
-    /// panel you can get stuck in.
+    /// panel you can get stuck in. Once it has been handed back, nothing the panel names
+    /// is swallowed at all — the next `Tab` is the shell's, not a second chance to walk
+    /// the rows.
     ///
     /// Only bare `Tab`, the four arrows, `Enter`, `Space` and `Escape` are named here.
     /// Everything else — every letter, and every chord with a modifier on it — falls
@@ -820,6 +834,9 @@ impl Host {
         // A repeat moves the highlight the way holding an arrow key should. A release is
         // not an event the panel has an opinion about.
         if event.kind == KeyKind::Release {
+            return false;
+        }
+        if self.settings_left {
             return false;
         }
         let lines = self.app.settings();
@@ -869,7 +886,11 @@ impl Host {
 
     /// Move the panel's keyboard focus one row, or off the end of the list.
     fn step_focus(&mut self, rows: &[usize], here: Option<usize>, forward: bool) {
-        self.settings_focus = next_focus(rows.len(), here, forward).map(|at| rows[at]);
+        let next = next_focus(rows.len(), here, forward);
+        // Landing on nothing is the panel handing the keyboard back, and it stays handed
+        // back until something takes it again.
+        self.settings_left = next.is_none();
+        self.settings_focus = next.map(|at| rows[at]);
     }
 
     /// Write the configuration back, and say so when it could not be.
@@ -1072,6 +1093,7 @@ impl Host {
                     // the keyboard are two ways to the same highlight, and a panel where
                     // they were two different states would need two of everything.
                     self.settings_focus = Some(line);
+                    self.settings_left = false;
                     self.adjust(id, part == zet_ui::SettingPart::Less);
                 }
                 true
@@ -1554,6 +1576,74 @@ mod tests {
             zet_config::palette_for(&config, Some(zet_config::Rgb::new(0, 120, 215))),
             plain
         );
+    }
+
+    #[test]
+    fn the_panel_hands_the_keyboard_back_once_tab_has_walked_off_the_end() {
+        // "It never traps focus" has to mean the shell sees a `Tab` again at some point,
+        // and the state the panel is in when it does is the whole of this: `None` means
+        // either "not asked for yet" or "handed back", and the next `Tab` has to tell
+        // them apart or the panel wraps and the shell never gets one.
+        let mut host = Host::new(app());
+        host.settings_open = true;
+        let tab = KeyEvent {
+            key: Key::Tab,
+            mods: Modifiers::empty(),
+            text: None,
+            kind: KeyKind::Press,
+        };
+        let down = KeyEvent {
+            key: Key::Down,
+            mods: Modifiers::empty(),
+            text: None,
+            kind: KeyKind::Press,
+        };
+
+        assert!(
+            host.panel_key(&tab),
+            "the panel takes the Tab that enters it"
+        );
+        assert!(host.settings_focus.is_some(), "and it lands on a row");
+
+        // Walk to the end of the rows. The bound is a guard against the loop outliving
+        // the panel, not an expectation about how many rows there are.
+        let mut steps = 0;
+        while host.settings_focus.is_some() && steps < 200 {
+            assert!(host.panel_key(&tab), "a Tab on a row is the panel's");
+            steps += 1;
+        }
+        assert!(steps > 1, "the panel has more than one row");
+        assert!(host.settings_left, "the last Tab walked off the end");
+
+        assert!(!host.panel_key(&tab), "so this one is the shell's");
+        assert!(!host.panel_key(&down), "and so are the arrow keys");
+        assert!(
+            host.settings_focus.is_none(),
+            "the panel must not re-enter itself on the Tab that left it"
+        );
+
+        // The chord takes it back, which is the only way in that survives a user who
+        // has already tabbed out once.
+        host.settings_left = false;
+        assert!(host.panel_key(&tab));
+    }
+
+    #[test]
+    fn clicking_a_row_takes_the_keyboard_back_from_the_shell() {
+        let mut host = Host::new(app());
+        host.settings_open = true;
+        host.settings_left = true;
+        let Some(line) = host.app.settings().iter().position(|l| l.kind().is_some()) else {
+            panic!("the panel has no rows to click");
+        };
+        host.settings_focus = Some(line);
+        host.settings_left = false;
+        assert!(host.panel_key(&KeyEvent {
+            key: Key::Tab,
+            mods: Modifiers::empty(),
+            text: None,
+            kind: KeyKind::Press,
+        }));
     }
 
     #[test]
