@@ -213,11 +213,7 @@ impl Gpu {
         let surface = instance
             .create_surface(window)
             .map_err(|error| GpuError::Surface(error.to_string()))?;
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            ..Default::default()
-        }))
-        .map_err(|error| GpuError::NoAdapter(error.to_string()))?;
+        let adapter = choose(&instance, Some(&surface))?;
         let (device, queue) = Self::open(&adapter)?;
 
         let format = surface_format(&surface.get_capabilities(&adapter).formats)
@@ -263,10 +259,19 @@ impl Gpu {
     /// As [`Gpu::new`].
     pub fn offscreen(width: u32, height: u32, scale: f32) -> GpuResult<Self> {
         let instance = wgpu::Instance::default();
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .map_err(|error| GpuError::NoAdapter(error.to_string()))?;
-        let (device, queue) = Self::open(&adapter)?;
+        let adapter = choose(&instance, None)?;
+        Self::offscreen_on(&adapter, width, height, scale)
+    }
+
+    /// The half of [`Gpu::offscreen`] that does not choose an adapter.
+    ///
+    /// Split out so that the software adapter can be handed in: what criterion 8 asks for
+    /// is that a machine with no usable GPU still gets a working terminal, and the only
+    /// way to test that on a machine that *has* one is to ask for the fallback by name and
+    /// push a frame through it. A device made from WARP is a device made from WARP whether
+    /// or not it was the machine's first choice.
+    fn offscreen_on(adapter: &wgpu::Adapter, width: u32, height: u32, scale: f32) -> GpuResult<Self> {
+        let (device, queue) = Self::open(adapter)?;
 
         // The same format a window would be given, so that what a readback returns is
         // what the screen would have shown: the shader writes linear values, the format
@@ -853,6 +858,43 @@ fn vertex_buffer(device: &wgpu::Device, label: &str) -> wgpu::Buffer {
     })
 }
 
+/// Pick an adapter for `instance`, and take the software one if the machine has no other.
+///
+/// PRODUCT.md's eighth criterion is that a machine with no usable GPU adapter still gets a
+/// readable, working terminal. The machine this is written on has one, so the first
+/// request succeeds and the second is never made — which is exactly why the second is
+/// here. A machine in a VM with no graphics acceleration, or over remote desktop with GPU
+/// redirection off, enumerates no adapter at all, and until this existed that machine got
+/// a dialog box saying zet could not start instead of a terminal.
+///
+/// An adapter that enumerates but refuses to open a device is not covered: that is a
+/// driver problem rather than a missing adapter, and nothing here has seen it happen.
+///
+/// `force_fallback_adapter` is not a preference among equals: it asks the backend for the
+/// software rasteriser by name, which on Windows is WARP and is always present. Asking for
+/// it second rather than preferring it means a real GPU is still used when there is one —
+/// WARP is a correct terminal at a fraction of the speed, which is the right trade for a
+/// fallback and the wrong one for a default.
+///
+/// The two requests differ only in that flag, so the failed one is not retried and the
+/// error reported is the fallback's: that is the request that answered the question the
+/// caller actually asked, which is whether *anything* can draw.
+fn choose(
+    instance: &wgpu::Instance,
+    compatible_surface: Option<&wgpu::Surface<'static>>,
+) -> GpuResult<wgpu::Adapter> {
+    let options = |force_fallback_adapter| wgpu::RequestAdapterOptions {
+        force_fallback_adapter,
+        compatible_surface,
+        ..Default::default()
+    };
+    if let Ok(adapter) = pollster::block_on(instance.request_adapter(&options(false))) {
+        return Ok(adapter);
+    }
+    pollster::block_on(instance.request_adapter(&options(true)))
+        .map_err(|error| GpuError::NoAdapter(error.to_string()))
+}
+
 /// Make sure `buffer` holds at least `needed` bytes, replacing it if it does not.
 ///
 /// Buffers grow and never shrink: a frame that needs less than the last one already
@@ -889,6 +931,54 @@ mod tests {
             }
             Err(error) => panic!("the offscreen device could not be created: {error}"),
         }
+    }
+
+    /// A 64x64 offscreen device on the software rasteriser, or `None` if asking for one
+    /// did not work.
+    ///
+    /// On Windows that is WARP, which is always present; on a machine where it is not,
+    /// the note is printed and the test passes, the same way `device` handles a machine
+    /// with no adapter at all.
+    fn software_device() -> Option<Gpu> {
+        let instance = wgpu::Instance::default();
+        let requested = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            force_fallback_adapter: true,
+            ..Default::default()
+        }));
+        let adapter = match requested {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                println!("no software adapter on this machine, skipping: {error}");
+                return None;
+            }
+        };
+        match Gpu::offscreen_on(&adapter, 64, 64, 1.0) {
+            Ok(gpu) => Some(gpu),
+            Err(error) => panic!("the software adapter could not open a device: {error}"),
+        }
+    }
+
+    #[test]
+    fn the_software_adapter_draws_the_same_terminal_as_the_chosen_one() {
+        // PRODUCT.md's eighth criterion, and the only way to check it on a machine that
+        // has a GPU: ask for the fallback by name and push a frame through it. What this
+        // catches is a pipeline that needs something WARP does not have, or a device
+        // descriptor that asks for limits a software adapter will not grant — both of
+        // which would show up on exactly the machines that have no other option, and
+        // nowhere else. Without this, the second `request_adapter` would be code that has
+        // never run.
+        let Some(mut gpu) = software_device() else {
+            return;
+        };
+        let mut frame = Frame::new();
+        frame.clear = [0.0, 0.0, 0.0, 1.0];
+        frame.begin_quads();
+        frame.push_quad(Quad::new(8.0, 8.0, 16.0, 16.0, [0.25, 0.25, 0.25, 1.0]));
+        frame.end_quads();
+
+        let pixels = render(&mut gpu, &frame);
+        assert_pixel(&pixels, (16, 16), [srgb(0.25), srgb(0.25), srgb(0.25), 255]);
+        assert_pixel(&pixels, (48, 48), [0, 0, 0, 255]);
     }
 
     /// Draw `frame` and hand back its pixels.

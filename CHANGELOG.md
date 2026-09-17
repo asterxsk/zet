@@ -73,6 +73,18 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     `ScrollPageUp`, and `ToggleTabPosition` all changed state invisibly. Typing still costs one
     frame rather than two, because the redraw is asked for only when the key ran a binding
     rather than being sent to the shell.
+- **`zet-render`** — a machine with no usable GPU adapter gets a terminal rather than a dialog.
+  - `request_adapter` was asked once, and a machine in a VM with no graphics acceleration, or
+    over remote desktop with GPU redirection off, enumerates no adapter at all — so the only
+    thing between that machine and a working terminal was a message box saying zet could not
+    start. It is asked a second time with `force_fallback_adapter`, which names the software
+    rasteriser: WARP on Windows, and always present.
+  - Asked second rather than preferred, so a real GPU is still the default. WARP is a correct
+    terminal at a fraction of the speed, which is the right trade for a fallback.
+  - Verified rather than assumed: the test asks for the fallback adapter by name, opens a
+    device on it, and pushes a frame through the same pipelines. On a machine that has a GPU
+    that is the only way to run the second request at all, and it is the request that would
+    otherwise never execute anywhere.
 - **`zet-app`** — a key bound to a chord fires on the press and on every auto-repeat, and not on
   the release.
   - `bound` answers for a chord rather than for an event, so a release that reached it ran the

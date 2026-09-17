@@ -165,6 +165,20 @@
       changed state invisibly. Typing still costs one frame rather than two, because the redraw is
       asked for only when the key ran a binding rather than being sent to the shell.</p>
 
+      <h4>zet-render — a machine with no usable GPU adapter gets a terminal rather than a dialog</h4>
+
+      <p><code>request_adapter</code> was asked once, and a machine in a VM with no graphics
+      acceleration, or over remote desktop with GPU redirection off, enumerates no adapter at all
+      — so the only thing between that machine and a working terminal was a message box saying zet
+      could not start. It is asked a second time with <code>force_fallback_adapter</code>, which
+      names the software rasteriser: WARP on Windows, and always present.</p>
+
+      <p>Asked second rather than preferred, so a real GPU is still the default. WARP is a correct
+      terminal at a fraction of the speed, which is the right trade for a fallback. And verified
+      rather than assumed: the test asks for the fallback adapter by name, opens a device on it,
+      and pushes a frame through the same pipelines — on a machine that has a GPU that is the only
+      way to run the second request at all.</p>
+
       <h4>zet-app — a key bound to a chord fires on the press and on every auto-repeat, and not on the release</h4>
 
       <p><code>bound</code> answers for a chord rather than for an event, so a release that reached it
