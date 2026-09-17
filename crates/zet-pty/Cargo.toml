@@ -1,0 +1,38 @@
+[package]
+name = "zet-pty"
+description = "ConPTY sessions and shell profile discovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+# Raw declarations rather than the `windows` facade. The facade is what zet uses for
+# everything else, but the pty path is a handful of calls in a hot loop, and the facade's
+# COM wrappers and generics cost real compile time for no benefit here. This also keeps
+# zet-pty on the same windows-sys that winit already links.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    # `ReadFile`'s signature names `OVERLAPPED`, so it is gated behind this feature even
+    # though the function itself lives under Storage.
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+undocumented_unsafe_blocks = "warn"
