@@ -156,6 +156,12 @@ pub struct Host {
     /// The cell a left button went down on, so a click with no drag can be told from one
     /// with a drag.
     pressed_at: Option<zet_vt::Pos>,
+    /// The mouse button being held, for the motion reports a program asked for.
+    ///
+    /// A drag report is "the pointer moved with button *this* one down", and the button
+    /// is only known here: the platform's move events carry no buttons, and a report
+    /// that guessed would tell a program a drag was happening when nothing was held.
+    mouse_held: Option<zet_input::MouseButton>,
     /// Whether the window has focus, which decides whether the cursor is hollow.
     focused: bool,
     /// Where on the thumb a drag was grabbed, in logical pixels from the thumb's top.
@@ -255,6 +261,7 @@ impl Host {
             pointer: None,
             cursor: CursorIcon::Default,
             pressed_at: None,
+            mouse_held: None,
             focused: true,
             scroll_grab: None,
             partial: 0.0,
@@ -952,6 +959,10 @@ impl Host {
     fn moved(&mut self, x: f64, y: f64) {
         let (x, y) = mouse::logical(x, y, self.scale());
         self.pointer = Some((x, y));
+        // Sent before any of the drags below, and before the early return the scrollbar
+        // drag takes: the pointer is over the grid or it is not, and that question has
+        // nothing to do with what this window happens to be doing with the drag.
+        self.forward_motion();
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -998,6 +1009,21 @@ impl Host {
             return;
         };
         let (x, y) = self.pointer.unwrap_or((0.0, 0.0));
+        // Remembered for the moves that follow, which say nothing about buttons: a drag
+        // report is "the pointer moved with this button down", and a wheel is never
+        // held, so a wheel press reports the move as one with nothing held.
+        match (state, mouse::button(button)) {
+            (ElementState::Pressed, held) if held != zet_input::MouseButton::None => {
+                self.mouse_held = Some(held);
+            }
+            // Only the button that is held ends the hold: another one coming up while
+            // this one is still down is not the end of a drag, and reporting it as one
+            // would tell the program the pointer had been let go when it had not.
+            (ElementState::Released, held) if self.mouse_held == Some(held) => {
+                self.mouse_held = None;
+            }
+            _ => {}
+        }
 
         if state == ElementState::Pressed {
             let (width, height) = self.logical_size();
@@ -1160,6 +1186,32 @@ impl Host {
 
     /// Send a button event to the program, if it asked for mouse reporting.
     fn forward_mouse(&self, state: ElementState, button: WinitButton) {
+        self.send_mouse(mouse::button(button), mouse::action(state));
+    }
+
+    /// Tell the program the pointer moved, if it asked to be told.
+    ///
+    /// `DECSET 1002` wants a report while a button is held and `1003` wants every move,
+    /// and which of those applies is the mode's business rather than this function's:
+    /// the event goes out and the encoder answers `None` for a program that asked for
+    /// neither. Both modes were confirmed to programs that then received nothing —
+    /// only the press at one end of a drag and the release at the other — so a hover
+    /// highlight never followed the pointer and a drag was drawn by the program as a
+    /// jump with nothing in between.
+    fn forward_motion(&self) {
+        self.send_mouse(
+            self.mouse_held.unwrap_or(zet_input::MouseButton::None),
+            zet_input::MouseAction::Motion,
+        );
+    }
+
+    /// One mouse report, or nothing.
+    ///
+    /// A point outside the grid is not a report at all: the chrome's own surfaces —
+    /// the tab strip, the scrollbar, the settings panel — are drawn over the grid and
+    /// are not the terminal's to report on, and a program told about a move over the
+    /// tab strip would be told the pointer was inside the text it is drawing.
+    fn send_mouse(&self, button: zet_input::MouseButton, action: zet_input::MouseAction) {
         let Some(session) = self.app.active() else {
             return;
         };
@@ -1170,8 +1222,8 @@ impl Host {
             return;
         };
         let event = MouseEvent {
-            button: mouse::button(button),
-            action: mouse::action(state),
+            button,
+            action,
             col: u16::try_from(at.col).unwrap_or(u16::MAX),
             row: u16::try_from(at.row).unwrap_or(u16::MAX),
             mods: keys::translate_modifiers(self.held),
