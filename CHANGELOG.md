@@ -305,6 +305,20 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet`** — a `CF_UNICODETEXT` block with no terminator was read past the end of its own
+  allocation.
+  - The format is a null-terminated string and the block is an allocation, and the two ends are
+    different places: the walk to the null followed the value wherever it went, with nothing
+    bounding it but a zero that a malformed value does not contain. The clipboard is written by
+    other programs, so the bytes past the block are this process's own memory — a freed buffer, a
+    page of something else entirely — and what came back was pasted into a terminal, where a paste
+    is fed to a shell.
+  - The block's own size is asked for with `GlobalSize` and the walk is bounded by it, and a value
+    that never reaches a terminator is refused rather than taken whole, because the slack between
+    the value and the end of the allocation is the allocator's and not any program's characters.
+    Three tests, all of them over a slice rather than over the real clipboard: where the value
+    stops, a block that never stops, and a lone surrogate, which costs one replacement character
+    rather than the paste.
 - **`zet`** — the wheel scrolled the view and the window did not redraw.
   - `Host::wheel` did the scrolling and answered nothing, so the mouse-wheel arm of `window_event`
     had no reason to ask for a frame afterwards and did not. Nothing draws on its own — the event

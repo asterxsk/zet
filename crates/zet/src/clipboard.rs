@@ -34,7 +34,9 @@ use windows_sys::Win32::Foundation::{GlobalFree, HWND};
 use windows_sys::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
 };
-use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::Memory::{
+    GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
+};
 
 /// The plain-text clipboard format. One `u16` per character, null-terminated.
 const CF_UNICODETEXT: u32 = 13;
@@ -59,9 +61,9 @@ pub fn get() -> Option<String> {
     // SAFETY: the clipboard is open on this thread, which is the precondition for every
     // call here. `handle` is owned by the clipboard, not by this process, and is not
     // freed or written through: it is locked for reading, the bytes are copied out, and
-    // it is unlocked before the lock is dropped. The length is found by walking to the
-    // terminator the format guarantees, and the slice is built from that same pointer
-    // and that same length.
+    // it is unlocked before the lock is dropped. `GlobalSize` reports the block's own
+    // size, and the slice is built from that same pointer and no more than that many
+    // units, so the walk inside `text_of` cannot leave the allocation.
     unsafe {
         let handle = GetClipboardData(CF_UNICODETEXT);
         if handle.is_null() {
@@ -72,19 +74,33 @@ pub fn get() -> Option<String> {
             return None;
         }
 
-        let mut length = 0usize;
-        let wide = pointer.cast::<u16>();
-        while *wide.add(length) != 0 {
-            length += 1;
-        }
-        let text = String::from_utf16_lossy(std::slice::from_raw_parts(wide, length));
+        let units = GlobalSize(handle) / size_of::<u16>();
+        let block = std::slice::from_raw_parts(pointer.cast::<u16>(), units);
+        let text = text_of(block);
 
         // The unlock's return value is a lock count for a handle this process does not
         // own the last reference to; failing to decrement it is not something a caller
         // can act on, and the clipboard is unopened on the way out either way.
         let _ = GlobalUnlock(handle);
-        Some(text)
+        text
     }
+}
+
+/// The value in a `CF_UNICODETEXT` block, or [`None`] when the block holds none.
+///
+/// The format is a null-terminated string and the block is an allocation, so the two
+/// ends are different places and only the first one is the value's. Walking to the null
+/// is only safe because the walk is bounded by the block: a value that never reaches one
+/// is malformed, and following it past the end of the allocation reads whatever the block
+/// was allocated next to — memory belonging to this process and to no program that asked
+/// for it to be pasted, into a terminal, where a paste is fed to a shell.
+///
+/// A block with no terminator is refused rather than taken whole, for the same reason:
+/// what follows the value in a well-formed block is the allocator's slack, and a paste of
+/// slack is a paste of somebody else's bytes.
+fn text_of(block: &[u16]) -> Option<String> {
+    let end = block.iter().position(|&unit| unit == 0)?;
+    Some(String::from_utf16_lossy(&block[..end]))
 }
 
 /// Put `text` on the clipboard, replacing whatever was there.
@@ -174,6 +190,40 @@ impl Drop for Lock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_text_stops_where_the_terminator_is_and_not_where_the_block_ends() {
+        // The block Windows hands over is an allocation rather than a string: it is at
+        // least as large as the value and is not required to be any smaller, so what
+        // follows the terminator belongs to the allocator and not to the program that
+        // put the value there.
+        assert_eq!(text_of(&[0x48, 0x69, 0, 0x21, 0x21]), Some("Hi".to_owned()));
+        assert_eq!(text_of(&[0x48, 0x69, 0]), Some("Hi".to_owned()));
+        // A terminator in the first unit is the empty string, which is a value.
+        assert_eq!(text_of(&[0]), Some(String::new()));
+    }
+
+    #[test]
+    fn a_block_that_never_reaches_a_terminator_has_no_text_in_it() {
+        // There is no way to know where such a value stops, and the bytes past its end
+        // are the allocator's slack rather than anyone's characters. Reading to a null
+        // that is not there reads whatever the block was allocated next to, and a paste
+        // is fed to a shell: the wrong answer here is a page of somebody's memory typed
+        // at a prompt.
+        assert_eq!(text_of(&[0x48, 0x69]), None);
+        assert_eq!(text_of(&[]), None);
+    }
+
+    #[test]
+    fn a_lone_surrogate_in_the_block_does_not_take_the_rest_of_it_with_it() {
+        // Half a pair is not a reason to refuse the paste: the value is still a value,
+        // and one replacement character is a smaller lie than a clipboard that will not
+        // paste.
+        assert_eq!(
+            text_of(&[0xd800, 0x48, 0x69, 0]).as_deref(),
+            Some("\u{fffd}Hi")
+        );
+    }
 
     /// The one test of the real clipboard.
     ///
