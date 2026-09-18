@@ -27,6 +27,8 @@ use zet_vt::{Modes, Pos};
 
 use crate::action::Action;
 use crate::find::Find;
+use crate::hold::Hold;
+use crate::picker::Picker;
 use crate::settings;
 use crate::text::selection_text;
 
@@ -148,6 +150,10 @@ pub struct App {
     families: Vec<String>,
     /// The find bar: what was typed, what it found, and which find it is on.
     find: Find,
+    /// The profile picker: whether a new tab is asking which shell to open.
+    pick: Picker,
+    /// The hold a program has asked for on the frame while it repaints.
+    hold: Hold,
 }
 
 impl App {
@@ -191,6 +197,8 @@ impl App {
             start_directory: None,
             families: Vec::new(),
             find: Find::default(),
+            pick: Picker::default(),
+            hold: Hold::default(),
         })
     }
 
@@ -422,6 +430,84 @@ impl App {
     // Tabs
     // ---------------------------------------------------------------------------
 
+    /// Whether a new tab is asking which shell to open.
+    #[must_use]
+    pub const fn picker_is_open(&self) -> bool {
+        self.pick.is_open()
+    }
+
+    /// Which row of the profile list the question is on, if it is being asked.
+    ///
+    /// An index into [`App::profiles`] rather than a profile, because the window paints
+    /// the whole list and highlights one row of it: the row is what it needs and a
+    /// profile here would be a second way to ask the same question.
+    #[must_use]
+    pub fn picker_at(&self) -> Option<usize> {
+        self.pick.is_open().then(|| self.pick.at())
+    }
+
+    /// Open the shell the question is on, and put the question away.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`App::picker_choose_at`] returns.
+    pub fn picker_choose(&mut self) -> Result<u32, AppError> {
+        self.picker_choose_at(self.pick.at())
+    }
+
+    /// Open the shell on a given row, and put the question away.
+    ///
+    /// One function for the keyboard and the pointer, because they are two ways to the
+    /// same answer: a click that opened a different shell from the row it landed on would
+    /// be a popover that lies about what it is offering.
+    ///
+    /// The picker closes whatever the answer turns out to be. A shell that will not start
+    /// is an error the host reports, not a question that stays up offering the same shell
+    /// to fail again — the user asked once and the answer was no.
+    ///
+    /// # Errors
+    ///
+    /// [`AppError::NoProfiles`] when the list has no such row, and whatever
+    /// [`App::open_tab_with`] reports when the shell will not start.
+    pub fn picker_choose_at(&mut self, row: usize) -> Result<u32, AppError> {
+        self.pick.close();
+        let id = self.profiles.get(row).map(|profile| profile.id.clone());
+        let (cols, rows) = self.grid_size();
+        match id {
+            Some(id) => self.open_tab_with(&id, cols, rows),
+            None => Err(AppError::NoProfiles),
+        }
+    }
+
+    /// A key aimed at the profile picker, and whether it took it.
+    ///
+    /// The caller asks this before [`App::key`], the way it asks [`App::find_key`], so an
+    /// answer is read once and a key the picker took never reaches the keymap.
+    ///
+    /// Four keys, and only while the question is up: the picker is a popover over a live
+    /// terminal rather than a modal, so every letter and every chord still reaches the
+    /// shell behind it. That is the same rule the settings panel follows, and the reason
+    /// a chord is excluded here rather than matched on: matching one would take
+    /// `Ctrl+Shift+T` away from the action that closes the picker.
+    ///
+    /// The release is excluded for the reason [`App::action_for`] excludes it — a key-up
+    /// is the other half of a press, and an answer that ran twice would open two tabs.
+    pub fn picker_key(&mut self, event: &KeyEvent) -> bool {
+        if !self.pick.is_open() || event.kind == KeyKind::Release || !event.mods.is_empty() {
+            return false;
+        }
+        match event.key {
+            Key::Down => self.pick.move_by(1, self.profiles.len()),
+            Key::Up => self.pick.move_by(-1, self.profiles.len()),
+            Key::Enter => {
+                let _ = self.picker_choose();
+            }
+            Key::Escape => self.pick.close(),
+            _ => return false,
+        }
+        true
+    }
+
     /// Open a tab with the first profile, which is the machine's best shell.
     ///
     /// # Errors
@@ -559,10 +645,32 @@ impl App {
             return None;
         }
         let action = self.bound(event.mods, event.key)?;
-        if event.kind == KeyKind::Repeat && !action.repeats() {
+        if event.kind == KeyKind::Repeat && !self.repeats(action) {
             return None;
         }
         Some(action)
+    }
+
+    /// Whether holding this action's chord down should run it again.
+    ///
+    /// [`Action::repeats`] is the answer for the action on its own, and it is the whole
+    /// answer except for `new-tab`. That one is a step — holding `Ctrl+Shift+T` to fill
+    /// the window with tabs is what a user holding it is asking for — until the profile
+    /// picker is up, at which point the same chord *closes* the picker and is a toggle
+    /// for as long as it is open. A toggle that ran on auto-repeat would open and close
+    /// the question on alternate frames and leave the user looking at whichever state
+    /// the repeat rate happened to stop on.
+    ///
+    /// It is a method on the app rather than a rule inside the action because the action
+    /// cannot see whether the picker is open, and it is asked here rather than at the
+    /// call site because the host asks [`App::action_for`] the same question for its own
+    /// reason and the two answers have to agree.
+    #[must_use]
+    fn repeats(&self, action: Action) -> bool {
+        if self.pick.is_open() && action == Action::NewTab {
+            return false;
+        }
+        action.repeats()
     }
 
     /// Send typed text to the active terminal, as though it had been pasted.
@@ -618,8 +726,17 @@ impl App {
     fn run(&mut self, action: Action) -> Vec<Command> {
         match action {
             Action::NewTab => {
-                let (cols, rows) = self.grid_size();
-                let _ = self.open_tab(cols, rows);
+                if self.pick.is_open() {
+                    // One chord, both ways, as the find bar and the settings panel have
+                    // it: the key that asked the question is the one a user who did not
+                    // mean to ask it will press next.
+                    self.pick.close();
+                } else if self.config.tabs.open_default_without_asking {
+                    let (cols, rows) = self.grid_size();
+                    let _ = self.open_tab(cols, rows);
+                } else {
+                    self.pick.open();
+                }
                 Vec::new()
             }
             Action::CloseTab => {
@@ -658,7 +775,14 @@ impl App {
             Action::ScrollPageUp => self.scroll(PAGE),
             Action::ScrollPageDown => self.scroll(-PAGE),
             Action::ScrollToTop => {
-                self.scroll(i32::MIN);
+                // Up into the history, which is a *positive* delta — `Session::scroll` reads
+                // a negative one as "come back down towards the live screen". This was
+                // `i32::MIN`, so the largest possible step in the wrong direction, and
+                // `scroll_to` clamps to what there is: `Ctrl+Shift+Home` landed on the live
+                // screen, exactly where `Ctrl+Shift+End` goes, and the oldest line was
+                // unreachable by any key. The clamp is what makes a step this large the
+                // right way to say "as far as it goes".
+                self.scroll(i32::MAX);
                 Vec::new()
             }
             Action::ScrollToBottom => {
@@ -930,6 +1054,36 @@ impl App {
         changed
     }
 
+    /// When the frame may next be drawn, if the active program is holding it.
+    ///
+    /// `DECSET 2026` is the one thing in the protocol that makes a full-screen program
+    /// flicker-free, and it only works if the terminal honors it: a program that clears
+    /// the screen and redraws it in forty writes is showing thirty-nine states nobody
+    /// asked to see. The marker has no end that a program which has crashed will send, so
+    /// the hold expires — see [`crate::hold`] for the budget and why it is not optional.
+    ///
+    /// Only the active tab is asked. A background tab repainting is not something the
+    /// window is showing, and holding the frame for it would be holding the frame for
+    /// output nobody can see.
+    ///
+    /// The instant is supplied by the caller rather than read here, which is what makes a
+    /// budget measurable from either side of its own boundary.
+    ///
+    /// The deadline comes back rather than a bare "yes" because the caller has to be woken
+    /// to draw the frame it is declining to draw now, and the one program that will not
+    /// wake it is the one the budget is for: a program that set the marker and stopped
+    /// sends no further output, so a terminal that only knew "hold" would wait for an
+    /// event that never comes and hold the frame for ever. `None` means draw now.
+    pub fn frame_hold(&mut self, now: Instant) -> Option<Instant> {
+        let synchronized = self
+            .active()
+            .is_some_and(|session| session.term().is_synchronized());
+        self.hold
+            .holds(synchronized, now)
+            .then(|| self.hold.deadline())
+            .flatten()
+    }
+
     /// Tell every session how big the grid is.
     pub fn resize(&mut self, cols: u16, rows: u16) {
         for number in self.sessions.numbers() {
@@ -1117,6 +1271,175 @@ mod tests {
         let _ = app.key(&key(Key::Char('T'), Modifiers::CTRL | Modifiers::SHIFT));
         assert_eq!(app.tab_numbers().len(), 2);
         assert_eq!(app.active_number(), Some(2));
+    }
+
+    /// An app whose file says to ask which shell a new tab opens.
+    fn app_that_asks() -> App {
+        let mut config = Config::default();
+        config.tabs.open_default_without_asking = false;
+        App::new(
+            config,
+            PathBuf::from("test.toml"),
+            Vec::new(),
+            Arc::new(NoopWaker),
+        )
+        .expect("this machine has a shell")
+    }
+
+    /// The chord the shipped keymap gives `new-tab`.
+    fn new_tab_chord() -> KeyEvent {
+        key(Key::Char('T'), Modifiers::CTRL | Modifiers::SHIFT)
+    }
+
+    #[test]
+    fn a_new_tab_opens_the_shell_on_the_machine_with_nothing_in_the_way() {
+        // The default, and it has to stay the default: `open-default-without-asking` is
+        // the settings panel's row and a user who never opens that file gets a tab from
+        // one keystroke and no question.
+        let mut app = app();
+        let _ = app.key(&new_tab_chord());
+        assert_eq!(app.tab_numbers().len(), 1);
+        assert!(!app.picker_is_open(), "nothing was asked");
+    }
+
+    #[test]
+    fn a_new_tab_asks_which_shell_when_the_file_says_to_ask() {
+        // `tabs.open-default-without-asking` was documented in docs/configuration.html
+        // from the day it was written and read by nothing: setting it to false gave the
+        // user the same tab as leaving it alone, with no error and nothing to explain it.
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        assert!(app.picker_is_open());
+        assert_eq!(app.tab_numbers().len(), 0, "asking opens no tab by itself");
+        assert_eq!(app.picker_at(), Some(0));
+    }
+
+    /// The name a tab reports before its shell has set a title of its own, which is the
+    /// profile's name. Nothing drains the terminal in these tests, so this is the
+    /// profile that actually ran rather than whatever the shell has printed since.
+    fn opened_profile(app: &App) -> String {
+        app.active().expect("a tab is open").title()
+    }
+
+    #[test]
+    fn the_question_starts_on_the_shell_that_would_have_opened_anyway() {
+        // Enter, pressed the moment the picker appears, has to be the same tab the key
+        // would have opened with the setting off — otherwise turning the setting on is a
+        // tax on everyone who wanted the default after all.
+        let mut asking = app_that_asks();
+        let _ = asking.key(&new_tab_chord());
+        let _ = asking.picker_key(&key(Key::Enter, Modifiers::empty()));
+        let mut plain = app();
+        let _ = plain.key(&new_tab_chord());
+        assert_eq!(opened_profile(&asking), opened_profile(&plain));
+    }
+
+    #[test]
+    fn walking_the_question_and_answering_it_opens_the_row_that_was_lit() {
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        // A machine with one shell has one row, and it is the only one there is to be on.
+        // The walk below is written for both shapes rather than skipped on one of them.
+        let last = app.profiles().len() - 1;
+        let wanted = app.profiles()[last].name.clone();
+        for _ in 0..last {
+            let _ = app.picker_key(&key(Key::Down, Modifiers::empty()));
+        }
+        assert_eq!(app.picker_at(), Some(last));
+        let _ = app.picker_key(&key(Key::Enter, Modifiers::empty()));
+        assert!(!app.picker_is_open(), "the question is put away");
+        assert_eq!(app.tab_numbers().len(), 1);
+        assert_eq!(opened_profile(&app), wanted);
+    }
+
+    #[test]
+    fn the_question_survives_walking_off_the_end_of_the_list() {
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        let rows = app.profiles().len();
+        for _ in 0..=rows {
+            let _ = app.picker_key(&key(Key::Down, Modifiers::empty()));
+        }
+        assert_eq!(
+            app.picker_at(),
+            Some(1 % rows),
+            "walking off the end comes back round"
+        );
+        let _ = app.picker_key(&key(Key::Up, Modifiers::empty()));
+        assert_eq!(app.picker_at(), Some(0), "and back the other way");
+    }
+
+    #[test]
+    fn the_row_a_click_landed_on_is_the_shell_that_opens() {
+        // The keyboard and the pointer are two ways to the same answer, so they go through
+        // one function: a click that opened a different shell from the row it was on would
+        // be a popover that lies about what it is offering.
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        let last = app.profiles().len() - 1;
+        let wanted = app.profiles()[last].name.clone();
+        let _ = app.picker_choose_at(last);
+        assert!(!app.picker_is_open());
+        assert_eq!(app.tab_numbers().len(), 1);
+        assert_eq!(opened_profile(&app), wanted);
+    }
+
+    #[test]
+    fn a_row_that_is_not_on_the_list_opens_nothing() {
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        let beyond = app.profiles().len();
+        assert!(app.picker_choose_at(beyond).is_err());
+        assert!(!app.picker_is_open(), "the question was still answered");
+        assert_eq!(app.tab_numbers().len(), 0);
+    }
+
+    #[test]
+    fn changing_your_mind_opens_no_tab() {
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        let _ = app.picker_key(&key(Key::Escape, Modifiers::empty()));
+        assert!(!app.picker_is_open());
+        assert_eq!(app.tab_numbers().len(), 0);
+    }
+
+    #[test]
+    fn the_chord_that_asked_the_question_takes_it_back() {
+        // One chord, both ways, which is what the find bar and the settings panel do and
+        // the only way out that does not depend on the user guessing a second key.
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        let _ = app.key(&new_tab_chord());
+        assert!(!app.picker_is_open());
+        assert_eq!(app.tab_numbers().len(), 0, "closing it opened a tab");
+    }
+
+    #[test]
+    fn holding_the_chord_does_not_flap_the_question() {
+        // While the picker is up this chord is a toggle rather than a step, and a toggle
+        // that ran on auto-repeat would open and close it on alternate frames and leave
+        // the user looking at whichever state the repeat rate happened to stop on.
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        for _ in 0..5 {
+            let _ = app.key(&KeyEvent {
+                kind: KeyKind::Repeat,
+                ..new_tab_chord()
+            });
+        }
+        assert!(app.picker_is_open());
+        assert_eq!(app.tab_numbers().len(), 0);
+    }
+
+    #[test]
+    fn the_question_is_not_asked_again_once_it_has_been_answered() {
+        let mut app = app_that_asks();
+        let _ = app.key(&new_tab_chord());
+        let _ = app.picker_key(&key(Key::Enter, Modifiers::empty()));
+        assert!(!app.picker_is_open());
+        let _ = app.key(&new_tab_chord());
+        assert!(app.picker_is_open(), "the next new tab asks again");
+        assert_eq!(app.tab_numbers().len(), 1);
     }
 
     #[test]

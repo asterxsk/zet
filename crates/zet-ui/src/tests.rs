@@ -20,8 +20,8 @@ use zet_render::{Frame, Placement, Quad};
 use crate::fonts::GlyphSource;
 use crate::geometry::ROW_HEIGHT;
 use crate::{
-    Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, Rect, ScrollState, Scrollbar,
-    SettingLine, SettingPart, Size, TabInfo, thumb_offset,
+    Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, PickerLine, Rect, ScrollState,
+    Scrollbar, SettingLine, SettingPart, Size, TabInfo, thumb_offset,
 };
 
 /// A font source with no font in it.
@@ -165,6 +165,7 @@ fn input<'a>(palette: &'a Palette, tabs: &'a [TabInfo], size: Size) -> ChromeInp
         settings_scroll: 0.0,
         settings_focus: None,
         find: None,
+        picker: None,
         window_title: "zet",
         size,
         scale: 1.0,
@@ -2350,4 +2351,324 @@ fn the_marks_grow_with_the_window_scale() {
     let ((large_left, large_right), _) = ink_extent(&large);
     assert_eq!(large_right - large_left, (small_right - small_left) * 2);
     assert_eq!(large_left, small_left * 2);
+}
+
+// ---------------------------------------------------------------------------------
+// The profile picker
+// ---------------------------------------------------------------------------------
+
+/// The names a picker line borrows, in the order they would be opened.
+fn names(shells: &[String]) -> Vec<&str> {
+    shells.iter().map(String::as_str).collect()
+}
+
+/// The popover's row regions, in order.
+fn picker_rows(chrome: &Chrome) -> Vec<(usize, Rect)> {
+    chrome
+        .regions()
+        .iter()
+        .filter_map(|region| match region {
+            crate::Region::Profile { row, rect } => Some((*row, *rect)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The colour of the first glyph drawn for `ch`.
+///
+/// [`drawn`] reads back which characters reached the frame and not what they were painted
+/// in, because every test before this one was about what was drawn rather than what
+/// colour it was. A picker's whole readout is the colour — the lit row is the one in
+/// `ink` — so this is where the other half of a glyph is needed.
+fn ink_of(frame: &Frame, ch: char) -> Option<[u32; 4]> {
+    frame
+        .glyphs
+        .iter()
+        .find(|glyph| char::from_u32(glyph.uv[1] as u32) == Some(ch))
+        .map(|glyph| glyph.color.map(f32::to_bits))
+}
+
+/// A layout with the picker open over a given list of shells.
+fn open_picker<'a>(
+    palette: &'a Palette,
+    tabs: &'a [TabInfo],
+    profiles: &'a [&'a str],
+    at: usize,
+) -> (Chrome, Drawn) {
+    let mut chrome = chrome();
+    let mut input = input(palette, tabs, window());
+    input.picker = Some(PickerLine { profiles, at });
+    let drawn = draw(&mut chrome, &input);
+    (chrome, drawn)
+}
+
+/// The same, in a window of a size the caller picks.
+fn open_picker_at_size<'a>(
+    palette: &'a Palette,
+    tabs: &'a [TabInfo],
+    profiles: &'a [&'a str],
+    at: usize,
+    size: Size,
+) -> Chrome {
+    let mut chrome = chrome();
+    let mut input = input(palette, tabs, size);
+    input.picker = Some(PickerLine { profiles, at });
+    let _ = draw(&mut chrome, &input);
+    chrome
+}
+
+#[test]
+fn no_question_means_no_popover() {
+    // The picker is the shape of a question, and a machine whose file does not ask has no
+    // question. A list of shells that appeared anyway would be a list nobody asked for
+    // sitting over the terminal, taking clicks meant for the grid.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let _ = draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    assert!(picker_rows(&chrome).is_empty());
+    assert_eq!(
+        chrome.hit(40.0, 60.0),
+        Hit::None,
+        "nothing was there to hit"
+    );
+}
+
+#[test]
+fn the_popover_names_every_shell_it_offers() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let shells = vec![
+        "PowerShell 7".to_owned(),
+        "cmd".to_owned(),
+        "Ubuntu".to_owned(),
+    ];
+    let profiles = names(&shells);
+    let (chrome, drawn) = open_picker(&palette, &tabs, &profiles, 0);
+
+    assert_eq!(picker_rows(&chrome).len(), 3);
+    let body: Vec<char> = drawn_at(&drawn.frame, Weight::NORMAL);
+    for expected in ["PowerShell 7", "cmd", "Ubuntu"] {
+        for letter in expected.chars().filter(|ch| !ch.is_whitespace()) {
+            assert!(body.contains(&letter), "{expected} was not drawn");
+        }
+    }
+}
+
+#[test]
+fn the_row_the_question_is_on_is_the_row_in_ink() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let shells = vec![
+        "PowerShell 7".to_owned(),
+        "cmd".to_owned(),
+        "Ubuntu".to_owned(),
+    ];
+    let profiles = names(&shells);
+    let (_, drawn) = open_picker(&palette, &tabs, &profiles, 1);
+
+    // The lit row is `ink` and the others are `ink-mid`, which is the strip's own rule:
+    // the tab you are in is `ink` and the ones you are not are quieter. Weight is not
+    // touched, because DESIGN.md gives 500 to the active tab and the section headings and
+    // to nothing else.
+    assert_eq!(ink_of(&drawn.frame, 'c'), Some(color(palette.ink)));
+    assert_eq!(ink_of(&drawn.frame, 'P'), Some(color(palette.ink_mid)));
+    assert_eq!(ink_of(&drawn.frame, 'U'), Some(color(palette.ink_mid)));
+}
+
+#[test]
+fn the_lit_row_carries_the_lamp_the_active_tab_carries() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let shells = vec![
+        "PowerShell 7".to_owned(),
+        "cmd".to_owned(),
+        "Ubuntu".to_owned(),
+    ];
+    let profiles = names(&shells);
+    let (chrome, drawn) = open_picker(&palette, &tabs, &profiles, 2);
+
+    let (_, row) = picker_rows(&chrome)
+        .into_iter()
+        .find(|(at, _)| *at == 2)
+        .expect("the third row was laid out");
+    let signal = color(palette.signal);
+    let lamp = drawn
+        .frame
+        .quads
+        .iter()
+        .find(|quad| {
+            let [x, y, width, height] = quad.rect;
+            quad.color.map(f32::to_bits) == signal
+                && (width - 2.0).abs() < f32::EPSILON
+                && (height - row.height).abs() < f32::EPSILON
+                && x >= row.x - 2.0
+                && x <= row.x + 1.0
+                && y >= row.y - 1.0
+                && y <= row.y + 1.0
+        })
+        .expect("the lit row is marked by a two-pixel bar on its left edge");
+    // Within DESIGN.md's budget: `signal` never fills more than 3px by 40px, which is what
+    // the tab strip's active marker is and what this is.
+    assert!(lamp.rect[3] <= 40.0, "the lamp grew past its budget");
+}
+
+#[test]
+fn a_click_on_a_row_is_that_row() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let shells = vec![
+        "PowerShell 7".to_owned(),
+        "cmd".to_owned(),
+        "Ubuntu".to_owned(),
+    ];
+    let profiles = names(&shells);
+    let (chrome, _) = open_picker(&palette, &tabs, &profiles, 0);
+
+    let rows = picker_rows(&chrome);
+    assert_eq!(rows.len(), 3);
+    for (at, row) in rows {
+        assert_eq!(
+            chrome.hit(row.x + row.width / 2.0, row.y + row.height / 2.0),
+            Hit::Profile(at)
+        );
+    }
+}
+
+#[test]
+fn a_click_on_the_popover_but_not_on_a_row_is_the_popover() {
+    // The surface takes the click rather than passing it to the terminal behind it. A
+    // popover with holes in it is a popover where clicking the padding types into the
+    // shell, which is the one thing the user was not doing.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let shells = vec!["PowerShell 7".to_owned(), "cmd".to_owned()];
+    let profiles = names(&shells);
+    let (chrome, _) = open_picker(&palette, &tabs, &profiles, 0);
+
+    let (_, first) = picker_rows(&chrome)[0];
+    // The caption strip above the first row, which belongs to the popover and to no row.
+    assert_eq!(
+        chrome.hit(first.x + 6.0, first.y - 4.0),
+        Hit::Picker,
+        "the popover's own surface is not a hole"
+    );
+}
+
+#[test]
+fn a_click_under_the_popover_reaches_the_grid() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let shells = vec!["PowerShell 7".to_owned(), "cmd".to_owned()];
+    let profiles = names(&shells);
+    let (chrome, _) = open_picker(&palette, &tabs, &profiles, 0);
+
+    let lowest = picker_rows(&chrome)
+        .into_iter()
+        .map(|(_, rect)| rect.bottom())
+        .fold(0.0_f32, f32::max);
+    let below = chrome.hit(60.0, lowest + 40.0);
+    assert_ne!(below, Hit::Picker);
+    assert_ne!(below, Hit::Profile(0));
+}
+
+#[test]
+fn a_popover_row_is_still_reachable_with_the_settings_panel_open_behind_it() {
+    // The two overlays can be up at once — the panel is a view the user left open and the
+    // question about a new tab is a thing they just did — and in a window narrow enough
+    // they overlap: the panel is anchored to the right edge and is 380 wide, the popover to
+    // the left and is 300. The popover is drawn after the panel, so it is the one the user
+    // can see, and a click on a row has to land on the row. It did not: `Chrome::hit`
+    // answers with the first region that holds the point, the panel's surface was pushed
+    // before the popover's rows, and a click on a row in the overlap was swallowed by a
+    // panel the row was drawn on top of.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let shells = vec!["PowerShell 7".to_owned(), "cmd".to_owned()];
+    let profiles = names(&shells);
+    let size = Size {
+        width: 600.0,
+        height: 800.0,
+    };
+    let lines: Vec<SettingLine<'static>> = (0..3)
+        .map(|_| SettingLine {
+            text: "Size",
+            control: Some(Control::Step),
+            value: "13",
+        })
+        .collect::<Vec<_>>();
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, size);
+    input.settings_open = true;
+    input.settings = &lines;
+    input.picker = Some(PickerLine {
+        profiles: &profiles,
+        at: 0,
+    });
+    let _ = draw(&mut chrome, &input);
+
+    let panel = chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Settings(rect) => Some(*rect),
+            _ => None,
+        })
+        .expect("the panel is open");
+    let (_, row) = picker_rows(&chrome)
+        .into_iter()
+        .next()
+        .expect("the popover drew a row");
+    assert!(
+        row.x < panel.x && panel.x < row.right(),
+        "the two do not overlap in this window, so this is not the conflict it tests"
+    );
+
+    let x = panel.x + 4.0;
+    assert_eq!(
+        chrome.hit(x, row.center().1),
+        Hit::Profile(0),
+        "the panel swallowed a click on the row drawn over it"
+    );
+}
+
+#[test]
+fn the_popover_stays_inside_a_window_too_short_to_hold_it() {
+    // Rows that do not fit are scrolled to rather than drawn off the bottom edge, which is
+    // the rule the settings panel follows and for the same reason: a list that runs off the
+    // window is a shell the user can select and cannot see.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let shells: Vec<String> = ["one", "two", "three", "four", "five", "six"]
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    let profiles = names(&shells);
+    let chrome = open_picker_at_size(
+        &palette,
+        &tabs,
+        &profiles,
+        5,
+        Size {
+            width: 800.0,
+            height: 260.0,
+        },
+    );
+
+    let rows = picker_rows(&chrome);
+    for (at, rect) in &rows {
+        assert!(
+            rect.bottom() <= 260.0,
+            "row {at} ran off the bottom of the window"
+        );
+    }
+    assert!(
+        rows.iter().any(|(at, _)| *at == 5),
+        "the row the question is on has to be on screen"
+    );
+    assert!(
+        rows.len() < profiles.len(),
+        "a window this short cannot have shown every shell"
+    );
 }

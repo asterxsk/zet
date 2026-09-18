@@ -196,6 +196,29 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     echoed back. The host does not carry the physical key, and claiming a feature that is not
     there is worse than the honest no that the protocol's set-then-query handshake exists to get.
 
+- **`zet-app` / `zet-ui` / `zet`** — a new tab asks which shell to open it with, which is what
+  `tabs.open-default-without-asking` has been documented as switching off since the schema was
+  written.
+  - The key was read by nothing, so the answer was fixed: `Ctrl+Shift+T` always opened the default
+    profile, and a machine with two shells and a preference had no way to say so per tab. With the
+    key at its default of `false` the chord now opens a list of the discovered profiles, navigated
+    with `Up` and `Down`, answered with `Enter`, and dismissed with `Escape` or by pressing the chord
+    again. Holding the chord does not flap the list open and shut, because a modal question is not
+    a step.
+  - It is drawn as a fourth overlay beside the find bar and the two menus, in the same `surface-raised`
+    with the same hairline and the same `signal` lamp on the lit row that the active tab carries, so
+    the highlight in the list and the highlight on the strip are the same mark. Rows that do not fit
+    are scrolled to rather than dropped, and a window too short to hold a caption and one row draws
+    no popover at all — a question with no answers in it is worse than the default.
+  - The chrome's hit regions now run back up the paint order rather than down it. They were pushed
+    in the order things are drawn and `Chrome::hit` answers with the first region that holds the
+    point, which happened to work for everything on the window until two overlays could be up at
+    once: with the settings panel open behind the popover in a window narrow enough for the two to
+    overlap, the panel's surface was pushed first and swallowed every click on a row drawn over it.
+  - `zet-app` owns the state in one place, so the whole feature is unit-tested with no window: seven
+    tests for the highlight (wrapping, a one-shell machine, an empty list, and what a choice and a
+    change of mind leave behind), and ten more driving it through `App::key` and the host's own key
+    path.
 - **`zet`** — the icon is in the executable, and so is a version block.
   - `packaging/zet.ico` was reaching the installer and nothing else: `zet.exe` had no
     resource section at all, so the taskbar button, Alt-Tab, Explorer, and the Start Menu
@@ -224,6 +247,49 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-app`** — `Ctrl+Shift+Home` scrolled to the bottom of the history instead of the top.
+  - `ScrollToTop` asked the session to scroll by `i32::MIN` and `ScrollToBottom` by `i32::MAX`, and
+    the session's sign convention is the other way round: a positive delta moves up into the
+    history and a negative one moves towards the live screen. So the two keys were one keystroke
+    with two names, and the oldest line in the buffer was unreachable from the keyboard — with
+    `Ctrl+Shift+End` already showing it, the pair looked like it worked.
+  - `crates/zet-app/tests/scroll.rs` is the test that found it and the reason it cannot come back:
+    it opens a real `cmd.exe`, prints two hundred numbered lines, and asserts that the top of the
+    history is on screen after one chord and gone after the other. Reverting the one word fails it
+    with `Ctrl+Shift+Home did not move the view`.
+- **`zet-config`** — a `[keys]` table replaced the whole default keymap instead of patching it.
+  - `keys` was a plain map under `#[serde(default)]`, and serde applies a container default only
+    when the field is *absent*. A file that had a `[keys]` table — which is to say, the file of
+    anybody who has ever rebound a key — therefore loaded with exactly the bindings it named and
+    none of the others, so writing one binding unbound the other seventeen and the panel showed
+    seventeen rows reading `Unbound`. Both references promise the opposite, and both say it twice:
+    "Rebinding an action replaces its default; you do not have to repeat the bindings you are
+    keeping", and "a key you omit keeps the default above rather than becoming unbound". The
+    file's entries are now laid over the shipped ones and win, which is also what makes a table
+    naming all eighteen actions still mean exactly those eighteen.
+  - Unbinding needs its own spelling, because it is the one thing omission cannot say any more:
+    the settings panel takes a chord away from another action when you capture one it already
+    holds, and a line that was deleted for that reason now reads as an action keeping its default.
+    An empty value is that spelling — `close-tab = ""` — the panel writes it, and it is documented
+    under both Keybindings and Configuration.
+- **`zet`** — synchronized output was parsed and never honored, so every repaint flickered.
+  - `DECSET 2026` is how a full-screen program says "what follows is half a picture, hold the last
+    complete frame until I say otherwise". `zet-vt` set the flag and documented it as reported to
+    the host, and no host read it: `App::pump`'s answer was discarded and every byte of output
+    requested a redraw, so a program that cleared the screen and filled it in forty writes showed
+    the user thirty-nine states nobody asked to see — and a TUI repainting on a timer showed them
+    sixty times a second.
+  - Output-driven redraws now wait for the program to finish, and only output-driven ones: a
+    keystroke, a resize or the cursor's blink is the user's own business and is answered at once.
+    The hold expires after 66 ms, because the marker has no end that a program which has crashed
+    will send and a terminal that waited for one would be a window frozen on a stale frame for ever
+    with nothing to say why.
+  - The host is handed the instant the hold lapses rather than a yes or a no, and wakes for it:
+    the one program that will never send the write that ends the repaint is the one the budget is
+    for, and a held frame has nobody left to ask for it. `crates/zet-app/tests/hold.rs` drives a
+    real `cmd.exe` into setting the marker through its own prompt and asserts the deadline to the
+    millisecond, which is also what tells a budget measured from the start of the repaint apart
+    from one restarted on every read.
 - **`zet-render`** — every window with a gradient background stopped opening, and the unit tests for
   the picture were passing while it did.
   - The picture and the gradient draw in the same slot of the frame, and slot 0 has to hold a bind

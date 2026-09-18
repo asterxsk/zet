@@ -99,6 +99,11 @@ pub struct Config {
     /// System-integration switches.
     pub appearance: Appearance,
     /// Key bindings.
+    ///
+    /// Deserialized through [`keymap_over_defaults`] rather than plainly, because a
+    /// `[keys]` table in the file is a patch on the shipped bindings and not a
+    /// replacement for them.
+    #[serde(deserialize_with = "keymap_over_defaults")]
     pub keys: BTreeMap<String, String>,
 }
 
@@ -448,6 +453,32 @@ pub fn default_keymap() -> BTreeMap<String, String> {
     .into_iter()
     .map(|(action, chord)| (action.to_owned(), chord.to_owned()))
     .collect()
+}
+
+/// Read a `[keys]` table as a patch on the defaults.
+///
+/// `#[serde(default)]` on the struct fills in a field that is absent from the file, and
+/// stops there. A file that *does* have a `[keys]` table — which is to say, the file of
+/// anybody who has ever rebound a key — hands serde a map to deserialize, serde
+/// deserializes exactly what it is given, and the field ends up holding the two bindings
+/// the user wrote and none of the sixteen they did not. The panel then shows sixteen
+/// rows reading `Unbound`, and every action the user did not think to re-declare stops
+/// responding to the key the reference says it answers to.
+///
+/// Both references state the opposite, and they state it as the point of writing a
+/// partial table at all: "Rebinding an action replaces its default; you do not have to
+/// repeat the bindings you are keeping" (`docs/keybindings.html`) and "every binding not
+/// listed above keeps its default" (`docs/configuration.html`).
+///
+/// The file's entries are laid over the defaults and win, so a table naming all eighteen
+/// actions is still exactly that table — which is what makes a chord movable at all.
+fn keymap_over_defaults<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut keys = default_keymap();
+    keys.extend(BTreeMap::<String, String>::deserialize(deserializer)?);
+    Ok(keys)
 }
 
 /// The actions a keymap entry may name.
@@ -1019,6 +1050,55 @@ mod tests {
         let (config, diagnostics) = loaded("theme = \"nord\"\n");
         assert_eq!(config.theme, "nord");
         assert_eq!(config.font, FontSettings::default());
+        assert_eq!(config.keys, default_keymap());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn a_keys_table_keeps_the_bindings_it_does_not_name() {
+        // docs/keybindings.html says it twice — "Rebinding an action replaces its default;
+        // you do not have to repeat the bindings you are keeping", and "a key you omit
+        // keeps the default above rather than becoming unbound" — and
+        // docs/configuration.html says it a third time under a worked example whose table
+        // lists three of eighteen actions. The code did none of it: `[keys]` was a plain
+        // map under `#[serde(default)]`, which serde applies only when the table is wholly
+        // absent, so writing one binding unbound the other seventeen and the panel showed
+        // seventeen rows reading `Unbound`.
+        let (config, diagnostics) =
+            loaded("[keys]\nnew-tab = \"Ctrl+T\"\nquit = \"Ctrl+Shift+Q\"\n");
+        assert_eq!(
+            config.keys.get("new-tab").map(String::as_str),
+            Some("Ctrl+T"),
+            "the file's own binding"
+        );
+        assert_eq!(
+            config.keys.get("quit").map(String::as_str),
+            Some("Ctrl+Shift+Q")
+        );
+        assert_eq!(
+            config.keys.get("close-tab").map(String::as_str),
+            default_keymap().get("close-tab").map(String::as_str),
+            "a binding the file did not mention went unbound"
+        );
+        assert_eq!(
+            config.keys.len(),
+            default_keymap().len(),
+            "the table replaced the keymap rather than being laid over it"
+        );
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn a_keys_table_that_names_every_action_is_the_keymap() {
+        // The merge has to be a merge and not a "defaults wins" either: a file that
+        // spells out all eighteen bindings must produce exactly those, or a user could
+        // not move a key at all.
+        use std::fmt::Write as _;
+        let mut all = String::new();
+        for (action, chord) in default_keymap() {
+            let _ = writeln!(all, "{action} = \"{chord}\"");
+        }
+        let (config, diagnostics) = loaded(&format!("[keys]\n{all}"));
         assert_eq!(config.keys, default_keymap());
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }

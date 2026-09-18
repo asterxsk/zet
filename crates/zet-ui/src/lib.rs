@@ -129,6 +129,13 @@ pub struct ChromeInput<'a> {
     /// height, or takes the height and is not drawn, is a bug that only exists because
     /// two values said two things.
     pub find: Option<FindLine<'a>>,
+    /// The profile picker's list and the row the question is on, or `None` when no
+    /// question is being asked.
+    ///
+    /// Whether the picker is up is this and nothing else, for the reason the find bar is
+    /// one `Option` rather than a flag and a value: two things saying whether a popover is
+    /// open is one thing that can disagree with the other.
+    pub picker: Option<PickerLine<'a>>,
     /// The text in the titlebar's name slot, which the app name goes in.
     pub window_title: &'a str,
     /// The whole window's size in logical pixels.
@@ -174,6 +181,19 @@ impl Default for FindLine<'_> {
             capped: false,
         }
     }
+}
+
+/// What the profile picker is offering.
+///
+/// The names and which one is lit, and nothing else. Where a profile's executable is, what
+/// arguments it takes, and where it was discovered from are the app's business — a popover
+/// is a list of words with one of them chosen.
+pub struct PickerLine<'a> {
+    /// The shell names, in the order they would be opened. The caller's order is the
+    /// list's order, so the row a user picks is the row the app opens.
+    pub profiles: &'a [&'a str],
+    /// Which row the question is on.
+    pub at: usize,
 }
 
 /// One line of the settings panel: a section heading, or a setting.
@@ -288,6 +308,15 @@ pub enum Hit {
         /// Which part of that line's control.
         part: SettingPart,
     },
+    /// The profile picker is open and the point is on a row of it, by that row's index
+    /// into [`PickerLine::profiles`].
+    Profile(usize),
+    /// The profile picker is open and the point is inside it, but not on a row.
+    ///
+    /// The surface takes the click rather than passing it to the terminal behind it: a
+    /// popover with holes in it is a popover where clicking the padding types into the
+    /// shell, which is the one thing the user was not doing.
+    Picker,
     /// The scrollbar.
     Scrollbar(Scrollbar),
     /// Nothing the chrome owns.
@@ -389,6 +418,11 @@ enum Region {
         part: SettingPart,
         rect: Rect,
     },
+    Profile {
+        row: usize,
+        rect: Rect,
+    },
+    Picker(Rect),
     Scrollbar {
         track: Rect,
         thumb: Rect,
@@ -408,6 +442,8 @@ impl Region {
                 line: *line,
                 part: *part,
             }),
+            Self::Profile { row, rect } if rect.contains(x, y) => Some(Hit::Profile(*row)),
+            Self::Picker(rect) if rect.contains(x, y) => Some(Hit::Picker),
             Self::Scrollbar { track, thumb } if track.contains(x, y) => {
                 Some(Hit::Scrollbar(if thumb.contains(x, y) {
                     Scrollbar::Thumb
@@ -637,6 +673,14 @@ impl Chrome {
         if bottom > 0.0 {
             overlays::find_bar(paint, input, bottom);
         }
+        // After the panel, because a question about a new tab is the thing the user is
+        // answering and the panel is a view they left open. The two do not overlap in
+        // practice — one is against the right edge and this is against the left — and the
+        // order is written down so that it does not become a coin toss if they ever do.
+        let popover = input
+            .picker
+            .as_ref()
+            .map(|picker| overlays::profile_picker(paint, input, picker, left, top, bottom));
         let scroll = overlays::scrollbar(paint, input, top, bottom, self.scroll);
 
         // Last, because these are the window's own controls and nothing in zet may cover
@@ -662,19 +706,29 @@ impl Chrome {
         if let Some(rect) = strip_plan.drag {
             self.regions.push(Region::Drag(rect));
         }
-        // The controls before the panel that contains them, because `Chrome::hit` answers
-        // with the first region that holds the point: pushed the other way round, every
-        // control would be shadowed by the surface it sits on and no setting would ever
-        // be clicked.
+        // The regions run back up the paint order, because `Chrome::hit` answers with the
+        // first region that holds the point: the thing drawn last is the thing clicked.
+        // Pushed the other way round, everything the user can see would be shadowed by
+        // whatever is underneath it — a control by the panel it sits on, a row by the
+        // popover, and no setting and no shell would ever be clicked.
         //
-        // The scrollbar comes before all of them for the same reason read the other way.
-        // It is drawn last of the three — it is the one thing on the window that is still
-        // visible over an open panel, being eight pixels of the right edge — so it is the
-        // thing a click there lands on. Pushed after the panel it would be a thumb you can
-        // see and cannot drag.
+        // The scrollbar first, because it is drawn last of the three: it is the one thing
+        // on the window that is still visible over an open panel, being eight pixels of the
+        // right edge, so it is what a click there has to land on. Then the popover, which
+        // is drawn over the panel and under the scrollbar. Then the panel, its controls
+        // before the surface that holds them for the same reason again one level down.
         self.scrollbar = scroll;
         if let Some((track, thumb)) = scroll {
             self.regions.push(Region::Scrollbar { track, thumb });
+        }
+        if let Some(popover) = &popover {
+            for (row, rect) in &popover.rows {
+                self.regions.push(Region::Profile {
+                    row: *row,
+                    rect: *rect,
+                });
+            }
+            self.regions.push(Region::Picker(popover.rect));
         }
         if let Some(panel) = &panel {
             for (line, part, rect) in &panel.controls {

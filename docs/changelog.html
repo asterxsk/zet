@@ -290,6 +290,36 @@
         handshake exists to get.</li>
       </ul>
 
+      <h4>zet-app / zet-ui / zet — a new tab asks which shell to open it with</h4>
+
+      <p>This is what <code>tabs.open-default-without-asking</code> has been documented as switching
+      off since the schema was written, and it was read by nothing, so the answer was fixed:
+      <code>Ctrl+Shift+T</code> always opened the default profile, and a machine with two shells and
+      a preference had no way to say so per tab. With the key at its default of <code>false</code>
+      the chord now opens a list of the discovered profiles, navigated with <code>Up</code> and
+      <code>Down</code>, answered with <code>Enter</code>, and dismissed with <code>Escape</code> or
+      by pressing the chord again. Holding the chord does not flap the list open and shut, because a
+      modal question is not a step.</p>
+
+      <p>It is drawn as a fourth overlay beside the find bar and the two menus, in the same
+      <code>surface-raised</code> with the same hairline and the same <code>signal</code> lamp on
+      the lit row that the active tab carries, so the highlight in the list and the highlight on the
+      strip are the same mark. Rows that do not fit are scrolled to rather than dropped, and a
+      window too short to hold a caption and one row draws no popover at all — a question with no
+      answers in it is worse than the default.</p>
+
+      <p>The chrome's hit regions now run back up the paint order rather than down it. They were
+      pushed in the order things are drawn and <code>Chrome::hit</code> answers with the first region
+      that holds the point, which happened to work for everything on the window until two overlays
+      could be up at once: with the settings panel open behind the popover in a window narrow enough
+      for the two to overlap, the panel's surface was pushed first and swallowed every click on a row
+      drawn over it.</p>
+
+      <p><code>zet-app</code> owns the state in one place, so the whole feature is unit-tested with
+      no window: seven tests for the highlight (wrapping, a one-shell machine, an empty list, and
+      what a choice and a change of mind leave behind), and ten more driving it through
+      <code>App::key</code> and the host's own key path.</p>
+
       <h4>zet — the icon is in the executable, and so is a version block</h4>
 
       <p><code>packaging/zet.ico</code> was reaching the installer and nothing else:
@@ -323,6 +353,62 @@
       anything to turn off: the only request zet can make is one you typed.</p>
 
       <h3>Fixed</h3>
+
+      <h4>zet-app — <code>Ctrl+Shift+Home</code> scrolled to the bottom of the history</h4>
+
+      <p><code>ScrollToTop</code> asked the session to scroll by <code>i32::MIN</code> and
+      <code>ScrollToBottom</code> by <code>i32::MAX</code>, and the session's sign convention is the
+      other way round: a positive delta moves up into the history and a negative one moves towards
+      the live screen. So the two keys were one keystroke with two names, and the oldest line in the
+      buffer was unreachable from the keyboard — with <code>Ctrl+Shift+End</code> already showing
+      it, the pair looked like it worked.</p>
+
+      <p><code>crates/zet-app/tests/scroll.rs</code> is the test that found it and the reason it
+      cannot come back: it opens a real <code>cmd.exe</code>, prints two hundred numbered lines, and
+      asserts that the top of the history is on screen after one chord and gone after the other.
+      Reverting the one word fails it with <code>Ctrl+Shift+Home did not move the view</code>.</p>
+
+      <h4>zet-config — a <code>[keys]</code> table replaced the whole default keymap</h4>
+
+      <p><code>keys</code> was a plain map under <code>#[serde(default)]</code>, and serde applies a
+      container default only when the field is <em>absent</em>. A file that had a
+      <code>[keys]</code> table — which is to say, the file of anybody who has ever rebound a key —
+      therefore loaded with exactly the bindings it named and none of the others, so writing one
+      binding unbound the other seventeen and the panel showed seventeen rows reading
+      <code>Unbound</code>. Both references promise the opposite, and both say it twice: "Rebinding
+      an action replaces its default; you do not have to repeat the bindings you are keeping", and
+      "a key you omit keeps the default above rather than becoming unbound". The file's entries are
+      now laid over the shipped ones and win, which is also what makes a table naming all eighteen
+      actions still mean exactly those eighteen.</p>
+
+      <p>Unbinding needs its own spelling, because it is the one thing omission cannot say any more:
+      the settings panel takes a chord away from another action when you capture one it already
+      holds, and a line that was deleted for that reason now reads as an action keeping its default.
+      An empty value is that spelling — <code>close-tab = ""</code> — the panel writes it, and it is
+      documented under both <a href="keybindings.html">Keybindings</a> and
+      <a href="configuration.html">Configuration</a>.</p>
+
+      <h4>zet — synchronized output was parsed and never honored, so every repaint flickered</h4>
+
+      <p><code>DECSET 2026</code> is how a full-screen program says "what follows is half a picture,
+      hold the last complete frame until I say otherwise". <code>zet-vt</code> set the flag and
+      documented it as reported to the host, and no host read it: <code>App::pump</code>'s answer
+      was discarded and every byte of output requested a redraw, so a program that cleared the
+      screen and filled it in forty writes showed the user thirty-nine states nobody asked to see —
+      and a TUI repainting on a timer showed them sixty times a second.</p>
+
+      <p>Output-driven redraws now wait for the program to finish, and only output-driven ones: a
+      keystroke, a resize or the cursor's blink is the user's own business and is answered at once.
+      The hold expires after 66 ms, because the marker has no end that a program which has crashed
+      will send and a terminal that waited for one would be a window frozen on a stale frame for
+      ever with nothing to say why.</p>
+
+      <p>The host is handed the instant the hold lapses rather than a yes or a no, and wakes for it:
+      the one program that will never send the write that ends the repaint is the one the budget is
+      for, and a held frame has nobody left to ask for it. <code>crates/zet-app/tests/hold.rs</code>
+      drives a real <code>cmd.exe</code> into setting the marker through its own prompt and asserts
+      the deadline to the millisecond, which is also what tells a budget measured from the start of
+      the repaint apart from one restarted on every read.</p>
 
       <h4>zet-render — every window with a gradient background stopped opening</h4>
 

@@ -169,6 +169,17 @@ quit = "Ctrl+Shift+Q"</code></pre>
       <a href="configuration.html">Configuration</a>, and it is a complete list: a key you omit
       keeps the default above rather than becoming unbound.</p>
 
+      <p>Unbinding an action is therefore written rather than left out. An empty chord is an
+      action with no key:</p>
+
+<pre><code>[keys]
+close-tab = ""</code></pre>
+
+      <p><code>close-tab</code> now answers to nothing, and stays that way across a restart. The
+      settings panel writes this line itself when you capture a chord that another action already
+      had, which is the one case where it takes a binding away from something you did not ask
+      about.</p>
+
       <h2>What a chord is not</h2>
 
       <ul>

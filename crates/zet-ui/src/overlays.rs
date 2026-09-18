@@ -1,8 +1,8 @@
-//! The three surfaces that sit over the grid rather than framing it: the settings panel,
-//! the find bar, and the scrollbar.
+//! The four surfaces that sit over the grid rather than framing it: the settings panel,
+//! the find bar, the profile picker, and the scrollbar.
 //!
 //! They are together because they share a rule rather than a purpose. None of them is
-//! part of the window's frame, none of them is modal, and all three take their depth from
+//! part of the window's frame, none of them is modal, and all four take their depth from
 //! a hairline and a one-step surface change — DESIGN.md's only depth mechanism in the
 //! chrome, since there are no shadows, no gradients, and no glass.
 
@@ -10,6 +10,7 @@ use zet_font::Weight;
 
 use crate::ChromeInput;
 use crate::Control;
+use crate::PickerLine;
 use crate::ScrollState;
 use crate::SettingLine;
 use crate::SettingPart;
@@ -61,6 +62,138 @@ const HEADING_SIZE: f32 = 12.0;
 const HEADING_TRACKING: f32 = 0.08;
 const LABEL_SIZE: f32 = 13.0;
 const HINT_SIZE: f32 = 12.0;
+
+/// The profile picker's own width, and the lamp on the row the question is on.
+///
+/// Wide enough for the longest shell name an ordinary Windows machine offers —
+/// `Windows PowerShell` — with the padding and the lamp beside it. The lamp is two pixels
+/// because that is what the tab strip's active marker and the rail's are, and DESIGN.md
+/// budgets `signal` at 3px by 40px: this is the same lamp, rotated to the other edge.
+const PICKER_WIDTH: f32 = 300.0;
+const PICKER_LAMP: f32 = 2.0;
+
+/// What the picker is for, so the list says what it is even when it has one row.
+///
+/// The find bar's label earns its place for exactly this reason and the argument is the
+/// same here: a list of shell names over a terminal could be anything, and a popover is
+/// the one place in the chrome where a word costs nothing.
+const PICKER_LABEL: &str = "New tab";
+
+/// What the picker drew, so the caller can hit-test it.
+pub(crate) struct Popover {
+    /// The popover itself.
+    pub rect: Rect,
+    /// Every row that was on screen, and which shell it offers.
+    pub rows: Vec<(usize, Rect)>,
+}
+
+/// Draw the profile picker and answer where it went.
+///
+/// A `surface-raised` popover under the strip, against the grid's left edge, with a
+/// hairline between it and the terminal behind it. It is not a modal and it does not
+/// resize the grid: the terminal keeps running underneath, and every letter still reaches
+/// it, which is the rule the settings panel follows and the reason a shell can be picked
+/// without stopping what the current one is doing.
+///
+/// The shape is the strip's, scaled down. A row the question is on carries a two-pixel
+/// `signal` bar on its left edge — the same lamp as the active tab, moved to the edge the
+/// rail uses — and is written in `ink` while the rest are `ink-mid`, so the readout is one
+/// colour and one lamp rather than a second kind of highlight invented for a list. The
+/// weight is not touched: DESIGN.md gives 500 to the active tab and the section headings
+/// and to nothing else.
+///
+/// The names come from the caller for the reason the panel's rows do — this crate is not
+/// given the configuration and a second copy of what a profile *is* living next to the
+/// painter is how the two start disagreeing.
+///
+/// Rows that do not fit are scrolled to rather than dropped, and the row the question is
+/// on is scrolled into view first: a list that runs off the bottom of the window is a
+/// shell the user can select and cannot see.
+pub(crate) fn profile_picker(
+    paint: &mut Painter<'_>,
+    input: &ChromeInput<'_>,
+    picker: &PickerLine<'_>,
+    left: f32,
+    top: f32,
+    bottom: f32,
+) -> Popover {
+    let palette = *input.palette;
+    let width = PICKER_WIDTH.min((input.size.width - left - 2.0 * PAD).max(0.0));
+    let room = (input.size.height - top - bottom - 2.0 * PAD - HEADING_BOX).max(0.0);
+    // Through `i32` on the way: `room` is clamped to zero above, so the sign is not in
+    // question, and this is the one conversion in the crate where `rustc` cannot see that
+    // for itself — the pixel count it comes from is a float and a row count is not.
+    let visible = usize::try_from((room / ROW).floor() as i32)
+        .unwrap_or(0)
+        .min(picker.profiles.len());
+    if visible == 0 {
+        // A window too short to hold a caption and one row. Nothing is drawn, and nothing
+        // is hittable either, which is the honest answer: there is no room for a question.
+        return Popover {
+            rect: Rect::new(left + PAD, top + PAD, width, 0.0),
+            rows: Vec::new(),
+        };
+    }
+
+    // The lit row is what the list is scrolled to. Everything above it gives way, so the
+    // answer is on screen at the moment the user is choosing it, and the top of the list
+    // is what is lost — which is where the user already looked.
+    let first = picker.at.saturating_sub(visible.saturating_sub(1));
+    let last = (first + visible).min(picker.profiles.len());
+    let rect = Rect::new(
+        left + PAD,
+        top + PAD,
+        width,
+        PAD + HEADING_BOX + (last - first) as f32 * ROW + PAD,
+    );
+    paint.fill(rect, palette.surface_raised);
+    border(paint, rect, palette.hairline);
+
+    let caption = Rect::new(
+        rect.x + PAD,
+        rect.y + PAD,
+        (rect.width - 2.0 * PAD).max(0.0),
+        HEADING_BOX,
+    );
+    let label = TextStyle::new(HINT_SIZE, Weight::NORMAL, palette.ink_dim);
+    paint.text(
+        PICKER_LABEL,
+        caption.x,
+        paint.baseline_in(caption, HINT_SIZE),
+        label,
+    );
+
+    let mut rows = Vec::with_capacity(last - first);
+    let mut y = caption.bottom();
+    for (at, name) in picker.profiles.iter().enumerate().take(last).skip(first) {
+        let row = Rect::new(rect.x, y, rect.width, ROW);
+        let lit = at == picker.at;
+        if lit {
+            paint.fill(
+                Rect::new(row.x, row.y, PICKER_LAMP, row.height),
+                palette.signal,
+            );
+        }
+        // The name is given the rest of the row, less the lamp and the padding on both
+        // sides, so a long one is cut by the painter rather than running under the edge.
+        let text = Rect::new(
+            row.x + PAD + PICKER_LAMP,
+            row.y,
+            (row.width - 2.0 * PAD - PICKER_LAMP).max(0.0),
+            ROW,
+        );
+        let style = TextStyle::new(
+            LABEL_SIZE,
+            Weight::NORMAL,
+            if lit { palette.ink } else { palette.ink_mid },
+        );
+        paint.centered(name, text, style);
+        rows.push((at, row));
+        y += ROW;
+    }
+
+    Popover { rect, rows }
+}
 
 /// What the panel drew, so the caller can hit-test it and keep its scroll honest.
 pub(crate) struct Panel {

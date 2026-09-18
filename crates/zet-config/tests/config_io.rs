@@ -134,38 +134,54 @@ fn saving_twice_writes_the_same_bytes_the_second_time() {
 }
 
 #[test]
-fn a_binding_the_config_no_longer_has_is_removed_from_the_file() {
+fn a_binding_the_panel_unbound_survives_being_written_and_read() {
     // Capturing a chord in the settings panel takes the key away from the action that
-    // held it, so the map the panel saves is missing an entry the file still has. A save
-    // that only copies forward leaves both actions holding the key. On the next load the
-    // first in sort order wins, and the action the user displaced is back — holding the
-    // chord they meant to give away.
-    let dir = scratch("pruned-key");
+    // held it, and what the panel has to write down is "this action has no chord". The
+    // file has one way of saying that and it is not omission: `[keys]` is a patch on the
+    // shipped bindings, so an action the file does not name is an action that keeps its
+    // default chord. A save that dropped the line, or a load that put the default back
+    // under an empty one, would show the user `Unbound` in the panel and give the action
+    // its old key back at the next start — which is the chord they had just taken away.
+    //
+    // The file below is the state after such a capture: `find` has taken
+    // `Ctrl+Shift+W` and `close-tab` is left holding nothing.
+    let dir = scratch("unbound-key");
     let path = write(
         &dir,
         "config.toml",
         "\
 [keys]
-close-tab = \"Ctrl+Shift+W\"
-find = \"Ctrl+F\"
+close-tab = \"\"
+find = \"Ctrl+Shift+W\"
 new-tab = \"Ctrl+Shift+T\"
 ",
     );
 
-    let mut config = load(&path).expect("loads").config;
-    config.keys.remove("close-tab");
-    config
-        .keys
-        .insert("find".to_owned(), "Ctrl+Shift+W".to_owned());
+    let config = load(&path).expect("loads").config;
+    assert_eq!(
+        config.keys.get("close-tab").map(String::as_str),
+        Some(""),
+        "the empty value was read as an absent one"
+    );
     save(&config, &path).expect("saves");
 
     let written = read(&path);
     assert!(
-        !written.contains("close-tab"),
-        "a binding the config no longer has was left in the file:\n{written}"
+        written.contains("close-tab = \"\""),
+        "the unbinding was dropped from the file:\n{written}"
     );
+    assert!(
+        !written.contains("close-tab = \"Ctrl+Shift+W\""),
+        "the file handed the action back the chord the user took from it:\n{written}"
+    );
+
     let back = load(&path).expect("loads").config;
     assert_eq!(back, config, "the file says something the config does not");
+    assert_eq!(
+        back.keys.get("close-tab").map(String::as_str),
+        Some(""),
+        "the action was bound again by the reload"
+    );
     assert_eq!(
         back.keys.get("find").map(String::as_str),
         Some("Ctrl+Shift+W")

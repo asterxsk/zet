@@ -46,11 +46,14 @@
 pub mod action;
 pub mod app;
 pub mod find;
+pub mod hold;
+pub mod picker;
 pub mod settings;
 pub mod text;
 
 pub use action::Action;
 pub use app::{App, AppError, BLINK_INTERVAL, Command};
 pub use find::Find;
+pub use picker::Picker;
 pub use settings::{Effect, Id, Kind, Line};
 pub use text::selection_text;

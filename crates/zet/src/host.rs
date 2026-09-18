@@ -167,6 +167,20 @@ fn find_view(app: &App) -> FindView<'_> {
     }
 }
 
+/// The shells the popover offers, in the order the app would open them.
+///
+/// A free function over the app for the reason [`find_view`] is one: the strings the
+/// popover draws are borrowed from the profile list, and something has to hold them for
+/// as long as the `ChromeInput` that points at them. As a method it would borrow the whole
+/// host to build a list of `&str` and the frame needs the rest of the host mutably while
+/// it draws.
+fn profile_names(app: &App) -> Vec<&str> {
+    app.profiles()
+        .iter()
+        .map(|profile| profile.name.as_str())
+        .collect()
+}
+
 /// The terminal, attached to a window.
 pub struct Host {
     /// The state machine. Everything the host needs to know is behind this.
@@ -215,6 +229,12 @@ pub struct Host {
 
     /// When the cursor's blink phase last changed, so the loop can wake for the next one.
     blink_at: Instant,
+    /// When the frame a program is holding becomes due, while one is being held.
+    ///
+    /// Set when output arrives mid-repaint and cleared when the frame is finally asked
+    /// for. A held frame is a frame nobody has requested, so the loop has to come back
+    /// for it on its own — see [`App::frame_hold`], which is where the instant comes from.
+    hold_until: Option<Instant>,
     /// The moment the host started, for the chrome's clock.
     origin: Instant,
 
@@ -330,6 +350,7 @@ impl Host {
             scroll_grab: None,
             partial: 0.0,
             blink_at: now,
+            hold_until: None,
             origin: now,
             os_title: APP_NAME.to_owned(),
             styled,
@@ -608,6 +629,15 @@ impl Host {
     }
 
     /// Draw everything and put it on screen.
+    ///
+    /// Long by nature rather than by accident, and the length is not the kind a split
+    /// fixes: everything that reads the whole host is gathered into locals before the
+    /// renderer is borrowed mutably, and the renderer's borrow is then held across the
+    /// rest of the frame. An extracted half would have to be handed the renderer, the
+    /// frame, the chrome, the input, and the handful of locals the grid is drawn from —
+    /// past seven arguments to move one screenful of work one call frame away, which is
+    /// the same function with worse names.
+    #[allow(clippy::too_many_lines)]
     fn redraw(&mut self) {
         // Before the renderer is borrowed: `reconcile` may reload a face, and it needs
         // the whole host to do it.
@@ -648,6 +678,13 @@ impl Host {
         let elapsed = now.duration_since(self.origin).as_secs_f32();
         let finding = find_view(&self.app);
         let marks = zet_render::Marks::new(&finding.marks, finding.active);
+        // The popover's rows while the app is asking which shell to open, and `None` when
+        // it is not: a binding of its own because the `ChromeInput` below borrows it.
+        let names = profile_names(&self.app);
+        let picker = self.app.picker_at().map(|at| zet_ui::PickerLine {
+            profiles: &names,
+            at,
+        });
 
         // The taskbar, Alt-Tab, and the window list are the places a user reads a title
         // without looking at the window, and six of them reading "zet" say nothing about
@@ -685,6 +722,7 @@ impl Host {
             settings_scroll: self.settings_scroll,
             settings_focus: focused,
             find: finding.line,
+            picker,
             window_title: APP_NAME,
             size: Size {
                 width: width as f32,
@@ -959,6 +997,15 @@ impl Host {
             self.capturing = None;
             self.settings_focus = None;
             self.settings_left = false;
+            self.redraw();
+            return;
+        }
+
+        // The profile picker's four keys, while it is asking. Before the find bar,
+        // because a question about a new tab is the thing on top and the thing the user
+        // has just opened, and a `Down` that scrolled a find result instead of moving the
+        // highlight would be the window answering the wrong question.
+        if self.app.picker_key(&translated) {
             self.redraw();
             return;
         }
@@ -1338,6 +1385,24 @@ impl Host {
                 let _ = self.app.close_tab(number);
                 true
             }
+            Hit::Profile(row) => {
+                // The chrome only draws a row while the picker is asking, so this
+                // normally means exactly what it says. The exception is the frame in
+                // which the picker has just closed and the redraw has not happened yet:
+                // the popover is still on screen and the app is no longer asking, and a
+                // click at that spot is a click on a terminal. Opening a tab there would
+                // be acting on a question that has already been answered, so the press
+                // falls through to the grid, which is what is under it now.
+                if !self.app.picker_is_open() {
+                    return false;
+                }
+                let _ = self.app.picker_choose_at(row);
+                true
+            }
+            // The popover's surface, between and around its rows. Swallowed for the same
+            // reason the panel's is — a click on what is drawn is not a click on what it
+            // covers — and passed through on the same stale frame.
+            Hit::Picker => self.app.picker_is_open(),
             Hit::Setting { line, part } => {
                 // The list drawn this frame and the list read here are the same function
                 // of the same configuration, so the index names the same row. A row that
@@ -1568,6 +1633,34 @@ impl Host {
         }
         window.request_redraw();
     }
+
+    /// Ask for a frame, unless the program that just wrote is mid-repaint.
+    ///
+    /// Output arriving is what a redraw is for, and this is the one case where it is not:
+    /// a program that has set `DECSET 2026` is telling the terminal that what it has
+    /// written so far is half a picture. Drawing it would show the user the half — the
+    /// cleared screen, the rows filled in as far as the program has got — and the write
+    /// that ends the repaint would arrive a moment later and draw the whole thing, so the
+    /// flicker that synchronization exists to remove is exactly what honoring the marker
+    /// only half way would produce.
+    ///
+    /// The frame is postponed rather than dropped. [`App::frame_hold`] hands back the
+    /// instant the hold lapses and `about_to_wait` wakes the loop for it, which is what
+    /// keeps this from being a freeze: the program that will never send the write that
+    /// ends the repaint is the program the budget is there for.
+    ///
+    /// Only this path is gated, and deliberately. A redraw asked for by a keystroke, a
+    /// resize or the blink is the user's own business and not the program's, so a
+    /// terminal that sat on those for the length of somebody else's repaint would be
+    /// dropping the events it is most obliged to answer.
+    fn draw_when_due(&mut self) {
+        self.hold_until = self.app.frame_hold(Instant::now());
+        if self.hold_until.is_none()
+            && let Some(window) = self.window()
+        {
+            window.request_redraw();
+        }
+    }
 }
 
 /// The settings rows, in the shape the chrome draws them.
@@ -1757,15 +1850,13 @@ impl ApplicationHandler<Wake> for Host {
         // same place, for a tab the user never touched.
         let closed = self.app.reap();
         if closed.is_empty() {
-            if let Some(window) = self.window() {
-                window.request_redraw();
-            }
+            self.draw_when_due();
             return;
         }
         if self.app.sessions().is_empty() {
             loop_.exit();
-        } else if let Some(window) = self.window() {
-            window.request_redraw();
+        } else {
+            self.draw_when_due();
         }
     }
 
@@ -1819,14 +1910,35 @@ impl ApplicationHandler<Wake> for Host {
     }
 
     fn about_to_wait(&mut self, loop_: &ActiveEventLoop) {
-        // The cursor's blink is the only thing in zet that happens on a clock, so the
+        let now = Instant::now();
+        // A frame a program is holding has nobody left to ask for it. The output that
+        // would have drawn it has already been drained and deliberately not drawn, and a
+        // program that is still repainting will write again and wake the loop by itself —
+        // but the program that set the marker and stopped never will, so this deadline is
+        // the loop's own appointment with it. It is a moment rather than an event, which
+        // is why it has to be kept here, where the control flow is decided.
+        //
+        // The hold is cleared before the redraw is asked for, so that the frame which
+        // follows is drawn rather than postponed a second time by a deadline that has
+        // already passed.
+        if let Some(due) = self.hold_until {
+            if now < due {
+                loop_.set_control_flow(ControlFlow::WaitUntil(due));
+                return;
+            }
+            self.hold_until = None;
+            if let Some(window) = self.window() {
+                window.request_redraw();
+            }
+        }
+
+        // The cursor's blink is the other thing in zet that happens on a clock, so the
         // loop is only ever woken for it when there is a cursor to blink. A terminal
         // sitting idle with nothing to flash parks in `Wait` and uses no power at all.
         if !self.app.blinks() {
             loop_.set_control_flow(ControlFlow::Wait);
             return;
         }
-        let now = Instant::now();
         let next = self.app.next_blink(now);
         if now >= self.blink_at {
             // The phase has flipped since the last frame was drawn, and the deadline has

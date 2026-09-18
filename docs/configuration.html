@@ -332,7 +332,9 @@ quit = "Ctrl+Shift+Q"</code></pre>
 
       <p>Only the keys you write are changed. <code>font.fallback</code>, <code>tabs.open-default-without-asking</code>,
       <code>appearance.follow-forced-colors</code>, and every binding not listed above keep their
-      defaults.</p>
+      defaults — including inside <code>[keys]</code> itself, where a line you leave out is a
+      binding that keeps the chord it had. To take a chord away from an action, write it empty:
+      <code>close-tab = ""</code>. See <a href="keybindings.html">Keybindings</a>.</p>
 
       <h2 id="update">The update check</h2>
 

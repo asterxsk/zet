@@ -392,9 +392,19 @@ pub fn bind(config: &mut Config, action: Action, chord: Chord) {
     //
     // A line that does not parse at all is kept. It is already reported, and deleting
     // a user's line is not what pressing a key in the panel asked for.
-    config.keys.retain(|_, bound| {
-        Chord::parse(bound).map_or(true, |parsed| !parsed.matches(chord.mods, chord.key))
-    });
+    //
+    // A line the chord was taken from is emptied and left where it is. Deleting it would
+    // un-ask the question the panel just answered: the `[keys]` table is a patch on the
+    // shipped bindings and an action the file does not name is an action that keeps its
+    // default, so the row would read `Unbound` until the next start and the default chord
+    // after it. The empty value is the file's way of saying unbound, and it is the only
+    // one it has — `Chord::parse` refuses it, `parse_bindings` drops the entry, and the
+    // panel's row is built from that list rather than from the table.
+    for bound in config.keys.values_mut() {
+        if Chord::parse(bound).is_ok_and(|parsed| parsed.matches(chord.mods, chord.key)) {
+            bound.clear();
+        }
+    }
     config.keys.insert(action.name().to_owned(), text);
 }
 
@@ -754,6 +764,40 @@ mod tests {
             1,
             "an action bound twice runs from whichever chord the parse reached first"
         );
+    }
+
+    #[test]
+    fn an_action_a_chord_was_taken_from_is_unbound_in_the_file_and_not_merely_absent() {
+        // The file's `[keys]` table is a patch on the defaults: an action it does not
+        // name is an action that keeps the shipped chord. So dropping the line is not
+        // taking the key away, it is taking it away until the next start — the panel says
+        // `Unbound`, the user restarts, and the action they took the key from is holding
+        // a chord again. The line has to stay and say nothing.
+        let mut config = config();
+        let chord = Chord::parse("Ctrl+Shift+W").expect("a parseable chord");
+        bind(&mut config, Action::Find, chord);
+
+        assert_eq!(
+            config.keys.get("close-tab").map(String::as_str),
+            Some(""),
+            "the displaced action was dropped from the table rather than emptied"
+        );
+        assert_eq!(
+            config.keys.get("find").map(String::as_str),
+            Some("Ctrl+Shift+W")
+        );
+        // And the panel the user is looking at says the same thing the file will.
+        let shown = lines(&config, &parse_bindings(&config));
+        let row = shown
+            .iter()
+            .find_map(|line| match line {
+                Line::Setting(setting) if setting.id == Id::Binding(Action::CloseTab) => {
+                    Some(setting.value.clone())
+                }
+                _ => None,
+            })
+            .expect("the panel has a row for every action");
+        assert_eq!(row, "Unbound");
     }
 
     #[test]
