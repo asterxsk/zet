@@ -342,6 +342,57 @@ position = \"left\"
 }
 
 #[test]
+fn a_save_leaves_nothing_beside_the_file_it_wrote() {
+    // The save goes through a temporary beside the destination and renames it into
+    // place, so that a crash halfway through the write cannot leave a half-written
+    // `config.toml` where a working one was. The rename is what the operating system
+    // guarantees and this test cannot watch it happen; what it can watch is the litter,
+    // which is the other half of the same decision and the half that would otherwise
+    // quietly accumulate in the user's configuration directory.
+    let dir = scratch("no-litter");
+    let path = dir.join("config.toml");
+    save(&Config::default(), &path).expect("saves");
+    save(&Config::default(), &path).expect("saves again");
+
+    let mut names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("the scratch directory is readable")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, ["config.toml"]);
+}
+
+#[test]
+fn a_save_keeps_the_spelling_of_a_float() {
+    // Every float in this schema is an `f32` and TOML's only float is an `f64`, so a
+    // save that serialized the value and then compared it against the file's would find
+    // every float different at every leaf and rewrite each one with the widened number:
+    // `0.9` becomes `0.8999999761581421`, and a terminal that reformats settings nobody
+    // touched is one the user stops hand-editing.
+    let dir = scratch("float-spelling");
+    let mut config = Config::default();
+    config.window.opacity = 0.9;
+
+    let fresh = dir.join("fresh.toml");
+    save(&config, &fresh).expect("saves");
+    let text = read(&fresh);
+    assert!(text.contains("\nopacity = 0.9\n"), "{text}");
+
+    // And over a file that already spells it the same way, which is where a comparison
+    // against the widened value is what would decide the line had changed.
+    let hand = write(&dir, "hand.toml", "[window]\nopacity = 0.9\n");
+    save(&config, &hand).expect("saves");
+    let text = read(&hand);
+    assert!(text.contains("\nopacity = 0.9\n"), "{text}");
+}
+
+#[test]
 fn a_missing_file_loads_as_defaults_without_complaining() {
     let dir = scratch("missing");
     let loaded = load(&dir.join("config.toml")).expect("loads");

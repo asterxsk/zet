@@ -305,6 +305,37 @@ pub const MIN_FONT_SIZE: f32 = 4.0;
 /// The largest the grid font may be set to, in points.
 pub const MAX_FONT_SIZE: f32 = 72.0;
 
+/// The range `appearance.text-scale` may be set to.
+///
+/// Written down once for the same reason as the font's, and it was not: the schema
+/// checked a literal range and the window scaled the grid by whatever the file said.
+/// `0.0` is not in the range and is not outside it either — it is the value that means
+/// "follow the system" — which is why the check for it is a case of its own.
+pub const MIN_TEXT_SCALE: f32 = 0.5;
+
+/// The largest the text scale may be set to.
+pub const MAX_TEXT_SCALE: f32 = 3.0;
+
+/// One of the configuration's numbers, inside its range, or `fallback` if it cannot be.
+///
+/// The loader reports an out-of-range value rather than replacing it, and the code that
+/// *uses* the value is what brings it into range — which is the design, and `f32::clamp`
+/// is not enough to be that code: it answers NaN for NaN. `nan` is a float TOML can
+/// spell, so a config file can hold one, and NaN then travels through every range in the
+/// schema untouched until the font loader refuses it and the window never opens. A file
+/// the app has already reported as repaired must not be a file that stops it starting.
+///
+/// NaN takes the fallback rather than the floor because it is not a very small number:
+/// a font size that is not a number is not a request for a four-point font.
+#[must_use]
+pub fn clamp_or(value: f32, low: f32, high: f32, fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(low, high)
+    } else {
+        fallback
+    }
+}
+
 impl Default for CursorSettings {
     fn default() -> Self {
         Self {
@@ -591,9 +622,11 @@ fn check(config: &Config, diagnostics: &mut Vec<Diagnostic>) {
             config.cursor.thickness
         )));
     }
-    if config.appearance.text_scale != 0.0 && !(0.5..=3.0).contains(&config.appearance.text_scale) {
+    if config.appearance.text_scale != 0.0
+        && !(MIN_TEXT_SCALE..=MAX_TEXT_SCALE).contains(&config.appearance.text_scale)
+    {
         diagnostics.push(Diagnostic::error(format!(
-            "appearance.text-scale = {} is outside 0.5 to 3.0",
+            "appearance.text-scale = {} is outside {MIN_TEXT_SCALE} to {MAX_TEXT_SCALE}",
             config.appearance.text_scale
         )));
     }
@@ -666,16 +699,24 @@ pub fn repaired(config: &Config) -> Config {
     if theme::by_slug(&fixed.theme).is_none() {
         fixed.theme = defaults.theme;
     }
+    // A range test rather than a clamp, so that a size outside the range lands on the
+    // default the diagnostic named rather than on the end it was nearest. NaN fails it
+    // too, which is what `clamp` would not have done.
     if !(MIN_FONT_SIZE..=MAX_FONT_SIZE).contains(&fixed.font.size) {
         fixed.font.size = defaults.font.size;
     }
-    fixed.window.opacity = fixed.window.opacity.clamp(0.0, 1.0);
+    fixed.window.opacity = clamp_or(fixed.window.opacity, 0.0, 1.0, defaults.window.opacity);
     fixed.cursor.thickness = fixed
         .cursor
         .thickness
         .clamp(MIN_CURSOR_THICKNESS, MAX_CURSOR_THICKNESS);
     if fixed.appearance.text_scale != 0.0 {
-        fixed.appearance.text_scale = fixed.appearance.text_scale.clamp(0.5, 3.0);
+        fixed.appearance.text_scale = clamp_or(
+            fixed.appearance.text_scale,
+            MIN_TEXT_SCALE,
+            MAX_TEXT_SCALE,
+            defaults.appearance.text_scale,
+        );
     }
     if let Background::Image { path, .. } = &fixed.window.background
         && !path.exists()
@@ -721,9 +762,39 @@ pub fn save(config: &Config, path: &Path) -> Result<(), ConfigError> {
             source,
         })?;
     }
-    std::fs::write(path, text).map_err(|source| ConfigError::Io {
-        path: path.to_path_buf(),
+    write_in_place_of(path, &text)
+}
+
+/// Write `text` to a temporary file beside `path` and then move it onto `path`.
+///
+/// A plain write truncates the destination and then fills it, and a save is called on
+/// every edit in the settings panel, so the window in which `config.toml` holds half of
+/// what it held is a window a user can land in — a crash, a full disk, a window closed
+/// while the panel is open. The file it lands in is the one file in this program a user
+/// is expected to hand-edit, and a truncated one is not a file that can be repaired by
+/// hand: `load` reports it as unparseable and the app starts on the defaults.
+///
+/// A rename over the target is atomic on one volume, which is why the temporary is a
+/// sibling of the destination rather than in a scratch directory somewhere else. The
+/// guarantee is the whole of the point: the file holds the old document or the new one,
+/// never a piece of each.
+///
+/// The name carries the process id because a second window has its own settings panel and
+/// its own save, and two saves sharing one temporary file is two writers to one buffer.
+fn write_in_place_of(path: &Path, text: &str) -> Result<(), ConfigError> {
+    let temporary = path.with_extension(format!("{}.new", std::process::id()));
+    std::fs::write(&temporary, text).map_err(|source| ConfigError::Io {
+        path: temporary.clone(),
         source,
+    })?;
+    std::fs::rename(&temporary, path).map_err(|source| {
+        // The temporary is this function's litter, and a rename that did not happen is
+        // no reason to leave it beside a file the user is looking at.
+        let _ = std::fs::remove_file(&temporary);
+        ConfigError::Io {
+            path: path.to_path_buf(),
+            source,
+        }
     })
 }
 
@@ -733,22 +804,89 @@ fn render(config: &Config, existing: &str) -> Result<String, ConfigError> {
         path: PathBuf::new(),
         message: error.to_string(),
     })?;
+    // What this program writes, before it is merged into anything. Narrowing here rather
+    // than at either exit is what lets `merge` compare the number the writer means
+    // against the number already in the file: a widened float is a different value to a
+    // comparison even where it is the same number, so the comparison would find every
+    // float changed and rewrite every one of them.
+    let Ok(mut fresh) = text.parse::<toml_edit::DocumentMut>() else {
+        return Ok(text);
+    };
+    narrow_floats(fresh.as_table_mut());
     // A file that is not TOML is replaced rather than merged, and so is a file that is
     // TOML but somehow unreadable as a document. Refusing to save would leave the
     // settings panel and the file permanently out of step, and the parse error is
     // reported separately through `load`, where the user can see it.
     if existing.trim().is_empty() {
-        return Ok(text);
+        return Ok(fresh.to_string());
     }
     let Ok(mut document) = existing.parse::<toml_edit::DocumentMut>() else {
-        return Ok(text);
-    };
-    let Ok(fresh) = text.parse::<toml_edit::DocumentMut>() else {
-        return Ok(text);
+        return Ok(fresh.to_string());
     };
     merge(document.as_table_mut(), fresh.as_table());
     prune(document.as_table_mut(), fresh.as_table());
     Ok(document.to_string())
+}
+
+/// Write every float in a freshly serialized document in the shortest spelling of the
+/// `f32` it came from.
+///
+/// Every float in this schema is an `f32` — a font size, a text scale, an angle, a
+/// background opacity — and TOML's one float is an `f64`, so serializing widens each of
+/// them and `toml_edit` writes the widened value out in full. `0.9` is the number a user
+/// typed and `0.8999999761581421` is what a save would leave in its place: the same
+/// number, spelled as a rounding error, in a file the whole point of which is that it can
+/// be hand-edited. Rust's `Debug` for `f32` is the shortest string that reads back as the
+/// same `f32`, which is the spelling to write.
+fn narrow_floats(table: &mut toml_edit::Table) {
+    for (_, item) in table.iter_mut() {
+        match item {
+            toml_edit::Item::Table(table) => narrow_floats(table),
+            toml_edit::Item::Value(value) => narrow_value(value),
+            _ => {}
+        }
+    }
+}
+
+/// [`narrow_floats`] for one value, which may hold a float or a collection of them.
+///
+/// The narrowing is a truncating cast and the comparison around it is exact on purpose,
+/// which are the two things `clippy` objects to here. Neither is an accident: the cast is
+/// the question being asked — *is this number one an `f32` could have held?* — and an
+/// approximate comparison would answer it about a number that is not the one in the file.
+#[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+fn narrow_value(value: &mut toml_edit::Value) {
+    use toml_edit::Value;
+    match value {
+        Value::Float(float) => {
+            let narrow = *float.value() as f32;
+            // Without this the shortening would also reach a float a program other than
+            // this one wrote at a precision an `f32` cannot hold, and quietly round it.
+            if f64::from(narrow) != *float.value() {
+                return;
+            }
+            let Ok(parsed) = format!("{narrow:?}").parse::<Value>() else {
+                return;
+            };
+            // The prefix is the whitespace before the value and the suffix is where an
+            // inline comment on it would be; a replacement that dropped them would run
+            // the key into its value.
+            let decor = value.decor().clone();
+            *value = parsed;
+            *value.decor_mut() = decor;
+        }
+        Value::Array(array) => {
+            for value in array.iter_mut() {
+                narrow_value(value);
+            }
+        }
+        Value::InlineTable(table) => {
+            for (_, value) in table.iter_mut() {
+                narrow_value(value);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Copy every leaf of `fresh` into `document`, keeping comments on the way.
