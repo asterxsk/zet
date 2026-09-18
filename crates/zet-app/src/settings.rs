@@ -348,7 +348,20 @@ pub fn adjust(config: &mut Config, id: Id, back: bool, families: &[String]) -> E
 /// where the user is standing, which is the only place it can be undone.
 pub fn bind(config: &mut Config, action: Action, chord: Chord) {
     let text = chord.to_string();
-    config.keys.retain(|_, bound| *bound != text);
+    // Parsed and compared as a keystroke rather than as text. One key has more than
+    // one spelling — `Chord::parse` reads case and modifier order freely, and the
+    // punctuation shift moves is one keystroke under two names — so a comparison of
+    // strings leaves every other spelling in the file and one chord ends up running
+    // two actions, resolved by whichever key the map reached first and shown in the
+    // panel as both of them bound. `matches` is the crate's own answer to "is this the
+    // same keystroke", and it is the one the keymap is dispatched through, so a chord
+    // this takes away is exactly a chord that would have fired it.
+    //
+    // A line that does not parse at all is kept. It is already reported, and deleting
+    // a user's line is not what pressing a key in the panel asked for.
+    config.keys.retain(|_, bound| {
+        Chord::parse(bound).map_or(true, |parsed| !parsed.matches(chord.mods, chord.key))
+    });
     config.keys.insert(action.name().to_owned(), text);
 }
 
@@ -654,6 +667,46 @@ mod tests {
             1,
             "an action bound twice runs from whichever chord the parse reached first"
         );
+    }
+
+    #[test]
+    fn binding_a_chord_takes_it_off_a_line_spelled_differently() {
+        // The file is hand-editable and a chord has more than one spelling. The copy
+        // entry below names the same chord the panel is about to bind, so the paste
+        // entry has to take it: leaving both in place gives one chord two actions, and
+        // which of them runs is decided by the order of a map rather than by the user.
+        // Three spellings of two keystrokes: the letter's case, the order of the
+        // modifiers, and the punctuation the comma key produces under shift. Each is
+        // the keystroke the panel is about to bind — `Chord::matches` says so and the
+        // keymap dispatches on it — and each has to lose the entry.
+        for (spelling, chosen) in [
+            ("ctrl+shift+p", "Ctrl+Shift+P"),
+            ("Shift+Ctrl+P", "Ctrl+Shift+P"),
+            ("Ctrl+Shift+Comma", "Ctrl+Shift+<"),
+        ] {
+            let mut config = config();
+            let chord = Chord::parse(chosen).expect("a parseable chord");
+            config.keys.insert("copy".into(), spelling.into());
+            bind(&mut config, Action::Paste, chord);
+
+            let bound = parse_bindings(&config);
+            let mine: Vec<Action> = bound
+                .iter()
+                .filter(|(c, _)| *c == chord)
+                .map(|(_, a)| *a)
+                .collect();
+            assert_eq!(
+                mine,
+                vec![Action::Paste],
+                "`copy = \"{spelling}\"` and `paste = \"{chosen}\"` are one keystroke, \
+                 and both of them were left in the file"
+            );
+            assert_eq!(
+                bound.iter().filter(|(_, a)| *a == Action::Copy).count(),
+                0,
+                "copy was left holding the chord the panel just gave to paste"
+            );
+        }
     }
 
     #[test]
