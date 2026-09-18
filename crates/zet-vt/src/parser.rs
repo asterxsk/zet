@@ -343,6 +343,26 @@ impl Parser {
 
     /// Feed one byte to the parser.
     pub fn advance<P: Perform>(&mut self, byte: u8, perform: &mut P) {
+        // `CAN` and `SUB` abandon whatever sequence is in progress, which is the VT500
+        // parser's rule for every sequence state rather than for ground alone. The
+        // reason is practical: a program whose output was cut off in the middle of a
+        // sequence — a crash inside `CSI 38;2;…m`, a write that failed halfway — can
+        // write a `CAN` and be sure the rest of its output is read as text. Without
+        // this the parameters stay in the parser and the next byte that happens to look
+        // like a final byte applies them: a deleted window's half-sent colour would
+        // land on whatever the next program printed.
+        //
+        // Ground is left to the arm below, where the byte is executed like any other
+        // control, and `Utf8` to the decoder's own resynchronisation, because a partial
+        // character is not a sequence a control byte can abort.
+        if matches!(byte, 0x18 | 0x1a) && !matches!(self.state, State::Ground | State::Utf8) {
+            perform.execute(byte);
+            self.state = State::Ground;
+            self.clear_sequence();
+            self.osc.clear();
+            self.osc_truncated = false;
+            return;
+        }
         // Most bytes are consumed by the arm that receives them. The exception is the
         // `ESC` that turns out not to terminate a string, which has to be handed back to
         // the escape state along with the byte after it.
@@ -996,6 +1016,61 @@ mod tests {
         assert_eq!(r.executed, vec![0x07]);
         assert_eq!(r.csi[0].3, 'm');
         assert_eq!(r.csi[0].0, vec![vec![1], vec![0]]);
+    }
+
+    #[test]
+    fn a_can_abandons_the_sequence_it_interrupts() {
+        // A program whose write was cut off mid-sequence — a crash inside a colour
+        // selection, a pipe closed halfway — can write a `CAN` and be sure the rest of
+        // its output is read as text. Keeping the half-parsed parameters instead means
+        // the next byte that looks like a final byte applies them, so a dead window's
+        // colour lands on whatever the next program prints.
+        let r = parse(b"\x1b[38;2;25\x18m");
+        assert!(
+            r.csi.is_empty(),
+            "the abandoned sequence was applied anyway"
+        );
+        assert_eq!(r.printed, "m");
+        assert_eq!(r.executed, vec![0x18]);
+
+        // `SUB` is the same abort, and the shape of the sequence does not matter: a
+        // private marker, an intermediate and a sub-parameter all go with it.
+        let r = parse(b"\x1b[?1049\x1a\x1b[1;2$p");
+        assert_eq!(r.csi.len(), 1, "only the sequence that finished counts");
+        assert_eq!(r.csi[0].3, 'p');
+        assert_eq!(r.csi[0].0, vec![vec![1], vec![2]]);
+        assert_eq!(r.executed, vec![0x1a]);
+    }
+
+    #[test]
+    fn a_can_in_ground_is_executed_like_any_other_control() {
+        // There is no sequence to abandon, and the byte still reaches the terminal.
+        // Swallowing it here would be the same mistake as swallowing it inside a
+        // sequence, one branch further along.
+        let r = parse(b"a\x18b\x1ac");
+        assert_eq!(r.printed, "abc");
+        assert_eq!(r.executed, vec![0x18, 0x1a]);
+    }
+
+    #[test]
+    fn a_can_abandons_dcs_and_osc_too() {
+        let r = parse(b"\x1b]0;a title\x18x");
+        assert!(
+            r.osc.is_empty(),
+            "the abandoned title was dispatched anyway"
+        );
+        assert_eq!(r.printed, "x");
+
+        // A device control string is hooked when its final byte arrives, so the hook
+        // has already happened by the time the abort lands; what the abort takes away
+        // is the payload after it, which is the half that was still being written.
+        let r = parse(b"\x1bPq\x1a y");
+        assert_eq!(r.dcs.len(), 1);
+        assert!(
+            r.dcs[0].1.is_empty(),
+            "the abandoned payload was passed through"
+        );
+        assert_eq!(r.printed, " y");
     }
 
     #[test]
