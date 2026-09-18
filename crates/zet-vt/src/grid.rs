@@ -595,17 +595,23 @@ impl Grid {
             rebuilt.push(chunk);
         }
 
-        // Anchor the bottom of the screen to the bottom of the content, then pull the
-        // window up if the cursor would land off the top.
+        // Anchor the bottom of the screen to the bottom of the content, and never let
+        // the window be pulled off that anchor.
+        //
+        // Pulling it up to keep the cursor on screen is the obvious thing and it loses
+        // text: the cursor reflows above the top of the new screen exactly when the
+        // content grew below it, so following the cursor puts the screen's last row
+        // short of the content's end, and every row in between is dropped — the
+        // scrollback was already cut at the anchor and holds nothing below it, so there
+        // is no copy left to restore from. The cursor is clamped into the screen a few
+        // lines down instead, which is a cursor drawn on the wrong row until the program
+        // writes again, and a terminal's own screen is not the place to lose a program's
+        // output for.
         let total = rebuilt.len();
-        let mut start = total.saturating_sub(self.rows);
-        if cursor_new_row < start {
-            start = cursor_new_row;
-        }
-        let screen_end = (start + self.rows).min(total);
+        let start = total.saturating_sub(self.rows);
 
         self.scrollback = rebuilt[..start].iter().cloned().collect();
-        self.screen = rebuilt[start..screen_end].to_vec();
+        self.screen = rebuilt[start..].to_vec();
         while self.screen.len() < self.rows {
             self.screen.push(Row::blank(new_cols));
         }
@@ -953,6 +959,41 @@ mod tests {
             'n',
             "the cursor must still be on the character it was on"
         );
+    }
+
+    #[test]
+    fn a_narrowing_reflow_keeps_the_rows_that_would_fall_below_the_screen() {
+        // A cursor homed to the top of a full screen is what makes a reflow pull the
+        // window up. Allowed past the bottom anchor, that pull puts the last row of the
+        // screen above the end of the content, and the rows between there and the end
+        // are dropped from the screen without ever reaching the scrollback — from where
+        // nothing can bring them back, because nothing else holds a copy.
+        let mut g = Grid::new(20, 6);
+        for row in 0..5 {
+            write(&mut g, row, 0, &format!("line{row}"));
+        }
+        let mut cursor = Pos::new(0, 0);
+        g.resize(4, 6, &mut cursor);
+
+        let mut all = String::new();
+        for index in 0..g.total_rows() {
+            let Some(row) = g.row_from_history(index) else {
+                continue;
+            };
+            // No separator between rows, because there is none on the screen: a logical
+            // line that was wrapped is a run of characters that ends at the right margin
+            // and continues on the next row, and it is the characters being present that
+            // this is asking about.
+            for col in 0..g.cols() {
+                all.push(row.get(col).ch);
+            }
+        }
+        for row in 0..5 {
+            assert!(
+                all.contains(&format!("line{row}")),
+                "line{row} is nowhere in the history: {all:?}"
+            );
+        }
     }
 
     #[test]

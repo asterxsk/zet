@@ -566,8 +566,17 @@ impl App {
     /// way: a child that will not die is not a reason to leave a tab the user asked to
     /// be rid of.
     pub fn close_tab(&mut self, number: u32) -> Result<bool, SessionError> {
+        let was_active = self.sessions.active() == Some(number);
         let result = self.sessions.close(number);
         self.drag = None;
+        if was_active {
+            // Closing the tab that was showing is a tab switch, whether or not the user
+            // asked for one: the strip slides another tab into the gap, and the match
+            // list, the count and the marks all belong to the terminal that just went.
+            // Closing a tab showing a different one moves nothing under the query and is
+            // not a reason to search again.
+            self.find.touch();
+        }
         result.map(|()| self.sessions.is_empty())
     }
 
@@ -595,7 +604,16 @@ impl App {
     /// shows what a program printed on its way out, and the user is the one who decides
     /// the output has been read.
     pub fn reap(&mut self) -> Vec<u32> {
-        self.sessions.reap()
+        let active = self.sessions.active();
+        let reaped = self.sessions.reap();
+        if active.is_some_and(|number| reaped.contains(&number)) {
+            // The same door as `close_tab`, and not the one `pump` already covers: an
+            // exiting shell usually prints, and `pump` touches the bar for that, but a
+            // shell that exits saying nothing does not, and the tab going is on its own
+            // enough to leave the matches sitting over a different terminal.
+            self.find.touch();
+        }
+        reaped
     }
 
     // ---------------------------------------------------------------------------
@@ -1138,10 +1156,17 @@ impl App {
 
     /// Tell every session how big the grid is.
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        let resized_any = !self.sessions.is_empty();
         for number in self.sessions.numbers() {
             if let Some(session) = self.sessions.get_mut(number) {
                 let _ = session.resize(cols, rows);
             }
+        }
+        if resized_any {
+            // A resize re-wraps every logical line, so rows move and the positions the
+            // bar found are positions in a grid that no longer exists. A resize with
+            // nothing open changes nothing to have found anything in.
+            self.find.touch();
         }
     }
 
@@ -2009,6 +2034,113 @@ mod tests {
             app.find.is_stale(),
             "the matches and the count are the previous terminal's"
         );
+    }
+
+    #[test]
+    fn closing_a_tab_throws_the_find_results_away_too() {
+        // The same event as a tab switch, through the other door: the matches are
+        // positions in the history of the terminal that just went away, and `find_marks`
+        // paints them by row onto whatever is active now. A highlight and a "1 of 1" over
+        // a terminal that never contained the query is the thing the switch guard exists
+        // to prevent, and closing the tab reaches the same state without going through it.
+        let mut app = app();
+        let _first = app.open_tab(80, 24).expect("a shell starts");
+        let second = app.open_tab(80, 24).expect("a shell starts");
+        let mut app = settled_find(app);
+        assert_eq!(app.active_number(), Some(second), "the bar is over this one");
+
+        let _ = app.close_tab(second);
+
+        assert!(
+            app.find.is_stale(),
+            "the matches belong to the tab that closed"
+        );
+    }
+
+    #[test]
+    fn closing_a_tab_the_user_is_not_looking_at_leaves_the_find_alone() {
+        // The other half of the rule above, and the reason `close_tab` asks which tab
+        // went rather than touching the bar for every close: a tab in the background is
+        // not the grid the marks were found in, and searching the whole history again
+        // because a tab somewhere else was closed is work with nothing behind it.
+        let mut app = app();
+        let first = app.open_tab(80, 24).expect("a shell starts");
+        let second = app.open_tab(80, 24).expect("a shell starts");
+        let mut app = settled_find(app);
+        assert_eq!(app.active_number(), Some(second));
+
+        let _ = app.close_tab(first);
+
+        assert!(
+            !app.find.is_stale(),
+            "the terminal under the query did not move"
+        );
+    }
+
+    #[test]
+    fn a_reaped_tab_throws_the_find_results_away_as_well() {
+        // The third door: a shell that exits is removed by the host's reap, and the tab
+        // that becomes active is not the one the match list was built from.
+        let mut app = app();
+        let _first = app.open_tab(80, 24).expect("a shell starts");
+        let _second = app.open_tab(80, 24).expect("a shell starts");
+        let mut app = settled_find(app);
+
+        app.active()
+            .expect("a tab is open")
+            .write(b"exit\r\n")
+            .expect("the shell is told to go");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut reaped = Vec::new();
+        while reaped.is_empty() {
+            app.pump();
+            // Settle the bar again every time round, because the shell echoing the
+            // command it is given is output, and `pump` is right to touch the bar for
+            // it. Without this the assertion below would be reading the echo's touch
+            // rather than reap's, and would pass on a `reap` that had done nothing.
+            app = settled_find(app);
+            reaped = app.reap();
+            assert!(Instant::now() < deadline, "the shell never exited");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            app.find.is_stale(),
+            "the grid under the query went with the tab"
+        );
+    }
+
+    #[test]
+    fn a_resize_throws_the_find_results_away_as_well() {
+        // And the fourth: a narrowing resize re-splits every logical line, so every row
+        // below one that changed shape moves and the positions the bar is holding are
+        // positions in a grid that no longer exists.
+        let mut app = app();
+        let _ = app.open_tab(80, 24).expect("a shell starts");
+        let mut app = settled_find(app);
+
+        app.resize(40, 24);
+
+        assert!(
+            app.find.is_stale(),
+            "every row below a re-wrapped line has moved"
+        );
+    }
+
+    /// An app with the find bar open, a query typed, and one search run over a grid the
+    /// test owns.
+    ///
+    /// A local grid for the reason `a_tab_switch_throws_the_find_results_away` gives: the
+    /// bar is being driven directly, and a shell that prints on demand is a race.
+    fn settled_find(mut app: App) -> App {
+        app.find.open();
+        app.find.push('a');
+        let mut term = zet_vt::Term::new(20, 4);
+        let mut parser = zet_vt::Parser::new();
+        parser.advance_slice(b"alpha", &mut term);
+        app.find.search(term.grid(), 0);
+        assert!(!app.find.is_stale(), "a search settles the bar");
+        app
     }
 
     #[test]

@@ -213,16 +213,20 @@ impl Row {
             return 0;
         }
 
+        if width == 2 && col + 1 >= cols {
+            // A wide character does not fit in the last column. Terminals drop it rather
+            // than splitting it, and the cursor does not advance. Decided before
+            // anything is cleared, because a write that draws nothing must not take the
+            // character already in that cell with it: clearing the cell the new
+            // character landed on is right for a write that happens and wrong for one
+            // that does not.
+            return 0;
+        }
+
         // Clear whichever half of a wide character this write lands on, and its partner.
         self.clear_wide_partner(cols, col);
         if width == 2 {
-            if col + 1 < cols {
-                self.clear_wide_partner(cols, col + 1);
-            } else {
-                // A wide character does not fit in the last column. Terminals drop it
-                // rather than splitting it, and the cursor does not advance.
-                return 0;
-            }
+            self.clear_wide_partner(cols, col + 1);
         }
 
         {
@@ -389,6 +393,24 @@ mod tests {
             "a wide character must not be split across the edge"
         );
         assert_eq!(row.get(3).ch, ' ');
+    }
+
+    #[test]
+    fn a_wide_character_that_does_not_fit_leaves_what_is_there_alone() {
+        // The write draws nothing, so it must not take anything with it. Clearing the
+        // cell it landed on before deciding it cannot be drawn is how a double-width
+        // character at the last column is destroyed by a keystroke that never appeared
+        // on screen.
+        let mut row = Row::new(6);
+        write(&mut row, 6, 4, '\u{4e2d}', 2);
+        assert!(row.get(4).flags.contains(CellFlags::WIDE_CHAR));
+
+        let used = write(&mut row, 6, 5, '\u{8a9e}', 2);
+
+        assert_eq!(used, 0, "a wide character cannot start in the last column");
+        assert_eq!(row.get(4).ch, '\u{4e2d}', "the character already there");
+        assert!(row.get(4).flags.contains(CellFlags::WIDE_CHAR));
+        assert!(row.get(5).is_wide_spacer());
     }
 
     #[test]

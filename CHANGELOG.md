@@ -305,6 +305,56 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-vt`** — two edits that lost text a program had already written.
+  - A narrowing reflow anchored the screen by pulling the viewport up until the cursor was inside
+    it. That pull is the bug: the cursor reflows above the top of the new screen exactly when the
+    content grew below it, so following the cursor left the screen's last row short of the content's
+    end, and every row in between went — the scrollback had already been cut at the anchor and held
+    nothing below it, so there was no copy left to restore from. The screen is anchored to the
+    bottom of the rebuilt content and nothing moves it; the cursor is clamped into the screen a few
+    lines down instead. A cursor drawn on the wrong row until the program writes again is something
+    a terminal recovers from, and a dropped line of a program's output is not.
+  - `Row::write_at` cleared the cell a wide character landed on before checking whether the
+    character fit there. In the last column it does not — terminals drop it rather than splitting
+    it, and the cursor stays where it was — so the write drew nothing and took the character already
+    in that cell with it. The check comes first now, and a write that draws nothing leaves the row
+    as it found it.
+- **`zet-input`** — four keys whose bytes on the wire were not the bytes the key means.
+  - Ctrl+Backspace sent `0x7f`, the DEL that a bare Backspace sends. Every terminal that has one
+    sends `0x08`, the C0 byte the chord has produced since the PC keyboard put Backspace under that
+    row, and both the protocol's C0 table and its legacy-control table say so. A program binding
+    `<C-Backspace>` apart from Backspace was handed one byte for two keystrokes, and the one it
+    could not see was the one with the modifier on it.
+  - `control_byte` knew `@`, `[`, `\`, `]`, `^`, `_`, `?` and the letters, and nothing about the
+    digits above them on the same keyboard. `Ctrl+2` through `Ctrl+8` take the control code of the
+    symbol above the digit — which is where `Ctrl+2` being NUL comes from — and `Ctrl+/` is `Ctrl+_`
+    beside it and `Ctrl+~` is `Ctrl+^`. `0`, `1` and `9` have nothing above them and are left to the
+    fallback, which is what the protocol does with every key its table does not list.
+  - Kitty's event-type reporting was applied to keys that have no event to report. A key whose press
+    goes out as text has no events at all, and Enter, Tab and Backspace have no release events
+    unless every key is being reported as an escape code — the exception exists so that a user can
+    still type `reset` at a prompt after a program that set the mode died without clearing it, and
+    turning their release into a sequence is the one thing it is there to prevent. Their repeats
+    still go as bytes, because a repeat is a press to anything reading them.
+  - The X10 mouse form wrote its button field as a wide character where the form spends one byte per
+    field. A parser reading it takes the next three bytes whatever they are, so a thumb button —
+    the one code that does not fit in seven bits — arrived as two bytes of UTF-8 and put the reader
+    two bytes ahead: the button read as `0xc2`, the column read as the row, and every report after
+    it was read wrong.
+- **`zet-app`** — the find bar's matches survived the grid under them being replaced.
+  - The marks are painted by row and the count is a count of positions, both built from the
+    terminal that was active when the search ran. Three things replace that terminal without going
+    through `activate`, which is the one place that knew to throw the list away: closing the active
+    tab, reaping a shell that exited, and resizing. In all three the bar went on showing a highlight
+    and a `1 of 1` over a terminal that had never contained the query.
+  - `pump` already touches the bar whenever a drain reports damage, which covers the common case of
+    a reaped tab by accident — a shell that echoes the `exit` it was given has printed, and printing
+    is what `pump` watches for. A shell that exits saying nothing is not covered, which is why the
+    fix is at `reap` rather than left to the drain.
+  - Closing or reaping a tab the user is *not* looking at does not touch the bar, because the
+    terminal under the query did not move and searching the whole history again for that is work
+    with nothing behind it. Both rules have a test, so the pair stays a decision rather than
+    drifting into whichever one was written first.
 - **docs** — a promise wider than the schema, and two comments describing work nobody did.
   - PRODUCT.md listed "font color, background color" among the things a user can change and there
     is no key for either, in the schema, in the key table, or in the settings panel. Both follow

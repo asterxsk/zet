@@ -292,6 +292,7 @@ fn literal(key: Key, held: Modifiers, modes: &Modes) -> Option<Vec<u8>> {
     }
     match key {
         Key::Enter => Some(vec![if modes.newline { b'\n' } else { b'\r' }]),
+        Key::Backspace if held.contains(Modifiers::CTRL) => Some(vec![0x08]),
         Key::Backspace => Some(vec![0x7f]),
         Key::Escape => Some(vec![ESC]),
         Key::Tab => Some(vec![b'\t']),
@@ -301,24 +302,29 @@ fn literal(key: Key, held: Modifiers, modes: &Modes) -> Option<Vec<u8>> {
 
 /// The control byte for a character, if it has one.
 ///
-/// Ctrl+A through Ctrl+Z are the letters' positions in the alphabet, and the
-/// punctuation is the ASCII control range an ordinary terminal keyboard can still
-/// reach: `@` and Space are NUL, `[` `\` `]` `^` `_` are 0x1b through 0x1f, and `?`
-/// is DEL, which is why Backspace and Ctrl+? are the same byte on the wire and why a
-/// terminal that maps Backspace to 0x08 breaks both.
+/// Ctrl+A through Ctrl+Z are the letters' positions in the alphabet, and the rest is
+/// the table the protocol gives for the ASCII keys a PC keyboard can reach: `@` and
+/// Space are NUL, `[` `\` `]` `^` `_` are 0x1b through 0x1f, and `?` is DEL — which is
+/// why Backspace and Ctrl+? are the same byte on the wire, and why a terminal that
+/// maps Backspace to 0x08 breaks both.
+///
+/// The digits are in it because of the keyboard they come from: `Ctrl+2` is the
+/// control code of the `@` above it, and so on up to `Ctrl+8` being DEL. `0`, `1` and
+/// `9` have nothing above them and are not in the table, which is why they come out
+/// the way every key the table does not list does.
 fn control_byte(ch: char) -> Option<u8> {
     match ch {
         'a'..='z' | 'A'..='Z' => {
             let lower = u8::try_from(ch.to_ascii_lowercase()).ok()?;
             Some(lower - b'a' + 1)
         }
-        ' ' | '@' => Some(0x00),
-        '[' => Some(0x1b),
-        '\\' => Some(0x1c),
-        ']' => Some(0x1d),
-        '^' => Some(0x1e),
-        '_' => Some(0x1f),
-        '?' => Some(0x7f),
+        ' ' | '@' | '2' => Some(0x00),
+        '[' | '3' => Some(0x1b),
+        '\\' | '4' => Some(0x1c),
+        ']' | '5' => Some(0x1d),
+        '^' | '6' | '~' => Some(0x1e),
+        '_' | '7' | '/' => Some(0x1f),
+        '?' | '8' => Some(0x7f),
         _ => None,
     }
 }
@@ -388,7 +394,12 @@ fn kitty_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
     let escaped =
         all || numbered || (flags.contains(KeyboardFlags::DISAMBIGUATE) && ambiguous(event));
 
-    if !escaped && p.event.is_none() {
+    // An event type is not on its own a reason to leave the legacy encoding: the flag
+    // says an event type may be written, not that there is anywhere to write it. A key
+    // whose press goes out as text or as one of the four legacy control bytes stays
+    // there, and its event is dropped rather than turned into a sequence the program
+    // did not ask to be able to read.
+    if !escaped && (p.event.is_none() || no_events_without_a_sequence(event)) {
         return None;
     }
 
@@ -422,6 +433,25 @@ fn sequence_form(key: Key) -> bool {
             | Key::PageDown
             | Key::F(1..=12)
     )
+}
+
+/// Whether a key that is still going out in its legacy bytes has no event to report.
+///
+/// Two rules from the same place. "Key events that result in text are reported as
+/// plain UTF-8 text, so events are not supported for them, unless the application
+/// requests key report mode" — so a text key's repeat and release are nothing, and its
+/// press is the text. And "the Enter, Tab and Backspace keys will not have release
+/// events unless Report all keys as escape codes is also set", which is about the key
+/// still producing its byte after a program that set the flag has died without
+/// clearing it; their *repeats* are left alone, because a repeat is a press to
+/// anything reading the bytes and the sentence names releases only.
+///
+/// Escape is not among them, and that is not an oversight: the protocol excepts the
+/// three keys by name and no others, so an Escape going up is reported even here.
+fn no_events_without_a_sequence(event: &KeyEvent) -> bool {
+    character_of(event.key).is_some()
+        || (event.kind == KeyKind::Release
+            && matches!(event.key, Key::Enter | Key::Tab | Key::Backspace))
 }
 
 /// Whether the legacy encoding has bytes of its own for a key the protocol numbers.
@@ -679,8 +709,12 @@ pub fn encode_mouse(event: MouseEvent, modes: &Modes) -> Option<Vec<u8>> {
             out
         }
         MouseEncoding::X10 => {
+            // Three raw bytes, by definition of the form — the reason the UTF-8 branch
+            // below widens the button does not hold here, because a parser reading this
+            // one takes the next three bytes whatever they are and a widened button
+            // puts it two bytes ahead of the rest of the report.
             let mut out = vec![ESC, b'[', b'M'];
-            push_wide(&mut out, u32::from(32 + x10));
+            out.push(one_byte(u32::from(32 + x10)));
             out.push(one_byte(32 + col));
             out.push(one_byte(32 + row));
             out
@@ -933,6 +967,54 @@ mod tests {
                 "Ctrl+{ch}"
             );
         }
+    }
+
+    #[test]
+    fn the_control_codes_that_come_from_the_symbol_above_the_digit() {
+        // The half of the table a terminal is least likely to be asked about, and the
+        // place a missing arm is least likely to be noticed: the digits take the
+        // control code of the symbol above them on a PC keyboard, which is where
+        // `Ctrl+2` being NUL comes from.
+        for (ch, byte) in [
+            ('/', 0x1f),
+            ('2', 0x00),
+            ('3', 0x1b),
+            ('4', 0x1c),
+            ('5', 0x1d),
+            ('6', 0x1e),
+            ('7', 0x1f),
+            ('8', 0x7f),
+            ('~', 0x1e),
+        ] {
+            assert_eq!(
+                bytes(Key::Char(ch), Modifiers::CTRL),
+                vec![byte],
+                "Ctrl+{ch}"
+            );
+        }
+        // And the digits with nothing above them are left alone, which is what the
+        // table says for every ASCII key it does not list.
+        for ch in ['0', '1', '9'] {
+            assert_eq!(
+                text(Key::Char(ch), Modifiers::CTRL),
+                ch.to_string(),
+                "Ctrl+{ch} is not in the table"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_backspace_is_not_the_same_byte_as_backspace() {
+        // From the protocol's own C0 table. A program that binds C-Backspace apart
+        // from Backspace gets one byte for two keystrokes otherwise, and the one it
+        // cannot see is the one with a modifier on it.
+        assert_eq!(bytes(Key::Backspace, Modifiers::empty()), vec![0x7f]);
+        assert_eq!(bytes(Key::Backspace, Modifiers::CTRL), vec![0x08]);
+        assert_eq!(
+            bytes(Key::Backspace, Modifiers::CTRL | Modifiers::SHIFT),
+            vec![0x08],
+            "Shift does not change it"
+        );
     }
 
     #[test]
@@ -1433,6 +1515,30 @@ mod tests {
             )
             .unwrap(),
             b"\x1b[<20;1;1M"
+        );
+    }
+
+    #[test]
+    fn the_x10_form_spends_one_byte_per_field_even_for_a_thumb_button() {
+        // The form is three bytes after `CSI M` by definition, and a parser reading it
+        // takes the next three whatever they are. A thumb button is the one code that
+        // does not fit in seven bits, and widening it to a UTF-8 character there puts
+        // the encoder two bytes ahead of the reader: the button becomes 0xc2, the real
+        // column becomes the row, and every report after it is read wrong.
+        let modes = mouse_modes(MouseMode::Button, MouseEncoding::X10);
+        assert_eq!(
+            encode_mouse(
+                mouse(
+                    MouseButton::Back,
+                    MouseAction::Press,
+                    4,
+                    6,
+                    Modifiers::empty()
+                ),
+                &modes
+            )
+            .unwrap(),
+            b"\x1b[M\xa0\x25\x27"
         );
     }
 
@@ -2083,6 +2189,52 @@ mod tests {
     }
 
     #[test]
+    fn an_event_type_alone_does_not_move_a_key_off_its_legacy_bytes() {
+        // "The Enter, Tab and Backspace keys will not have release events unless Report
+        // all keys as escape codes is also set, so that the user can still type reset
+        // at a shell prompt when a program that sets this mode ends without resetting
+        // it." The byte is the whole point of the exception, so a release of one is
+        // nothing at all rather than a sequence a program never asked to parse.
+        let typed = || modes_with(|m| m.keyboard = KeyboardFlags::EVENT_TYPES);
+        for key in [Key::Enter, Key::Tab, Key::Backspace] {
+            assert_eq!(
+                encode_key(&with_kind(key, Modifiers::empty(), KeyKind::Release), &typed()),
+                None,
+                "{key:?} has no release event without all keys"
+            );
+        }
+
+        // And a key that produces text has no events at all: "Key events that result in
+        // text are reported as plain UTF-8 text, so events are not supported for them,
+        // unless the application requests key report mode."
+        assert_eq!(
+            encode_key(
+                &with_kind(Key::Char('a'), Modifiers::empty(), KeyKind::Release),
+                &typed()
+            ),
+            None
+        );
+        assert_eq!(
+            encode_key(
+                &with_kind(Key::Char('a'), Modifiers::empty(), KeyKind::Repeat),
+                &typed()
+            ),
+            Some(b"a".to_vec()),
+            "a repeat is a press to anything reading the bytes, and this is the byte"
+        );
+
+        // The flag is not inert for the keys it does reach: a key the protocol reports
+        // in a sequence has somewhere to write the event type, and gets it.
+        assert_eq!(
+            encode_key(
+                &with_kind(Key::Up, Modifiers::empty(), KeyKind::Release),
+                &typed()
+            ),
+            Some(b"\x1b[1;1:3A".to_vec())
+        );
+    }
+
+    #[test]
     fn the_disambiguate_flag_moves_only_the_keys_that_were_ambiguous() {
         // The five the protocol names: Escape, alt+key, ctrl+key, ctrl+alt+key, and
         // shift+alt+key. Shift alone is not among them — `A` cannot be mistaken for
@@ -2131,12 +2283,15 @@ mod tests {
         // The protocol carves these three out by name, and the reason is the shell: a
         // program that set the flag and crashed without clearing it would otherwise
         // leave a terminal whose Enter key produces no newline, and the user could not
-        // type `reset` to get out of it. So ctrl+Enter is still a carriage return.
+        // type `reset` to get out of it. So ctrl+Enter is still a carriage return —
+        // and ctrl+Backspace is the C0 table's 0x08 rather than the 0x7f a bare
+        // Backspace sends, because the protocol's table gives those two modifiers two
+        // different bytes and a program is entitled to tell them apart.
         let flags = KeyboardFlags::DISAMBIGUATE;
         for (key, want) in [
             (Key::Enter, "\r"),
             (Key::Tab, "\t"),
-            (Key::Backspace, "\u{7f}"),
+            (Key::Backspace, "\u{8}"),
         ] {
             assert_eq!(
                 kitty_bytes(&press(key, Modifiers::CTRL), flags),

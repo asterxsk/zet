@@ -448,6 +448,82 @@
 
       <h3>Fixed</h3>
 
+      <h4>zet-vt — two edits that lost text a program had already written</h4>
+
+      <ul>
+        <li>A narrowing reflow anchored the screen by pulling the viewport up until the cursor was
+        inside it. That pull is the bug: the cursor reflows above the top of the new screen exactly
+        when the content grew below it, so following the cursor left the screen's last row short of
+        the content's end, and every row in between went — the scrollback had already been cut at
+        the anchor and held nothing below it, so there was no copy left to restore from. The screen
+        is anchored to the bottom of the rebuilt content and nothing moves it; the cursor is clamped
+        into the screen a few lines down instead. A cursor drawn on the wrong row until the program
+        writes again is something a terminal recovers from, and a dropped line of a program's output
+        is not.</li>
+
+        <li><code>Row::write_at</code> cleared the cell a wide character landed on before checking
+        whether the character fit there. In the last column it does not — terminals drop it rather
+        than splitting it, and the cursor stays where it was — so the write drew nothing and took
+        the character already in that cell with it. The check comes first now, and a write that
+        draws nothing leaves the row as it found it.</li>
+      </ul>
+
+      <h4>zet-input — four keys whose bytes on the wire were not the bytes the key means</h4>
+
+      <ul>
+        <li>Ctrl+Backspace sent <code>0x7f</code>, the DEL that a bare Backspace sends. Every
+        terminal that has one sends <code>0x08</code>, the C0 byte the chord has produced since the
+        PC keyboard put Backspace under that row, and both the protocol's C0 table and its
+        legacy-control table say so. A program binding <code>&lt;C-Backspace&gt;</code> apart from
+        Backspace was handed one byte for two keystrokes, and the one it could not see was the one
+        with the modifier on it.</li>
+
+        <li><code>control_byte</code> knew <code>@</code>, <code>[</code>, <code>\</code>,
+        <code>]</code>, <code>^</code>, <code>_</code>, <code>?</code> and the letters, and nothing
+        about the digits above them on the same keyboard. <code>Ctrl+2</code> through
+        <code>Ctrl+8</code> take the control code of the symbol above the digit — which is where
+        <code>Ctrl+2</code> being NUL comes from — and <code>Ctrl+/</code> is <code>Ctrl+_</code>
+        beside it and <code>Ctrl+~</code> is <code>Ctrl+^</code>. <code>0</code>, <code>1</code> and
+        <code>9</code> have nothing above them and are left to the fallback, which is what the
+        protocol does with every key its table does not list.</li>
+
+        <li>Kitty's event-type reporting was applied to keys that have no event to report. A key
+        whose press goes out as text has no events at all, and Enter, Tab and Backspace have no
+        release events unless every key is being reported as an escape code — the exception exists
+        so that a user can still type <code>reset</code> at a prompt after a program that set the
+        mode died without clearing it, and turning their release into a sequence is the one thing it
+        is there to prevent. Their repeats still go as bytes, because a repeat is a press to
+        anything reading them.</li>
+
+        <li>The X10 mouse form wrote its button field as a wide character where the form spends one
+        byte per field. A parser reading it takes the next three bytes whatever they are, so a thumb
+        button — the one code that does not fit in seven bits — arrived as two bytes of UTF-8 and
+        put the reader two bytes ahead: the button read as <code>0xc2</code>, the column read as the
+        row, and every report after it was read wrong.</li>
+      </ul>
+
+      <h4>zet-app — the find bar's matches survived the grid under them being replaced</h4>
+
+      <ul>
+        <li>The marks are painted by row and the count is a count of positions, both built from the
+        terminal that was active when the search ran. Three things replace that terminal without
+        going through <code>activate</code>, which is the one place that knew to throw the list
+        away: closing the active tab, reaping a shell that exited, and resizing. In all three the
+        bar went on showing a highlight and a <code>1 of 1</code> over a terminal that had never
+        contained the query.</li>
+
+        <li><code>pump</code> already touches the bar whenever a drain reports damage, which covers
+        the common case of a reaped tab by accident — a shell that echoes the <code>exit</code> it
+        was given has printed, and printing is what <code>pump</code> watches for. A shell that
+        exits saying nothing is not covered, which is why the fix is at <code>reap</code> rather
+        than left to the drain.</li>
+
+        <li>Closing or reaping a tab the user is <em>not</em> looking at does not touch the bar,
+        because the terminal under the query did not move and searching the whole history again for
+        that is work with nothing behind it. Both rules have a test, so the pair stays a decision
+        rather than drifting into whichever one was written first.</li>
+      </ul>
+
       <h4>docs — a promise wider than the schema, and two comments describing work nobody did</h4>
 
       <ul>
