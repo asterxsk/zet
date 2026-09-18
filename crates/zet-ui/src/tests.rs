@@ -949,13 +949,63 @@ fn settings_lines() -> Vec<SettingLine<'static>> {
 
 /// The panel, open on a test window, drawn once.
 fn open_panel(palette: &Palette, lines: &[SettingLine<'_>]) -> (Chrome, Drawn) {
+    open_panel_at(palette, lines, None)
+}
+
+/// The panel, open with the pointer at a point.
+fn open_panel_at(
+    palette: &Palette,
+    lines: &[SettingLine<'_>],
+    pointer: Option<(f32, f32)>,
+) -> (Chrome, Drawn) {
     let tabs = tabs(&[1]);
     let mut chrome = chrome();
     let mut input = input(palette, &tabs, window());
     input.settings_open = true;
     input.settings = lines;
+    input.pointer = pointer;
     let drawn = draw(&mut chrome, &input);
     (chrome, drawn)
+}
+
+/// The rectangle of a line's control, the whole of it.
+///
+/// The union of the regions the line published rather than the first of them, because a
+/// stepper publishes one per half and a test that took the first would be measuring the
+/// left half while believing it had the control.
+fn control_rect(chrome: &Chrome, line: usize) -> Rect {
+    let mut whole: Option<Rect> = None;
+    for region in chrome.regions() {
+        let crate::Region::Setting { line: at, rect, .. } = region else {
+            continue;
+        };
+        if *at != line {
+            continue;
+        }
+        whole = Some(match whole {
+            None => *rect,
+            Some(previous) => Rect::between(
+                previous.x.min(rect.x),
+                previous.y.min(rect.y),
+                previous.right().max(rect.right()),
+                previous.bottom().max(rect.bottom()),
+            ),
+        });
+    }
+    whole.unwrap_or_else(|| panic!("line {line} has no control"))
+}
+
+/// The colour at a point: whatever was painted over it last, which is what the user sees.
+fn color_at(frame: &Frame, x: f32, y: f32) -> Option<[u32; 4]> {
+    frame
+        .quads
+        .iter()
+        .rev()
+        .find(|quad| {
+            let [qx, qy, width, height] = quad.rect;
+            x >= qx && y >= qy && x < qx + width && y < qy + height
+        })
+        .map(|quad| quad.color.map(f32::to_bits))
 }
 
 #[test]
@@ -977,6 +1027,52 @@ fn the_panel_draws_the_lines_it_is_given() {
             assert!(body.contains(&letter), "{expected} was not drawn");
         }
     }
+}
+
+#[test]
+fn the_hover_fill_covers_the_region_a_click_would_take() {
+    // DESIGN.md: "Hover fills the half a click will take." Every row's whole face is the
+    // click target, so every control but a stepper lights all of itself. Filling the
+    // left half of everything instead said a one-click control was two controls wearing
+    // one rectangle — the thing the stepper exists to be — and a click on the right
+    // half, which works, lit a region it was not in.
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, _) = open_panel(&palette, &lines);
+    let hairline = color(palette.hairline);
+
+    // Line 2 is the toggle. Its right-hand side is the click the old code lit the left
+    // half of, so that is where the pointer goes.
+    let toggle = control_rect(&chrome, 2);
+    let (tx, ty) = (toggle.right() - 4.0, toggle.center().1);
+    let (_, drawn) = open_panel_at(&palette, &lines, Some((tx, ty)));
+    assert_eq!(
+        color_at(&drawn.frame, tx, ty),
+        Some(hairline),
+        "the pointer's own half of a one-click control is not lit"
+    );
+    assert_eq!(
+        color_at(&drawn.frame, toggle.center().0 - 4.0, ty),
+        Some(hairline),
+        "a toggle is one control, so the half beside the pointer lights with it"
+    );
+    assert_eq!(
+        color_at(&drawn.frame, toggle.x + 1.0, ty),
+        Some(hairline),
+        "the whole face of a one-click control is the click target"
+    );
+
+    // Line 4 is the stepper, and the half the pointer is not in stays dark: the two
+    // halves mean opposite things, and a fill over both would say so.
+    let step = control_rect(&chrome, 4);
+    let (sx, sy) = (step.right() - 4.0, step.center().1);
+    let (_, drawn) = open_panel_at(&palette, &lines, Some((sx, sy)));
+    assert_eq!(color_at(&drawn.frame, sx, sy), Some(hairline));
+    assert_ne!(
+        color_at(&drawn.frame, step.x + 4.0, sy),
+        Some(hairline),
+        "the other half of a stepper was lit with the half under the pointer"
+    );
 }
 
 #[test]

@@ -222,20 +222,18 @@ fn draw_control(
     // mechanism applied to something that is not a surface: the panel is raised, so the
     // thing you can press is recessed into it.
     paint.fill(rect, palette.ground);
-    let hovered = match (control, input.pointer) {
-        (Control::Step, Some((x, y))) if rect.contains(x, y) => Some(x >= rect.center().0),
-        (_, Some((x, y))) if rect.contains(x, y) => Some(false),
-        _ => None,
-    };
-    if let Some(half) = hovered {
-        // A stepper is two controls wearing one rectangle, so hovering one half fills
-        // that half: with no glyphs to read, the fill is the only thing that says which
-        // half a click is about to take.
-        let lit = if half {
-            Rect::new(rect.center().0, rect.y, rect.width / 2.0, rect.height)
-        } else {
-            Rect::new(rect.x, rect.y, rect.width / 2.0, rect.height)
-        };
+    let hovered = input.pointer.is_some_and(|(x, y)| rect.contains(x, y));
+    // The fill follows the click: the region the pointer is over is lit by asking the
+    // same list the click handler is given, so the two cannot disagree about how many
+    // ways a control can be pressed. A stepper answers twice and one half lights; every
+    // other control answers once and all of itself lights, which is what its whole face
+    // being the click target means. Filling the left half of everything said a toggle
+    // was two controls wearing one rectangle, and a click on the right half — which
+    // works — lit a region it was not in.
+    if let Some((_, lit)) = parts(control, rect)
+        .into_iter()
+        .find(|(_, part)| input.pointer.is_some_and(|(x, y)| part.contains(x, y)))
+    {
         paint.fill(lit, palette.hairline);
     }
     // Three weights of the same hairline, and no fourth: the control you are on is
@@ -245,7 +243,7 @@ fn draw_control(
     // 118-pixel control would spend several times over.
     let edge = if focused {
         palette.ink
-    } else if hovered.is_some() {
+    } else if hovered {
         palette.hairline_strong
     } else {
         palette.hairline
