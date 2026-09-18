@@ -8,6 +8,22 @@
 //! renderer has to walk in order anyway, so tracking finer would cost more in bookkeeping
 //! than it saves in fill. Programs that emit a single changed cell are rare next to
 //! programs that repaint a line of status output, which is the case this is built for.
+//!
+//! # The row-level readers are waiting for a retained frame
+//!
+//! Everything here that names a *row* — [`Damage::is_dirty`], [`Damage::is_full`],
+//! [`Damage::dirty_rows`], [`Damage::bounding_rows`] — is written, tested, and called by
+//! nothing in production. The one reader the app uses is [`Damage::is_empty`], to decide
+//! whether to draw at all.
+//!
+//! That is deliberate rather than forgotten. Drawing only the rows that changed means the
+//! previous frame's rectangles have to survive, because a row omitted from a frame that
+//! is rebuilt from scratch and drawn over a cleared surface is a row that gets erased —
+//! so it needs a retained buffer and an explicit erase of wherever the cursor used to be.
+//! The renderer's grid module carries the same reasoning from the drawing side and is
+//! where that work would start. The readers are the vocabulary it will need, and they are
+//! kept rather than deleted and rewritten, because the marking discipline they read
+//! (`mark_row`, `mark_rows`, `mark_all`) is maintained by production code either way.
 
 /// The rows that changed since the last frame was drawn.
 #[derive(Clone, Debug)]

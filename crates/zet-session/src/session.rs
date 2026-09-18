@@ -386,12 +386,20 @@ impl Session {
         self.scroll_to(0);
     }
 
-    /// The rows to draw, top to bottom.
+    /// The rows on screen, top to bottom.
     ///
     /// Exactly [`Session::rows`] of them, always. Scrolled back, the top of the window
     /// comes out of the history and the live screen supplies the rest; scrolled to the
-    /// bottom, this is the live screen. A renderer is handed rows to draw and never has
-    /// to know where the history ends.
+    /// bottom, this is the live screen.
+    ///
+    /// Nothing in production calls this. The renderer does the same arithmetic inline,
+    /// because it needs each row's *position* as well as the row — a rectangle is a row
+    /// and a column — and it does not depend on this crate at all. What reads this is the
+    /// session's own tests, which is a real use and the reason it is kept.
+    ///
+    /// The doc used to end "a renderer is handed rows to draw and never has to know where
+    /// the history ends", which described a seam that was never built. Saying so is
+    /// cheaper than leaving a comment that reads as a contract.
     #[must_use]
     pub fn visible_rows(&self) -> Vec<&Row> {
         let grid = self.term.grid();

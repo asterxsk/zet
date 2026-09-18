@@ -82,10 +82,6 @@ pub struct Loaded {
     pub diagnostics: Vec<Diagnostic>,
     /// Where it was read from.
     pub path: PathBuf,
-    /// Whether the file existed. A missing file is not a diagnostic — it is a fresh
-    /// install, and the app writes the defaults out on first save rather than on
-    /// first launch.
-    pub existed: bool,
 }
 
 // ---------------------------------------------------------------------------------
@@ -550,6 +546,10 @@ pub fn default_path() -> Result<PathBuf, ConfigError> {
 /// only error is one where nothing could be read at all and the caller has to decide
 /// what to do about an unreadable directory.
 ///
+/// A file that is not there is not a diagnostic either — that is a fresh install.
+/// Reading does not create it: the defaults are written on the first save, so a user
+/// who never changes a setting has nothing to clean up.
+///
 /// # Errors
 ///
 /// Fails if the file exists and cannot be read, or if it is not valid TOML at all.
@@ -565,7 +565,6 @@ pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
         }
     };
 
-    let existed = text.is_some();
     let mut diagnostics = Vec::new();
     let config = match &text {
         None => Config::default(),
@@ -576,7 +575,6 @@ pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
         config,
         diagnostics,
         path: path.to_path_buf(),
-        existed,
     })
 }
 
@@ -593,14 +591,12 @@ pub fn load_default() -> Loaded {
                 "APPDATA is not set, so the configuration could not be read",
             )],
             path: PathBuf::new(),
-            existed: false,
         };
     };
     load(&path).unwrap_or_else(|error| Loaded {
         config: Config::default(),
         diagnostics: vec![Diagnostic::error(error.to_string())],
         path,
-        existed: true,
     })
 }
 

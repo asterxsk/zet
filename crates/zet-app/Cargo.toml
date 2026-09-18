@@ -18,6 +18,13 @@ zet-render.workspace = true
 
 thiserror.workspace = true
 
+# The numbers PRODUCT.md promises are measured rather than assumed. Its own harness,
+# because there is no benchmark crate here and a timing threshold on a shared runner
+# would be a flaky test with a longer name.
+[[bench]]
+name = "latency"
+harness = false
+
 [lints.rust]
 unsafe_code = "forbid"
 

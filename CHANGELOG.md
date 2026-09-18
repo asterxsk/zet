@@ -14,6 +14,21 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Added
 
+- **`zet-app`** — `cargo bench -p zet-app --bench latency`, because PRODUCT.md promised the latency
+  numbers were "measured rather than assumed" and nothing anywhere measured one.
+  - Three numbers, all of them zet's side of the line: cold start from `App::load` to the first
+    character on the grid, a keystroke from the event to the bytes at the pty, and output into the
+    grid in MiB/s over a megabyte of the mixed SGR and text a build log is made of. The payload is
+    built rather than read, so the number does not move with the speed of the disk it came off.
+  - Not keystroke-to-pixel, and the file says so: the last step is the present, which needs a device
+    and a window. What is here is everything before it, which is what tells a latency you feel apart
+    from the shell's.
+  - It prints and does not fail. A timing threshold on a shared runner is a flaky test with a longer
+    name, and criterion 1's 300 ms is written as a check on a real machine. CI runs it in its own
+    job on every push so a regression is visible in the log without ever gating a pull request.
+  - The first run on this machine: 253 ms to a PowerShell prompt, 0.4 µs per keystroke, 50 MiB/s.
+    Criterion 1's budget has less room in it than it looks like from the outside, which is exactly
+    the kind of thing that was invisible while nothing measured it.
 - **`zet-render` / `zet-app` / `zet`** — hyperlinks, which were parsed and then neither drawn nor
   followed.
   - `zet-vt` has stored every OSC 8 target since the sequence was implemented, `Cell::link` has
@@ -253,6 +268,14 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Removed
 
+- **`zet-config`** — `Loaded.existed`, the fifth public item nothing called. The loader set it in
+  three places and the only readers in the workspace were two assertions in
+  `crates/zet-config/tests/config_io.rs`; `App::load` destructures the config, the path, and the
+  diagnostics and has never asked. There is no first-save state to drive it either — `save` writes
+  the file whether or not it was there, which is what makes the field's own doc comment describe
+  behavior nothing has.
+  - The half of that doc worth keeping moved to `load`, where the fact belongs: a file that is not
+    there is not a diagnostic, and reading a config is not a way to write one.
 - **`zet-vt` / `zet-pty` / `zet-config` / `zet-session`** — four public items nothing called, each
   with a doc comment naming a caller that does not exist. Found by reading the workspace's public
   surface against its own call graph; none is used by any crate here or by any test.
@@ -282,6 +305,19 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **docs** — a promise wider than the schema, and two comments describing work nobody did.
+  - PRODUCT.md listed "font color, background color" among the things a user can change and there
+    is no key for either, in the schema, in the key table, or in the settings panel. Both follow
+    the selected theme, which is the design system's own rule — the grid gets exactly what the
+    theme says — so the page now says that instead of promising a picker that does not exist. The
+    background it *does* let you change is named properly: flat, a picture, or a gradient.
+  - `zet-vt`'s `damage` module doc now says that its row-level readers are kept deliberately for a
+    retained-buffer renderer and are called by nothing in production, rather than leaving a reader
+    to work out which of five accessors the app actually uses. One is `is_empty`.
+  - `zet_session::Session::visible_rows` promised that "a renderer is handed rows to draw and never
+    has to know where the history ends". No renderer reads it: the renderer does the arithmetic
+    inline, because it needs each row's position as well as the row and does not depend on the
+    session crate at all. The comment now says what the function is for — the session's own tests.
 - **`zet-app`** — the theme picker never said which palettes ship as their authors published them.
   - PRODUCT.md's seventh criterion promises that imported palettes "ship unmodified so they look
     like themselves, and the theme picker says so", and DESIGN.md repeats it along with the reason:

@@ -62,9 +62,11 @@ vim, and htop inside zet. If those three are clean, the terminal works.
 **It looks deliberate.** One visual world, applied consistently to the tab strip,
 the cursor, the settings screen, and every shipped theme.
 
-**You can change what you see.** Theme, font, font size, font color, background
-color, background image, gradient, and opacity, in a config file with a real
-settings panel over it that reads and writes the same file.
+**You can change what you see.** The theme, the font, the font size, what is painted
+behind the grid — flat, a picture, or a gradient — and how opaque the window is, in a
+config file with a real settings panel over it that reads and writes the same file.
+The grid's own colours are the theme's and only the theme's, which is what lets a
+theme be trusted as a whole rather than corrected key by key.
 
 **It respects your machine.** High contrast mode, text scaling, per-monitor DPI,
 transparency settings, reduce motion, and GPU-less or remote sessions are all
@@ -85,7 +87,9 @@ supported paths, not edge cases that produce a black window.
 zet is done for v1 when all of these hold:
 
 1. `cargo build --release` produces a single `zet.exe` that launches in under 300 ms
-   to a usable prompt on this machine.
+   to a usable prompt on this machine. `cargo bench -p zet-app --bench latency` prints
+   everything of that up to the window — the config read, the shell, and the first
+   prompt on the grid — so the figure gets read rather than estimated.
 2. PowerShell 7, Windows PowerShell 5.1, cmd, and each installed WSL distribution
    appear as launchable profiles, discovered without being hand-configured.
 3. Claude Code, vim, and htop each run full-screen with no visible flicker, correct

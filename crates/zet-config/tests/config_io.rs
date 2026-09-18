@@ -47,7 +47,6 @@ fn a_config_written_out_reads_back_identically() {
 
     assert!(back.diagnostics.is_empty(), "{:?}", back.diagnostics);
     assert_eq!(back.config, config);
-    assert!(back.existed);
 }
 
 #[test]
@@ -411,10 +410,11 @@ fn a_save_keeps_the_spelling_of_a_float() {
 #[test]
 fn a_missing_file_loads_as_defaults_without_complaining() {
     let dir = scratch("missing");
-    let loaded = load(&dir.join("config.toml")).expect("loads");
-    assert!(!loaded.existed);
+    let path = dir.join("config.toml");
+    let loaded = load(&path).expect("loads");
     assert!(loaded.diagnostics.is_empty());
     assert_eq!(loaded.config, Config::default());
+    assert!(!path.exists(), "reading a config is not a way to write one");
 }
 
 #[test]

@@ -43,6 +43,25 @@ jobs:
       # the reason a pull request looks broken. Nothing here runs them; see
       # `crates/zet-update/tests/live.rs` for how to run them on purpose.
 
+  # PRODUCT.md promises the latency numbers are measured rather than assumed, so they
+  # are measured on every push. Its own job because the bench profile is a second
+  # optimized build of half the workspace, and nothing needs it: the job is not in any
+  # `needs`, so a slow runner printing a number nobody likes still shows a green tick
+  # beside the commit that changed it. That is the point — the 300 ms budget in
+  # criterion 1 is a check on a real machine, and a hosted runner is not one.
+  latency:
+    name: the numbers, measured
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cold start, keystroke, throughput
+        run: cargo bench -p zet-app --bench latency
+
   package:
     name: the installer compiles
     runs-on: windows-latest
