@@ -379,9 +379,17 @@ impl App {
     }
 
     /// The rows the settings panel draws.
+    ///
+    /// What the loader found wrong with the file comes first, and the settings follow it.
+    /// First because it is the only section about the file rather than in it, and a
+    /// problem the user has to scroll past forty settings to find is a problem they will
+    /// not find — which, until this, was the whole of how a `cursor.thickness = 99` was
+    /// reported.
     #[must_use]
     pub fn settings(&self) -> Vec<settings::Line> {
-        settings::lines(&self.config, &self.bindings)
+        let mut lines = settings::problems(&self.diagnostics);
+        lines.extend(settings::lines(&self.config, &self.bindings));
+        lines
     }
 
     /// Carry out a click on a settings row.
@@ -1225,6 +1233,58 @@ mod tests {
     #[test]
     fn a_machine_has_at_least_one_shell_to_open() {
         assert!(!app().profiles().is_empty());
+    }
+
+    #[test]
+    fn what_the_file_got_wrong_is_the_first_thing_the_panel_says() {
+        // The loader has always produced these and `App::diagnostics` has always held
+        // them, and nothing read either, so the promise in the configuration reference —
+        // that a value which parses and cannot be used is reported — was kept by a field
+        // no user could see. The panel is the surface: it is where somebody who is
+        // changing settings is standing.
+        let app = App::new(
+            Config::default(),
+            PathBuf::from("test.toml"),
+            vec![Diagnostic {
+                severity: zet_config::Severity::Warning,
+                message: "cursor.thickness is outside 1 to 8, using 2".to_owned(),
+            }],
+            Arc::new(NoopWaker),
+        )
+        .expect("this machine has a shell");
+
+        let rows = app.settings();
+        assert_eq!(rows.first().map(settings::Line::text), Some("Problems"));
+        let problem = rows
+            .iter()
+            .find(|row| matches!(row, settings::Line::Note(_)))
+            .expect("the diagnostic is a row");
+        assert_eq!(
+            problem.text(),
+            "cursor.thickness is outside 1 to 8, using 2"
+        );
+        assert_eq!(problem.value(), "warning");
+        assert!(
+            problem.id().is_none(),
+            "a problem is not a setting and has nothing to adjust"
+        );
+    }
+
+    #[test]
+    fn a_file_with_nothing_wrong_says_nothing_about_it() {
+        // The guard on the test above: a panel that opened with an empty "Problems" every
+        // time would be a heading over nothing, and the one launch where it mattered would
+        // read as decoration.
+        assert_eq!(
+            app().settings().first().map(settings::Line::text),
+            Some("Appearance")
+        );
+        assert!(
+            app()
+                .settings()
+                .iter()
+                .all(|row| !matches!(row, settings::Line::Note(_)))
+        );
     }
 
     #[test]

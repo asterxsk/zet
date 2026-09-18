@@ -269,7 +269,7 @@ pub(crate) fn panel(
         let focused = input.settings_focus == Some(line);
         let (lead, height) = block(line, setting);
         y += lead;
-        let Some(control) = setting.control else {
+        if setting.row == crate::Row::Heading {
             // A section heading, and the rule under it.
             //
             // One decision for the two, on a box that covers both. The rule is the
@@ -294,9 +294,19 @@ pub(crate) fn panel(
             }
             y += height;
             continue;
-        };
+        }
 
         let row = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, ROW);
+        let crate::Row::Control(control) = setting.row else {
+            // Something the configuration file got wrong: a line to read rather than a
+            // control to click.
+            if visible(row, rect) {
+                note(paint, setting, row, &palette);
+            }
+            y += height;
+            continue;
+        };
+
         let control_rect = Rect::new(
             row.right() - CONTROL_WIDTH,
             y + (ROW - CONTROL_HEIGHT) / 2.0,
@@ -327,6 +337,45 @@ pub(crate) fn panel(
         controls,
         scroll,
     }
+}
+
+/// Something the configuration file got wrong: a message, and how serious it is.
+///
+/// Nothing is pushed into the panel's controls. There is nothing here to click, and a hit
+/// region for it would be a row that answers a click by doing nothing.
+///
+/// The severity sits where a control's value would, so the word lands in the same column
+/// as the settings below it and the list reads as one table. The message keeps `ink` and
+/// the severity `ink_mid`, which is the panel's own split between what a row says and
+/// what it is — and no colour is spent on the pair, because `error` and `warning` are two
+/// degrees of the same thing, and a shade that meant "bad" would be claiming a difference
+/// the panel does not know how to draw at the warning end.
+///
+/// Culling is the caller's, and so is the row's height: this is handed a box that is
+/// already known to be on screen.
+fn note(
+    paint: &mut Painter<'_>,
+    setting: &SettingLine<'_>,
+    row: Rect,
+    palette: &zet_config::Palette,
+) {
+    let value_box = Rect::new(row.right() - CONTROL_WIDTH, row.y, CONTROL_WIDTH, ROW);
+    let label_box = Rect::new(
+        row.x,
+        row.y,
+        (row.width - CONTROL_WIDTH - LABEL_GAP).max(0.0),
+        ROW,
+    );
+    paint.centered(
+        setting.text,
+        label_box,
+        TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink),
+    );
+    paint.centered(
+        setting.value,
+        value_box,
+        TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink_mid),
+    );
 }
 
 /// Whether a box can be drawn without any of it escaping the panel.
@@ -418,13 +467,15 @@ fn parts(control: Control, rect: Rect) -> Vec<(SettingPart, Rect)> {
 /// before it, so the first heading of the panel is not pushed down by a gap with nothing
 /// above it to separate it from.
 fn block(line: usize, setting: &SettingLine<'_>) -> (f32, f32) {
-    if setting.control.is_none() {
-        (
+    match setting.row {
+        crate::Row::Heading => (
             if line == 0 { 0.0 } else { SECTION_GAP },
             HEADING_BOX + 1.0 + PAD / 2.0,
-        )
-    } else {
-        (0.0, ROW)
+        ),
+        // A problem is a row's height and takes a row's place: it is one line of text, and
+        // the section gap belongs above the heading that names the section rather than
+        // above each thing in it.
+        crate::Row::Note | crate::Row::Control(_) => (0.0, ROW),
     }
 }
 

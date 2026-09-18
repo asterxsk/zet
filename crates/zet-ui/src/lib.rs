@@ -196,7 +196,7 @@ pub struct PickerLine<'a> {
     pub at: usize,
 }
 
-/// One line of the settings panel: a section heading, or a setting.
+/// One line of the settings panel: a section heading, a problem, or a setting.
 ///
 /// A flat list rather than sections of rows, because the panel draws it as a flat list —
 /// headings are a type size and a rule, not a container — and a nested shape would make
@@ -206,10 +206,26 @@ pub struct PickerLine<'a> {
 pub struct SettingLine<'a> {
     /// The heading's name, or the row's label.
     pub text: &'a str,
-    /// The row's control, or `None` on a section heading.
-    pub control: Option<Control>,
-    /// What the control shows. Ignored on a heading.
+    /// Which of the three this row is.
+    pub row: Row,
+    /// What the control shows. Ignored on a heading and on a problem.
     pub value: &'a str,
+}
+
+/// What a settings row is, which decides how it is drawn and whether it can be clicked.
+///
+/// One field rather than a control that is sometimes absent, because the absent case is
+/// two different things: a heading is a section's name with a rule under it, and a problem
+/// is a line of text the user needs to read. Drawing the second as the first would put a
+/// rule and a section-sized gap around every diagnostic.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Row {
+    /// A section's name, and the rule under it.
+    Heading,
+    /// A line of text with nothing to click: something the configuration file got wrong.
+    Note,
+    /// A setting, and what its control does.
+    Control(Control),
 }
 
 /// What a settings row's control does when it is clicked.

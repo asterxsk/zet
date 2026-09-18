@@ -1680,7 +1680,13 @@ fn panel_lines(lines: &[zet_app::Line], capturing: Option<Action>) -> Vec<zet_ui
                 capturing.is_some_and(|action| line.id() == Some(zet_app::Id::Binding(action)));
             zet_ui::SettingLine {
                 text: line.text(),
-                control: line.kind().map(control_of),
+                row: match line {
+                    zet_app::Line::Heading(_) => zet_ui::Row::Heading,
+                    zet_app::Line::Note(_) => zet_ui::Row::Note,
+                    zet_app::Line::Setting(setting) => {
+                        zet_ui::Row::Control(control_of(setting.kind))
+                    }
+                },
                 value: if waiting { PRESS_A_KEY } else { line.value() },
             }
         })

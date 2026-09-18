@@ -14,7 +14,7 @@
 //! action, and it is *captured* rather than clicked: the caller is told to wait for a
 //! chord and hands it back through [`App::bind`].
 
-use zet_config::{Config, CursorShape};
+use zet_config::{Config, CursorShape, Diagnostic, Severity};
 use zet_input::Chord;
 
 use crate::action::Action;
@@ -128,16 +128,32 @@ pub struct Setting {
 pub enum Line {
     /// A section's name, and the rule under it.
     Heading(&'static str),
+    /// Something the configuration file got wrong.
+    ///
+    /// A row with nothing to click, because there is nothing here to set: the file is the
+    /// setting, and this is what the loader said about it. The two are drawn differently —
+    /// a heading is a section, and this is a line of text under one.
+    Note(Problem),
     /// A setting.
     Setting(Setting),
 }
 
+/// One thing the configuration file got wrong.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Problem {
+    /// What is wrong, in the loader's own words.
+    pub text: String,
+    /// How serious it is.
+    pub severity: Severity,
+}
+
 impl Line {
-    /// The text to draw: a heading's name, or a setting's label.
+    /// The text to draw: a heading's name, a problem's message, or a setting's label.
     #[must_use]
     pub fn text(&self) -> &str {
         match self {
             Self::Heading(text) => text,
+            Self::Note(problem) => &problem.text,
             Self::Setting(setting) => setting.label,
         }
     }
@@ -147,24 +163,30 @@ impl Line {
     pub fn value(&self) -> &str {
         match self {
             Self::Heading(_) => "",
+            // The severity, which is the column the configuration reference documents and
+            // the only thing on the row that is not the message itself.
+            Self::Note(problem) => match problem.severity {
+                Severity::Error => "error",
+                Severity::Warning => "warning",
+            },
             Self::Setting(setting) => &setting.value,
         }
     }
 
-    /// How the row is clicked, `None` for a heading.
+    /// How the row is clicked, `None` for a heading or a problem.
     #[must_use]
     pub const fn kind(&self) -> Option<Kind> {
         match self {
-            Self::Heading(_) => None,
+            Self::Heading(_) | Self::Note(_) => None,
             Self::Setting(setting) => Some(setting.kind),
         }
     }
 
-    /// What the row sets, `None` for a heading.
+    /// What the row sets, `None` for a heading or a problem.
     #[must_use]
     pub const fn id(&self) -> Option<Id> {
         match self {
-            Self::Heading(_) => None,
+            Self::Heading(_) | Self::Note(_) => None,
             Self::Setting(setting) => Some(setting.id),
         }
     }
@@ -179,6 +201,31 @@ pub enum Effect {
     Changed,
     /// The row wants the next chord the user presses, for this action.
     Capture(Action),
+}
+
+/// What the loader found wrong with the file, as rows.
+///
+/// Separate from [`lines`] because it is the one section that is about the file rather
+/// than in it: nothing here can be clicked, nothing here is a field of [`Config`], and the
+/// whole section goes away when there is nothing to say. [`App::settings`] puts it first,
+/// because a problem the user has to scroll to find is a problem they will not find.
+///
+/// An empty list is no rows at all and not an empty heading: a panel that opened with
+/// "Problems" over nothing would teach the user to ignore the one time it mattered.
+#[must_use]
+pub fn problems(diagnostics: &[Diagnostic]) -> Vec<Line> {
+    if diagnostics.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::with_capacity(diagnostics.len() + 1);
+    lines.push(Line::Heading("Problems"));
+    lines.extend(diagnostics.iter().map(|diagnostic| {
+        Line::Note(Problem {
+            text: diagnostic.message.clone(),
+            severity: diagnostic.severity,
+        })
+    }));
+    lines
 }
 
 /// The rows, read out of a configuration.
@@ -745,6 +792,56 @@ mod tests {
             lines(&config, &parse_bindings(&config)).len(),
             lines(&config, &parse_bindings(&config)).len()
         );
+    }
+
+    #[test]
+    fn a_problem_with_the_file_is_a_row_with_nothing_to_set() {
+        // The loader has always found these and had nowhere to put them: `App::diagnostics`
+        // was public, held the answers, and was called by nothing, so a user who typed
+        // `cursor.thickness = 99` got the default value back with no way at all to find out
+        // why the row they set did nothing. This is the surface — the panel is where
+        // someone who is changing settings is standing, and the file is the setting.
+        let rows = problems(&[
+            Diagnostic {
+                severity: Severity::Warning,
+                message: "cursor.thickness is outside 1 to 8, using 2".to_owned(),
+            },
+            Diagnostic {
+                severity: Severity::Error,
+                message: "theme \"nordd\" is not a theme, using zet-dark".to_owned(),
+            },
+        ]);
+
+        assert_eq!(rows.first().map(Line::text), Some("Problems"));
+        let notes: Vec<&Line> = rows
+            .iter()
+            .filter(|row| matches!(row, Line::Note(_)))
+            .collect();
+        for note in &notes {
+            assert!(
+                note.kind().is_none() && note.id().is_none(),
+                "a problem is a row to read, not a row to set"
+            );
+        }
+        assert_eq!(
+            notes
+                .iter()
+                .map(|note| (note.text(), note.value()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("cursor.thickness is outside 1 to 8, using 2", "warning"),
+                ("theme \"nordd\" is not a theme, using zet-dark", "error"),
+            ],
+            "the severity is the column the configuration reference documents"
+        );
+    }
+
+    #[test]
+    fn a_file_with_nothing_wrong_gets_no_problems_section() {
+        // An empty heading is a section that says nothing and takes a row to say it, and a
+        // panel that always opened with "Problems" over nothing would train the user to
+        // ignore the one time it mattered.
+        assert!(problems(&[]).is_empty());
     }
 
     #[test]

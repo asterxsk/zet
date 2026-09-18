@@ -20,8 +20,8 @@ use zet_render::{Frame, Placement, Quad};
 use crate::fonts::GlyphSource;
 use crate::geometry::ROW_HEIGHT;
 use crate::{
-    Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, PickerLine, Rect, ScrollState,
-    Scrollbar, SettingLine, SettingPart, Size, TabInfo, thumb_offset,
+    Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, PickerLine, Rect, Row,
+    ScrollState, Scrollbar, SettingLine, SettingPart, Size, TabInfo, thumb_offset,
 };
 
 /// A font source with no font in it.
@@ -917,32 +917,32 @@ fn settings_lines() -> Vec<SettingLine<'static>> {
     vec![
         SettingLine {
             text: "APPEARANCE",
-            control: None,
+            row: Row::Heading,
             value: "",
         },
         SettingLine {
             text: "Theme",
-            control: Some(Control::Choice),
+            row: Row::Control(Control::Choice),
             value: "zet dark",
         },
         SettingLine {
             text: "Reduce motion",
-            control: Some(Control::Toggle),
+            row: Row::Control(Control::Toggle),
             value: "Off",
         },
         SettingLine {
             text: "TERMINAL",
-            control: None,
+            row: Row::Heading,
             value: "",
         },
         SettingLine {
             text: "Size",
-            control: Some(Control::Step),
+            row: Row::Control(Control::Step),
             value: "13",
         },
         SettingLine {
             text: "New tab",
-            control: Some(Control::Chord),
+            row: Row::Control(Control::Chord),
             value: "Ctrl+Shift+T",
         },
     ]
@@ -1179,7 +1179,7 @@ fn a_row_that_does_not_fit_is_scrolled_to_rather_than_dropped() {
     let lines: Vec<SettingLine<'static>> = (0..40)
         .map(|_| SettingLine {
             text: "Size",
-            control: Some(Control::Step),
+            row: Row::Control(Control::Step),
             value: "13",
         })
         .collect();
@@ -1307,7 +1307,7 @@ fn a_focused_row_below_the_fold_is_scrolled_to_rather_than_hidden() {
     let lines: Vec<SettingLine<'static>> = (0..40)
         .map(|_| SettingLine {
             text: "Size",
-            control: Some(Control::Step),
+            row: Row::Control(Control::Step),
             value: "13",
         })
         .collect::<Vec<_>>();
@@ -1359,7 +1359,7 @@ fn a_row_scrolled_half_off_the_list_is_not_drawn_over_the_chrome_above_it() {
     let lines: Vec<SettingLine<'static>> = (0..12)
         .map(|_| SettingLine {
             text: "Size",
-            control: Some(Control::Step),
+            row: Row::Control(Control::Step),
             value: "13",
         })
         .collect::<Vec<_>>();
@@ -1426,12 +1426,12 @@ fn a_heading_scrolled_off_the_panel_takes_its_rule_with_it() {
     let hairline = color(palette.hairline);
     let mut lines = vec![SettingLine {
         text: "APPEARANCE",
-        control: None,
+        row: Row::Heading,
         value: "",
     }];
     lines.extend((0..12).map(|_| SettingLine {
         text: "Size",
-        control: Some(Control::Step),
+        row: Row::Control(Control::Step),
         value: "13",
     }));
     let tabs = tabs(&[1]);
@@ -1519,6 +1519,73 @@ fn clicking_the_panel_is_not_clicking_the_grid() {
     // And the grid is still the grid outside it.
     assert_eq!(chrome.hit(panel.x - 10.0, 400.0), Hit::None);
     let _ = drawn;
+}
+
+#[test]
+fn a_problem_is_a_row_to_read_and_not_a_section_and_not_a_control() {
+    // The configuration loader's diagnostics reach the panel as rows of their own, and the
+    // panel has two things a row can be that have nothing to click: a section heading, and
+    // this. Drawing a problem as a heading would put a section-sized gap and a full-width
+    // rule around every line of it; drawing it as a setting would give it a control that
+    // changes nothing when it is clicked.
+    let palette = Palette::instrument();
+    let rows = [
+        SettingLine {
+            text: "Problems",
+            row: Row::Heading,
+            value: "",
+        },
+        SettingLine {
+            text: "font.size is not a number",
+            row: Row::Note,
+            value: "error",
+        },
+    ];
+    let (chrome, drawn) = open_panel(&palette, &rows);
+    let panel = chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Settings(rect) => Some(*rect),
+            _ => None,
+        })
+        .expect("the panel is open");
+
+    // Read back through the test font's texture coordinates, as every other text assertion
+    // in this file does. A space advances the pen without emitting a glyph, so the two
+    // sides are compared with the spaces taken out rather than with them in.
+    let text: String = drawn
+        .frame
+        .glyphs
+        .iter()
+        .map(|glyph| glyph.uv[1] as u32)
+        .filter_map(char::from_u32)
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    let wanted: String = "font.size is not a number"
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    assert!(text.contains(&wanted), "the problem was not drawn:\n{text}");
+    assert!(
+        text.contains("error"),
+        "the severity is the column the configuration reference documents:\n{text}"
+    );
+
+    assert!(
+        !chrome
+            .regions()
+            .iter()
+            .any(|region| matches!(region, crate::Region::Setting { .. })),
+        "a problem published a control, so a click on it answers a question nobody asked"
+    );
+    // The row it is on is the panel's surface and not a gap: a click there is swallowed by
+    // the panel rather than reaching the terminal behind it.
+    assert_eq!(
+        chrome.hit(panel.x + 40.0, panel.y + 55.0),
+        Hit::Settings,
+        "the problem's row is not part of the panel"
+    );
 }
 
 #[test]
@@ -1775,7 +1842,7 @@ fn the_scrollbar_is_still_reachable_with_the_settings_panel_open() {
     let lines: Vec<SettingLine<'static>> = (0..12)
         .map(|_| SettingLine {
             text: "Size",
-            control: Some(Control::Step),
+            row: Row::Control(Control::Step),
             value: "13",
         })
         .collect::<Vec<_>>();
@@ -2594,7 +2661,7 @@ fn a_popover_row_is_still_reachable_with_the_settings_panel_open_behind_it() {
     let lines: Vec<SettingLine<'static>> = (0..3)
         .map(|_| SettingLine {
             text: "Size",
-            control: Some(Control::Step),
+            row: Row::Control(Control::Step),
             value: "13",
         })
         .collect::<Vec<_>>();

@@ -266,6 +266,15 @@ fn run(directory: Option<PathBuf>) -> ExitCode {
 
     let app = match App::load(waker) {
         Ok(mut app) => {
+            // On the way past, because the panel is not a place a user goes looking for a
+            // complaint and the file they have to edit is not on screen. Two surfaces and
+            // not one: a launch from a shortcut has no stderr anyone will read and a
+            // launch from a shell has no window yet, and neither of them is the only way
+            // in. Nothing is fatal — every one of these has already been repaired or
+            // clamped, which is why the app is running at all.
+            for diagnostic in app.diagnostics() {
+                eprintln!("zet: {diagnostic}");
+            }
             app.set_start_directory(directory);
             app
         }

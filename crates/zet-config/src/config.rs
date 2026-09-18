@@ -47,6 +47,16 @@ pub struct Diagnostic {
     pub message: String,
 }
 
+impl std::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let severity = match self.severity {
+            Severity::Warning => "warning",
+            Severity::Error => "error",
+        };
+        write!(f, "{severity}: {}", self.message)
+    }
+}
+
 impl Diagnostic {
     fn warning(message: impl Into<String>) -> Self {
         Self {
@@ -1137,6 +1147,24 @@ mod tests {
         let (_, diagnostics) = loaded("[keys]\nopen-the-pod-bay-doors = \"Ctrl+H\"\n");
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].message.contains("open-the-pod-bay-doors"));
+    }
+
+    #[test]
+    fn a_problem_reads_as_how_serious_it_is_and_then_what_is_wrong() {
+        // The two severities are not decoration. `cursor.thickness = 99` is a value the
+        // app kept and clamped; `font.size = 900` is one it threw away. A line that does
+        // not say which is a line the user cannot act on, and stderr is the only surface a
+        // Start-menu launch has.
+        let warning = Diagnostic::warning("cursor.thickness = 99 is outside 1 to 8");
+        assert_eq!(
+            warning.to_string(),
+            "warning: cursor.thickness = 99 is outside 1 to 8"
+        );
+        let error = Diagnostic::error("font.size = 900 is outside 6 to 72; using 14");
+        assert_eq!(
+            error.to_string(),
+            "error: font.size = 900 is outside 6 to 72; using 14"
+        );
     }
 
     #[test]

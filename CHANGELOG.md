@@ -247,6 +247,20 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-app` / `zet-ui` / `zet`** — configuration diagnostics were produced and read by nobody, so a
+  file zet had already repaired was a file with no way of saying so.
+  - `Diagnostic` and `Severity` have been built by the loader since the schema was written, both
+    references promise that "values that parse but cannot be used are reported separately", and no
+    surface ever mentioned one: `App` held the list, and no window, panel, or stream drew it. A
+    `cursor.thickness = 99` was clamped to 8 in silence, which leaves a typo indistinguishable from
+    a setting zet ignored.
+  - Every diagnostic is now written to stderr before the window opens, and listed at the top of the
+    settings panel under **Problems**. Both, because neither is enough alone: a launch from a
+    shortcut has no console anyone will read, and a launch from a shell has no window yet.
+  - A problem is its own kind of settings row — `Row::Note`, alongside the headings and the
+    controls — rather than a heading or a setting whose control went missing. It is a line to read,
+    with the severity in the column a control's value would take, and it publishes no hit region: a
+    row that answers a click by doing nothing is worse than one that does not answer.
 - **`zet-app`** — `Ctrl+Shift+Home` scrolled to the bottom of the history instead of the top.
   - `ScrollToTop` asked the session to scroll by `i32::MIN` and `ScrollToBottom` by `i32::MAX`, and
     the session's sign convention is the other way round: a positive delta moves up into the
