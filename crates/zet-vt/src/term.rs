@@ -1316,10 +1316,16 @@ impl Perform for Term {
                     self.title = String::from_utf8_lossy(title).into_owned();
                 }
             }
-            // `OSC 8`: hyperlinks, spelled `8;params;uri`.
+            // `OSC 8`: hyperlinks, spelled `8;params;uri`. The URI is everything past
+            // the second `;` and is taken as it stands, because a URI may hold one of
+            // its own — a query, a path parameter, a `data:` payload — and a terminal
+            // that split it again would open a link to something the program never
+            // wrote. The parser has already split the payload, and joining the tail
+            // back together recovers the original bytes exactly, which is why this does
+            // not need the payload itself.
             b"8" => {
-                if let Some(uri) = rest.get(1) {
-                    self.set_hyperlink(uri);
+                if rest.len() > 1 {
+                    self.set_hyperlink(&rest[1..].join(&b';'));
                 }
             }
             // `OSC 10` and `OSC 11` ask for the foreground and background. Answering is
@@ -2621,6 +2627,35 @@ mod tests {
 
         feed(&mut t, b"plain");
         assert_eq!(t.link_for(&t.grid().row(0).get(9)), None);
+    }
+
+    #[test]
+    fn a_hyperlink_whose_uri_holds_a_semicolon_is_not_cut_in_half() {
+        // The URI is everything after the second `;`, however many the URI itself
+        // contains — a query string, a path parameter, a `data:` payload. Reading it
+        // back out of the parser's own split of the payload is what cut it at the first
+        // one and opened a link to something the program never wrote.
+        let mut t = open(40, 2);
+        feed(&mut t, b"\x1b]8;;https://example.com/a;b?x=1;y=2\x07");
+        feed(&mut t, b"one");
+        let cell = t.grid().row(0).get(0);
+        assert_eq!(
+            t.link_for(&cell),
+            Some("https://example.com/a;b?x=1;y=2"),
+            "the URI must be the whole of what the program sent"
+        );
+
+        // A link with parameters in front of the URI, which is what the second field
+        // is for, and the closing form, which is an empty URI.
+        feed(&mut t, b"\x1b]8;id=7;https://example.com/a;b\x07");
+        feed(&mut t, b"two");
+        assert_eq!(
+            t.link_for(&t.grid().row(0).get(4)),
+            Some("https://example.com/a;b")
+        );
+        feed(&mut t, b"\x1b]8;;\x07");
+        feed(&mut t, b"plain");
+        assert_eq!(t.link_for(&t.grid().row(0).get(8)), None);
     }
 
     #[test]
