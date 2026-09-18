@@ -493,9 +493,19 @@ fn push_glyph(
     // look deliberate rather than broken. A wider one is left where its own bearing puts
     // it and is allowed to overflow, because squeezing an ideograph into a Latin cell
     // makes it unreadable.
-    let slack = metrics.cell_width - placement.advance;
+    //
+    // Both widths are whole pixels, and that is the point rather than tidiness. The cell
+    // is the primary face's advance *rounded*, so the primary face's own advance and the
+    // cell are the same number until one of them is rounded — Cascadia Mono at 13 pixels
+    // per em advances 7.6171875 into an eight-pixel cell, and subtracting the one from
+    // the other reads a rounding step as slack. Centring it would move every glyph in the
+    // window 0.19 pixels off the pixel grid, and the linear sampler draws a glyph a fifth
+    // of a pixel off as two half-strength columns: the whole screen slightly blurred, for
+    // a shift that was meant for a fallback face. Rounded, the primary's slack is zero
+    // and a fallback is still centred — by a whole pixel, which does not smear it either.
+    let slack = metrics.cell_width - placement.advance.round();
     if slack > 0.0 {
-        left += slack / 2.0;
+        left += (slack / 2.0).round();
     }
 
     let at = [
@@ -1145,6 +1155,19 @@ mod tests {
         let mut glyphs = FakeGlyphs::with_advance(4.0);
         let frame = render_with(&term(4, 1, b"A"), &View::new(), &mut glyphs);
         assert_eq!(frame.glyphs[0].rect[0], 2.0);
+    }
+
+    #[test]
+    fn the_primary_face_lands_on_the_pixel_grid() {
+        // Cascadia Mono at 13 pixels per em advances 7.6171875, and the cell is that
+        // rounded to 8. The two differ by a rounding step, and a centring that read that
+        // as slack moved every glyph in the window a fifth of a pixel right — which is
+        // not a glyph in the wrong place, it is every glyph drawn in two half-strength
+        // columns. Nothing about the primary face is centred: it is what the cell was
+        // measured from.
+        let mut glyphs = FakeGlyphs::with_advance(7.617_187_5);
+        let frame = render_with(&term(4, 1, b"A"), &View::new(), &mut glyphs);
+        assert_eq!(frame.glyphs[0].rect[0], 0.0);
     }
 
     #[test]
