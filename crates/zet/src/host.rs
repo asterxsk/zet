@@ -52,7 +52,7 @@ use winit::window::{CursorIcon, Window, WindowId};
 use zet_app::{Action, App, AppError, Command};
 use zet_config::{Config, FontSettings, Palette, TabSettings};
 use zet_font::{FontError, FontStack};
-use zet_input::{Chord, Key, KeyEvent, KeyKind, Modifiers, MouseEvent, encode_mouse};
+use zet_input::{Chord, Key, KeyEvent, KeyKind, Modifiers, MouseEvent, encode_focus, encode_mouse};
 use zet_render::{Frame, Renderer, RendererError, View};
 use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabInfo};
 
@@ -1189,6 +1189,22 @@ impl Host {
         self.send_mouse(mouse::button(button), mouse::action(state));
     }
 
+    /// Tell the program the window gained or lost focus, if it asked to be told.
+    ///
+    /// `DECSET 1004` is the mode, and what it buys a full-screen program is the only way
+    /// it has of knowing: without it a text editor keeps blinking its cursor and drawing
+    /// its own status line into a window the user has walked away from, and a program
+    /// that repaints on a timer keeps repainting. Only the focused tab is told, because
+    /// only the focused tab's program has the keyboard.
+    fn forward_focus(&self, focused: bool) {
+        let Some(session) = self.app.active() else {
+            return;
+        };
+        if let Some(bytes) = encode_focus(focused, &session.term().modes()) {
+            let _ = session.write(&bytes);
+        }
+    }
+
     /// Tell the program the pointer moved, if it asked to be told.
     ///
     /// `DECSET 1002` wants a report while a button is held and `1003` wants every move,
@@ -1556,6 +1572,7 @@ impl ApplicationHandler<Wake> for Host {
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
+                self.forward_focus(focused);
                 if !focused {
                     // A drag does not survive the window losing focus, and it cannot
                     // be waited out: the button coming up is delivered to whoever has
