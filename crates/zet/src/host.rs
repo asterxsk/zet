@@ -514,6 +514,11 @@ impl Host {
                 focused: self.focused,
                 blink_on,
                 selection,
+                // Where the viewport is. The session owns the number, because it is the
+                // session that knows how much history there is to clamp it against; the
+                // renderer only needs to be told, and until it was, every scroll the
+                // wheel, the keys and the scrollbar made moved nothing on screen.
+                scroll_offset: session.scroll_offset(),
             };
             zet_render::draw_grid(
                 session.term(),
@@ -1015,7 +1020,16 @@ impl Host {
                     // other terminal on this platform does, and a user who tries it
                     // should not be told no.
                     if let Hit::Tab(number) = self.chrome.hit(x as f32, y as f32) {
-                        let _ = self.app.close_tab(number);
+                        // Closing the last tab is closing the window, which is what the
+                        // bound `close-tab` action does with the same answer. Dropping it
+                        // left a window with no terminal in it: the shell was gone, the
+                        // last frame was still painted, and nothing was listening for the
+                        // exit that ends the loop.
+                        match self.app.close_tab(number) {
+                            Ok(true) => loop_.exit(),
+                            Ok(false) => window.request_redraw(),
+                            Err(_) => {}
+                        }
                         return;
                     }
                 }
@@ -1048,7 +1062,7 @@ impl Host {
         let Some(window) = self.window.clone() else {
             return false;
         };
-        match self.chrome.hit(x as f32, y as f32) {
+        let handled = match self.chrome.hit(x as f32, y as f32) {
             Hit::Tab(number) => {
                 self.app.activate(number);
                 true
@@ -1117,7 +1131,18 @@ impl Host {
             // surface is a click on the surface and not on what shows through it.
             Hit::Settings => true,
             Hit::None => false,
+        };
+        // Asked once, here, rather than in each arm that happens to change something.
+        // Every hit but `Hit::None` is a press on a thing the window is drawing, and the
+        // loop only draws when it is asked to: the tab strip, the new-tab mark, the close
+        // mark and the scrollbar all moved state and left the frame that was already on
+        // screen, so clicking a tab switched the terminal out from under a picture of the
+        // old one and dragging the scrollbar moved a thumb that was not redrawn. One
+        // request at the end is what makes the next hit target correct by default.
+        if handled {
+            window.request_redraw();
         }
+        handled
     }
 
     /// The cell a point is over, if any.
