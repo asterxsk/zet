@@ -50,7 +50,7 @@ use winit::keyboard::ModifiersState;
 use winit::window::{CursorIcon, Window, WindowId};
 
 use zet_app::{Action, App, AppError, Command};
-use zet_config::{Config, FontSettings, Palette, TabSettings};
+use zet_config::{Config, FontSettings, Palette, TabSettings, WindowSettings};
 use zet_font::{FontError, FontStack};
 use zet_input::{Chord, Key, KeyEvent, KeyKind, Modifiers, MouseEvent, encode_focus, encode_mouse};
 use zet_render::{Frame, Renderer, RendererError, View};
@@ -58,7 +58,7 @@ use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabIn
 
 use crate::keys;
 use crate::mouse;
-use crate::platform::SystemSettings;
+use crate::platform::{SystemSettings, set_opacity};
 use crate::waker::Wake;
 
 /// The app's own name, as the titlebar's name slot shows it.
@@ -187,6 +187,15 @@ pub struct Host {
     styled: FontSettings,
     /// The chrome's settings as of the last build, so a change is noticed.
     tabbed: TabSettings,
+    /// The window's settings as of the last time they were applied to the window.
+    ///
+    /// The opacity is a Win32 call rather than a value a frame reads, so a change to it
+    /// has to be noticed and made rather than simply drawn. Comparing against what was
+    /// last applied is what `styled` and `tabbed` do, and for the same reason: it cannot
+    /// drift from what the window is actually wearing. The rest of the section is read
+    /// where a window is made — a window cannot start maximized halfway through its life —
+    /// and is carried here only because the four are written down together.
+    windowed: WindowSettings,
     /// The layout the previous frame's grid was positioned with.
     placed: Layout,
     /// The grid size the sessions were last told about, so that a frame which did not
@@ -247,6 +256,10 @@ impl Host {
         let palette = zet_config::palette_for(app.config(), settings.highlight);
         let chrome = Chrome::new(&app.config().tabs, &app.config().window);
         let tabbed = app.config().tabs.clone();
+        // Nothing has been applied to a window yet — there is no window — so the record
+        // starts empty rather than claiming the configuration is already in force.
+        // `attach` applies it to the window it makes and fills this in.
+        let windowed = WindowSettings::default();
         let styled = grid_settings(&app, text_scale(app.config(), settings.text_scale));
         let now = Instant::now();
         Self {
@@ -270,6 +283,7 @@ impl Host {
             os_title: APP_NAME.to_owned(),
             styled,
             tabbed,
+            windowed,
             placed: Layout::default(),
             // What `resumed` opens the first tab at, before any frame has been laid out
             // and therefore before anything knows how big the window really is.
@@ -322,10 +336,16 @@ impl Host {
                         // stacked on each other.
                         .with_decorations(false)
                         .with_inner_size(OPEN_SIZE)
-                        .with_min_inner_size(MIN_SIZE),
+                        .with_min_inner_size(MIN_SIZE)
+                        // Asked for at creation rather than called afterwards, because a
+                        // window that is maximized after it opens is a window the user
+                        // watches jump — once, on the frame they were looking at.
+                        .with_maximized(self.app.config().window.start_maximized),
                 )
                 .map_err(StartupError::Window)?,
         );
+        set_opacity(&window, self.app.config().window.opacity);
+        self.windowed = self.app.config().window.clone();
 
         let size = window.inner_size();
         let scale = window.scale_factor() as f32;
@@ -387,6 +407,17 @@ impl Host {
         if self.app.config().tabs != self.tabbed {
             self.chrome = Chrome::new(&self.app.config().tabs, &self.app.config().window);
             self.tabbed = self.app.config().tabs.clone();
+        }
+
+        // The one thing in the window section that reaches the window: the rest of it is
+        // read where a window is made or where the frame is drawn, and the opacity is a
+        // call to the platform that has to be made rather than a value to be read.
+        if self.app.config().window != self.windowed {
+            let settings = self.app.config().window.clone();
+            if let Some(window) = self.window() {
+                set_opacity(window, settings.opacity);
+            }
+            self.windowed = settings;
         }
 
         self.palette = zet_config::palette_for(self.app.config(), self.settings.highlight);

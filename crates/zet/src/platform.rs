@@ -24,13 +24,17 @@
 // and nothing else here casts at all.
 #![allow(clippy::cast_precision_loss)]
 
+use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{COLOR_HIGHLIGHT, GetSysColor};
 use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW, SPI_GETCLIENTAREAANIMATION,
-    SPI_GETHIGHCONTRAST, SystemParametersInfoW,
+    GWL_EXSTYLE, GetWindowLongPtrW, LWA_ALPHA, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
+    SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST, SetLayeredWindowAttributes, SetWindowLongPtrW,
+    SystemParametersInfoW, WS_EX_LAYERED,
 };
+use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use winit::window::Window;
 use zet_config::Rgb;
 
 /// Tell the user something they cannot be told on stderr.
@@ -57,6 +61,105 @@ pub fn alert(title: &str, message: &str) {
             MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
         );
     }
+}
+
+/// How opaque the window is, as the desktop understands it.
+///
+/// `window.opacity` is a promise the configuration has been making since it was written
+/// and that nothing kept until now: a window that fades into whatever is behind it.
+/// Windows spells that as a layered window — `WS_EX_LAYERED` plus one constant alpha —
+/// and it is the whole of the feature, because the desktop composites every pixel of the
+/// window against the desktop at that alpha. Text fades with the ground it is drawn on,
+/// rather than the ground fading behind text that stays opaque, which is the only reading
+/// under which a terminal being translucent means anything.
+///
+/// The whole window and not the grid: the frame is one surface, and a chrome that stayed
+/// solid while the grid faded would be a titlebar floating over the desktop.
+///
+/// Called once when the window is made and again whenever the configuration's window
+/// section changes. Both go through this one function, so a window that has been faded
+/// cannot differ from one that was born faded — there is no second path to drift from.
+#[allow(clippy::cast_possible_wrap)]
+pub fn set_opacity(window: &Window, opacity: f32) {
+    let Some(hwnd) = window_handle(window) else {
+        return;
+    };
+    // `WS_EX_LAYERED` is a `u32` in the API and the extended style is pointer-sized here.
+    // The lint cannot see that the value is `0x0008_0000`, which is a positive `i32` and
+    // so is exact at every width; a named constant is worth more than a cast it cannot
+    // read, and the alternative is spelling the bit out.
+    let layered = WS_EX_LAYERED as isize;
+    // SAFETY: `hwnd` is this process's own window, taken from the handle the window
+    // handed out and alive for as long as it is. `GWL_EXSTYLE` asks for one pointer-sized
+    // value, which is what the API returns; it reads the window's own state and cannot
+    // fail in a way that needs reporting, because a window that has gone away is a window
+    // there is nothing left to fade.
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    // The window is left alone when it is already wearing what was asked for, which is
+    // the default window's whole story: it is made without the layered bit, so a user who
+    // never touches the setting never pays a write for it.
+    let wanted = match layered_alpha(opacity) {
+        Some(_) => style | layered,
+        None => style & !layered,
+    };
+    if wanted == style {
+        return;
+    }
+    // SAFETY: both calls take the same live window. `SetWindowLongPtrW` writes one
+    // pointer-sized value — the extended style with the layered bit set or cleared — and
+    // returns the previous one, which is not needed here. `SetLayeredWindowAttributes`
+    // takes a key colour, an alpha byte, and a flag: the key is unused under `LWA_ALPHA`
+    // and zero is what the API documents for it. Neither call is a `SetWindowPos`, and
+    // none is needed: making a window layered after creation is the documented two-step
+    // of setting the style and then the attributes.
+    unsafe {
+        // Both calls answer with the previous value, which nothing here wants: what the
+        // window is wearing is read back through `GetWindowLongPtrW` when it changes
+        // again, and a return value that was stored instead would be a second copy of the
+        // window's own state.
+        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted);
+        // A window that is at full opacity loses the style as well as the alpha, and one
+        // that is not gets its alpha set: a layered window is composited by the desktop
+        // instead of being handed to the display controller, and paying that for a window
+        // that is not translucent buys nothing at all.
+        if let Some(alpha) = layered_alpha(opacity) {
+            let _ = SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
+        }
+    }
+}
+
+/// The byte the alpha attribute takes, or `None` for a window that should not be layered.
+///
+/// 1.0 is not "255, but the fast path" — it is "this is an ordinary opaque window", and
+/// that is a different window as far as the desktop is concerned. A terminal spends its
+/// life at the default, so the default is the one that has to be free.
+///
+/// Rounded rather than truncated, because 0.5 is exactly halfway between opaque and clear
+/// and a byte that landed a half-step below every value the user typed would be a setting
+/// that quietly reads dark.
+// The clamp puts the product in `0.0..=255.0` and the round leaves a whole number, so
+// the cast is exact and cannot lose a sign it does not have. Both lints are right in
+// general and cannot see the two lines above them.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn layered_alpha(opacity: f32) -> Option<u8> {
+    if opacity >= 1.0 {
+        return None;
+    }
+    Some((opacity.clamp(0.0, 1.0) * 255.0).round() as u8)
+}
+
+/// The window's `HWND`, if this platform has one and the window is still alive.
+///
+/// `None` is not an error to report: a window that cannot hand out a handle is a window
+/// that has already gone, and there is nothing a caller could do about it. The raw handle
+/// is a `NonZeroIsize` because that is what the API guarantees about it — a null `HWND` is
+/// not a window — and Windows itself takes it as a pointer.
+fn window_handle(window: &Window) -> Option<HWND> {
+    let handle = window.window_handle().ok()?;
+    let RawWindowHandle::Win32(win32) = handle.as_raw() else {
+        return None;
+    };
+    Some(win32.hwnd.get() as HWND)
 }
 
 /// The accessibility settings, as of the moment they were read.
@@ -261,6 +364,28 @@ mod tests {
         let settings = SystemSettings::read();
         assert!((1.0..=2.25).contains(&settings.text_scale));
         assert_eq!(settings.high_contrast, settings.highlight.is_some());
+    }
+
+    #[test]
+    fn a_window_at_full_opacity_is_not_layered_at_all() {
+        // The default, and the one that has to cost nothing: a user who never opens the
+        // setting gets the same window they would have got before the setting existed.
+        assert_eq!(layered_alpha(1.0), None);
+        // And a value the validator would have rejected still does not layer a window
+        // that is more than opaque.
+        assert_eq!(layered_alpha(1.5), None);
+    }
+
+    #[test]
+    fn every_stop_from_clear_to_opaque_has_a_byte() {
+        assert_eq!(layered_alpha(0.0), Some(0));
+        assert_eq!(layered_alpha(0.25), Some(64));
+        assert_eq!(layered_alpha(0.5), Some(128));
+        assert_eq!(layered_alpha(0.75), Some(191));
+        assert_eq!(layered_alpha(0.999), Some(255));
+        // 0.9 × 255 is 229.5, the one value here where the rule is visible: truncating
+        // would read 229, a step darker than the user asked for.
+        assert_eq!(layered_alpha(0.9), Some(230));
     }
 
     #[test]

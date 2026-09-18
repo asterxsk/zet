@@ -182,6 +182,20 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet`** — `window.opacity` and `window.start-maximized` were parsed, validated, documented, and
+  read by nothing at all.
+  - The window section was written with the schema, and the two keys that need the window itself
+    never got the call that makes them real: the opacity reached no Win32 call and `start-maximized`
+    was never passed to the window's attributes. Setting either produced the default window, with no
+    way to tell a typo from a feature that had not been built.
+  - Opacity is a layered window — `WS_EX_LAYERED` and one constant alpha — set when the window is
+    made and again whenever the section changes, so a window that was faded cannot differ from one
+    that was born faded. `1.0` is not "255 by another name": the style comes off again, because a
+    layered window is composited by the desktop rather than handed to the display controller, and
+    paying that for an opaque window buys nothing. A terminal spends its life at the default, so
+    the default is the one that costs nothing.
+  - `start-maximized` is asked for when the window is created rather than called afterwards: a
+    window maximized after it opens is a window the user watches jump.
 - **`zet-vt`** — erasing after setting a background leaves the background behind, which is what
   `BCE` means and what zet was not doing.
   - The pen carried a background colour and the grid carried a second copy of its own, and nothing
