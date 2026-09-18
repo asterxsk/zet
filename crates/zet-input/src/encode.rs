@@ -680,18 +680,21 @@ pub fn encode_mouse(event: MouseEvent, modes: &Modes) -> Option<Vec<u8>> {
         }
         MouseEncoding::X10 => {
             let mut out = vec![ESC, b'[', b'M'];
-            out.push(one_byte(u32::from(32 + x10)));
+            push_wide(&mut out, u32::from(32 + x10));
             out.push(one_byte(32 + col));
             out.push(one_byte(32 + row));
             out
         }
         MouseEncoding::Utf8 => {
             let mut out = vec![ESC, b'[', b'M'];
-            // The button stays a single byte here. xterm widens it as well, but no
-            // value this crate emits needs it — the largest is back at 160 — and a
-            // program reading a UTF-8 stream only has to be right about the
-            // coordinates it actually compares.
-            out.push(one_byte(u32::from(32 + x10)));
+            // The button is widened like the two coordinates beside it, and the reason
+            // is the two thumb buttons rather than any position on a wide screen: back
+            // and forward are buttons 8 and 9, which put the report's first value at
+            // 160 and 161. Written as a raw byte those are `0xA0` and `0xA1`, which are
+            // not UTF-8 at all — a program reading the stream the way this encoding
+            // exists to let it has a malformed sequence on its hands and no way to
+            // recover the button. xterm sends the two-byte form here and so does zet.
+            push_wide(&mut out, u32::from(32 + x10));
             push_position(&mut out, col);
             push_position(&mut out, row);
             out
@@ -773,7 +776,16 @@ fn one_byte(value: u32) -> u8 {
 /// Above it the coordinate becomes a two-byte character, and the ceiling at 2015 is
 /// where 32 + 2015 reaches 2047 and the two-byte form runs out.
 fn push_position(out: &mut Vec<u8>, coordinate: u32) {
-    let value = (coordinate + 32).min(2047);
+    push_wide(out, (coordinate + 32).min(2047));
+}
+
+/// One value of the UTF-8 form, as however many bytes it takes to be a character.
+///
+/// A surrogate is not a `char` and is dropped rather than encoded, which is the only
+/// value the two callers can produce that has no UTF-8 spelling; the button's own
+/// ceiling is where `char::from_u32` starts refusing, and no button code or position
+/// reaches it.
+fn push_wide(out: &mut Vec<u8>, value: u32) {
     let mut buf = [0u8; 4];
     if let Some(ch) = char::from_u32(value) {
         out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
@@ -1569,6 +1581,78 @@ mod tests {
             .unwrap(),
             b"\x1b[M\x20\xc2\x80\x21"
         );
+    }
+
+    #[test]
+    fn the_utf8_form_widens_the_thumb_buttons_too() {
+        // Back and forward are buttons 8 and 9, which put the report's first value at
+        // 32 + 128 and 32 + 129 — 160 and 161, both past the one-byte range. Sent as
+        // raw bytes those are `0xA0` and `0xA1`, which are not UTF-8 at all: a program
+        // decoding the stream the way this encoding exists to let it has a malformed
+        // sequence and no way to recover the button. Only the coordinates were widened.
+        let modes = mouse_modes(MouseMode::Button, MouseEncoding::Utf8);
+        assert_eq!(
+            encode_mouse(
+                mouse(
+                    MouseButton::Back,
+                    MouseAction::Press,
+                    0,
+                    0,
+                    Modifiers::empty()
+                ),
+                &modes
+            )
+            .unwrap(),
+            b"\x1b[M\xc2\xa0\x21\x21"
+        );
+        assert_eq!(
+            encode_mouse(
+                mouse(
+                    MouseButton::Forward,
+                    MouseAction::Press,
+                    0,
+                    0,
+                    Modifiers::empty()
+                ),
+                &modes
+            )
+            .unwrap(),
+            b"\x1b[M\xc2\xa1\x21\x21"
+        );
+    }
+
+    #[test]
+    fn every_value_of_a_utf8_report_is_a_character() {
+        // The button, the column and the row all come from different arithmetic and
+        // only the last two were ever widened, so the assertion is on the whole report
+        // rather than on any one of the three.
+        let modes = mouse_modes(MouseMode::Motion, MouseEncoding::Utf8);
+        for button in [
+            MouseButton::Left,
+            MouseButton::Right,
+            MouseButton::Back,
+            MouseButton::Forward,
+            MouseButton::WheelUp,
+            MouseButton::WheelRight,
+        ] {
+            for mods in [
+                Modifiers::empty(),
+                Modifiers::SHIFT | Modifiers::CTRL | Modifiers::ALT,
+            ] {
+                // A column and a row past 95, which is where the widening starts, and a
+                // wide terminal's worth of columns on top of that.
+                for (col, row) in [(0, 0), (95, 95), (200, 60), (5000, 5000)] {
+                    let encoded =
+                        encode_mouse(mouse(button, MouseAction::Press, col, row, mods), &modes)
+                            .expect("a report is written for every button");
+                    assert!(
+                        core::str::from_utf8(&encoded).is_ok(),
+                        "{button:?} with {mods:?} at ({col}, {row}) produced \
+                         {encoded:02x?}, which is not a UTF-8 string"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
