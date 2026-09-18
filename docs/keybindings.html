@@ -113,10 +113,11 @@
         <code>+</code>. The key comes last.</li>
         <li><code>Ctrl+Shift+T</code>, <code>ctrl+shift+t</code>, and <code>Shift+Ctrl+T</code> are
         the same chord as far as the modifiers go.</li>
-        <li><strong>Case does not imply Shift.</strong> <code>Shift</code> is written out. A chord is
-        compared exactly, including the case of a character, so <code>Ctrl+Shift+T</code> names a
-        capital <code>T</code>. A binding written with the wrong case never fires, which is a better
-        failure than one that fires on a keystroke you did not describe.</li>
+        <li><strong>Case does not imply Shift.</strong> <code>Shift</code> is written out. The
+        <em>case of a letter</em> is not part of the chord, though, because Caps Lock decides which
+        one the system reports and a binding that stopped firing under Caps Lock would be a binding
+        that stopped for a reason you cannot see: <code>Ctrl+Shift+T</code> and
+        <code>Ctrl+Shift+t</code> are one chord, and either spelling binds it.</li>
         <li>The <code>+</code> key itself is written <code>Ctrl++</code>. Everything before the last
         token that is not a modifier is taken as the key, so splitting on every <code>+</code>
         would break it.</li>
@@ -124,7 +125,9 @@
         <code>F25</code> are not keys.</li>
         <li>A misspelled modifier is reported as an unknown key, because at that position the two
         are the same mistake: <code>Foo+T</code> and <code>Ctrl+NotAKey</code> are both a typo
-        somewhere.</li>
+        somewhere. The report is a line of standard error at startup and a
+        <a href="configuration.html#diagnostics">Problems</a> row in the settings panel, so a
+        binding that silently stopped working is not a thing that can happen.</li>
       </ul>
 
       <h3>Named keys</h3>
@@ -151,9 +154,10 @@
       that key: <code>Ctrl+Shift+Comma</code> is what to write, and it fires whether your layout
       produces <code>&lt;</code> there or something else. Writing the shifted character instead —
       <code>Ctrl+Shift+&lt;</code> — is the same chord on a US layout and a different one everywhere
-      else, so the name is the one to prefer. Letters are the exception and are matched exactly:
-      <code>Ctrl+Shift+T</code> and <code>Ctrl+Shift+t</code> are two different chords, and only one
-      of them is bound.</p>
+      else, so the name is the one to prefer. The pairing that resolves the shifted character back
+      to its key is the PC-101 one, so the name is the one to write everywhere and the guarantee
+      that it fires under shift is exact on the layouts that keep that pairing — which is every
+      layout zet has been tried on, and not every layout there is.</p>
 
       <h2>Rebinding</h2>
 

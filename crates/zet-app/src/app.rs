@@ -169,7 +169,7 @@ impl App {
     pub fn new(
         config: Config,
         config_path: PathBuf,
-        diagnostics: Vec<Diagnostic>,
+        mut diagnostics: Vec<Diagnostic>,
         waker: Arc<dyn Waker>,
     ) -> Result<Self, AppError> {
         let profiles = discovery::discover();
@@ -178,6 +178,9 @@ impl App {
         }
         let theme = by_slug(&config.theme).unwrap_or_else(|| zet_config::default_theme());
         let bindings = parse_bindings(&config);
+        // After the loader's own, so the panel reads them in the order they were found:
+        // what is wrong with the file's shape, and then what is wrong with its bindings.
+        report_unparseable_bindings(&config, &mut diagnostics);
         let now = Instant::now();
         Ok(App {
             config,
@@ -1182,9 +1185,9 @@ fn clip_match(found: Match, top: usize, rows: usize, cols: usize) -> Selection {
 
 /// Turn the config file's `[keys]` table into chords.
 ///
-/// An entry that cannot be parsed is dropped rather than fatal. The config loader has
-/// already reported the ones it could see, and a keybinding is not worth refusing to
-/// start over.
+/// An entry that cannot be parsed is dropped rather than fatal — a keybinding is not worth
+/// refusing to start over — and [`report_unparseable_bindings`] is where the dropping is
+/// said out loud.
 pub(crate) fn parse_bindings(config: &Config) -> Vec<(Chord, Action)> {
     config
         .keys
@@ -1195,6 +1198,31 @@ pub(crate) fn parse_bindings(config: &Config) -> Vec<(Chord, Action)> {
             Some((chord, action))
         })
         .collect()
+}
+
+/// Report the `[keys]` values that are not chords.
+///
+/// The loader does not parse chords — `zet-config` has no business knowing what one is,
+/// and says so where it decides what it checks — so this is the only place in the
+/// workspace where `new-tab = "Ctrl+Banana"` is looked at. Without it the entry is dropped
+/// by [`parse_bindings`] in silence, which is the one thing a misspelled binding must not
+/// do: the key simply stops working and nothing says why.
+///
+/// Two values are skipped, and both are deliberate rather than misspelled. An action zet
+/// does not know is the loader's to report, and it already does. An empty value is how the
+/// settings panel writes an action it has taken a chord away from.
+fn report_unparseable_bindings(config: &Config, diagnostics: &mut Vec<Diagnostic>) {
+    for (name, text) in &config.keys {
+        if text.is_empty() || Action::from_name(name).is_none() {
+            continue;
+        }
+        if text.parse::<Chord>().is_err() {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                message: format!("keys.{name} = {text:?} is not a chord zet knows"),
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1306,6 +1334,53 @@ mod tests {
         let bound = parse_bindings(&config);
         assert!(!bound.iter().any(|(_, a)| *a == Action::NewTab));
         assert!(bound.iter().any(|(_, a)| *a == Action::CloseTab));
+    }
+
+    #[test]
+    fn a_binding_that_does_not_parse_is_reported_as_well_as_dropped() {
+        // The keybindings reference promises "a misspelled modifier is reported as an
+        // unknown key", and `parse_bindings`'s own comment claimed "the config loader has
+        // already reported the ones it could see". Neither was true: zet-config does not
+        // parse chords and says so in its own comment, so nothing in the workspace ever
+        // looked at `new-tab = "Ctrl+Banana"` and the entry simply vanished.
+        let mut config = Config::default();
+        config.keys.insert("new-tab".into(), "Ctrl+Banana".into());
+        let app = App::new(
+            config,
+            PathBuf::from("test.toml"),
+            Vec::new(),
+            Arc::new(NoopWaker),
+        )
+        .expect("this machine has a shell");
+        let reported: Vec<(&Severity, &str)> = app
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| (&diagnostic.severity, diagnostic.message.as_str()))
+            .collect();
+        assert_eq!(
+            reported,
+            vec![(
+                &Severity::Error,
+                "keys.new-tab = \"Ctrl+Banana\" is not a chord zet knows"
+            )]
+        );
+    }
+
+    #[test]
+    fn an_action_the_panel_unbound_is_not_a_chord_it_cannot_read() {
+        // The empty value is the documented spelling for "unbound" — the settings panel
+        // writes it when a chord is taken away from an action — so it is the one value in
+        // the table that is deliberately not a chord and must not be complained about.
+        let mut config = Config::default();
+        config.keys.insert("new-tab".into(), String::new());
+        let app = App::new(
+            config,
+            PathBuf::from("test.toml"),
+            Vec::new(),
+            Arc::new(NoopWaker),
+        )
+        .expect("this machine has a shell");
+        assert!(app.diagnostics().is_empty(), "{:?}", app.diagnostics());
     }
 
     #[test]

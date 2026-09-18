@@ -247,6 +247,19 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-app`** — a `[keys]` value that is not a chord was dropped without a word.
+  - `parse_bindings`'s own comment said "the config loader has already reported the ones it could
+    see", and `docs/keybindings.html` promises that "a misspelled modifier is reported as an unknown
+    key". Both were false, and the loader's comment is the reason: `zet-config` does not parse
+    chords — it has no business knowing what one is — and says so where it decides what it checks.
+    So `new-tab = "Ctrl+Banana"` was looked at by nothing at all: the binding did not exist, the key
+    did nothing, and no surface anywhere said why.
+  - The app reports them now, through the same diagnostics the loader's own problems travel in, so a
+    misspelled binding reaches stderr at startup and the panel's Problems section with everything
+    else. `parse_bindings`'s doc no longer claims the loader did it.
+  - Two values are deliberately not chords and are not reported: an action zet does not know, which
+    is the loader's to report and already is, and the empty value, which is how the panel writes an
+    action it has taken a chord away from.
 - **`zet-app` / `zet-ui` / `zet`** — configuration diagnostics were produced and read by nobody, so a
   file zet had already repaired was a file with no way of saying so.
   - `Diagnostic` and `Severity` have been built by the loader since the schema was written, both
