@@ -182,12 +182,13 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
-- **`zet`** — `window.opacity` and `window.start-maximized` were parsed, validated, documented, and
-  read by nothing at all.
-  - The window section was written with the schema, and the two keys that need the window itself
-    never got the call that makes them real: the opacity reached no Win32 call and `start-maximized`
-    was never passed to the window's attributes. Setting either produced the default window, with no
-    way to tell a typo from a feature that had not been built.
+- **`zet`** — `window.opacity`, `window.start-maximized`, and `window.remember-position` were parsed,
+  validated, documented, and read by nothing at all.
+  - The window section was written with the schema, and the three keys that need the window itself
+    never got the call that makes them real: the opacity reached no Win32 call, `start-maximized` was
+    never passed to the window's attributes, and nothing wrote down where the window was. Setting any
+    of them produced the default window, with no way to tell a typo from a feature that had not been
+    built.
   - Opacity is a layered window — `WS_EX_LAYERED` and one constant alpha — set when the window is
     made and again whenever the section changes, so a window that was faded cannot differ from one
     that was born faded. `1.0` is not "255 by another name": the style comes off again, because a
@@ -195,7 +196,15 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     paying that for an opaque window buys nothing. A terminal spends its life at the default, so
     the default is the one that costs nothing.
   - `start-maximized` is asked for when the window is created rather than called afterwards: a
-    window maximized after it opens is a window the user watches jump.
+    window maximized after it opens is a window the user watches jump. The remembered position is
+    passed the same way and for the same reason.
+  - The position is `%LOCALAPPDATA%\zet\window.txt`, holding one line of two numbers. Not a key in
+    `config.toml`, because that file is the user's and a file that fails to parse produces defaults
+    rather than an error — so a zet that wrote to it on the way out would be a zet that replaced a
+    file it had just failed to understand. Per-machine rather than roaming, because a position is a
+    fact about this desk. Read and written only when the corner is on a display that is attached
+    now, which is what keeps an unplugged monitor's coordinates, and a window closed while
+    minimized, from putting the next window somewhere nobody can see it.
 - **`zet-vt`** — erasing after setting a background leaves the background behind, which is what
   `BCE` means and what zet was not doing.
   - The pen carried a background colour and the grid carried a second copy of its own, and nothing

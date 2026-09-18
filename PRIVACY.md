@@ -80,6 +80,7 @@ typed, and the only file it will rewrite is its own binary.
 | Location | Contents | Why |
 |---|---|---|
 | `%APPDATA%\zet\config.toml` | Your settings: theme, font, shell profiles, keybindings | To remember your configuration |
+| `%LOCALAPPDATA%\zet\window.txt` | Where the window was, as two numbers | To open the window where you left it. Delete the file, or set `window.remember-position = false`, to stop it |
 | `%LOCALAPPDATA%\zet\logs\` | Diagnostic logs, if you enable them. Off by default | To help you diagnose a problem you report |
 | Beside `zet.exe` | An update, while it is being put in place: the verified download as `zet.exe.new`, then the binary it replaced as `zet.exe.old` | To replace a running binary, which Windows allows only by renaming it |
 

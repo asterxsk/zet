@@ -175,8 +175,8 @@ toggle-tab-position = "Ctrl+Shift+P"</code></pre>
           <tr><td class="k">window.background.from</td><td>colour</td><td colspan="2">Required when <code>kind = "gradient"</code>. The first stop.</td></tr>
           <tr><td class="k">window.background.to</td><td>colour</td><td colspan="2">Required when <code>kind = "gradient"</code>. The second stop.</td></tr>
           <tr><td class="k">window.background.angle</td><td>float</td><td colspan="2">Required when <code>kind = "gradient"</code>. Degrees clockwise from pointing right.</td></tr>
-          <tr><td class="k">window.opacity</td><td>float</td><td class="k">1.0</td><td>0.0 to 1.0.</td></tr>
-          <tr><td class="k">window.remember-position</td><td>bool</td><td class="k">true</td><td>Whether the window remembers where it was.</td></tr>
+          <tr><td class="k">window.opacity</td><td>float</td><td class="k">1.0</td><td>0.0 to 1.0. The whole window fades, chrome included, because it is one surface. <code>1.0</code> is an ordinary opaque window.</td></tr>
+          <tr><td class="k">window.remember-position</td><td>bool</td><td class="k">true</td><td>Whether the window remembers where it was, as one line of two numbers in <code>%LOCALAPPDATA%\zet\window.txt</code>. A position on a display that is no longer attached is ignored rather than used.</td></tr>
           <tr><td class="k">window.start-maximized</td><td>bool</td><td class="k">false</td><td>Whether the window starts maximized.</td></tr>
           <tr><td class="k">tabs.position</td><td>string</td><td class="k">"top"</td><td><code>top</code> is one row shared with the titlebar; <code>left</code> is a rail down the left edge.</td></tr>
           <tr><td class="k">tabs.open-default-without-asking</td><td>bool</td><td class="k">true</td><td>Whether a new tab opens the default profile without asking.</td></tr>

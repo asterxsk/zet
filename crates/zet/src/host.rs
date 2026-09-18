@@ -43,7 +43,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalSize, PhysicalPosition};
 use winit::event::{ElementState, Ime, MouseButton as WinitButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::ModifiersState;
@@ -58,6 +58,7 @@ use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabIn
 
 use crate::keys;
 use crate::mouse;
+use crate::placement;
 use crate::platform::{SystemSettings, set_opacity};
 use crate::waker::Wake;
 
@@ -311,6 +312,72 @@ impl Host {
         text_scale(self.app.config(), self.settings.text_scale)
     }
 
+    /// The screens, as `placement` describes them.
+    ///
+    /// Asked of the event loop rather than cached: a display can be plugged in or
+    /// unplugged between two windows of the same session, and both the question "is this
+    /// position still on a screen" and the answer have to be about the screens there are
+    /// now.
+    fn screens(loop_: &ActiveEventLoop) -> Vec<placement::Screen> {
+        loop_
+            .available_monitors()
+            .map(|monitor| {
+                let at = monitor.position();
+                let size = monitor.size();
+                placement::Screen {
+                    at: placement::Position::new(at.x, at.y),
+                    // Signed because a position is: the two are added together to ask
+                    // whether a point is on a screen. A display two billion pixels wide
+                    // would flip the sign here, and there is no such display.
+                    size: (size.width.cast_signed(), size.height.cast_signed()),
+                }
+            })
+            .collect()
+    }
+
+    /// Where the window is to open, if the user asked for it and it is still a place.
+    ///
+    /// `None` for every reason at once — the setting off, no file, a file that is not a
+    /// position, a position on a monitor that has been unplugged — because they all want
+    /// the same thing from the caller: let the window system place the window.
+    fn remembered(&self, loop_: &ActiveEventLoop) -> Option<PhysicalPosition<i32>> {
+        if !self.app.config().window.remember_position {
+            return None;
+        }
+        let path = placement::default_path()?;
+        let position = placement::load(&path)?;
+        let position = placement::on_a_screen(position, &Self::screens(loop_))?;
+        Some(PhysicalPosition::new(position.x, position.y))
+    }
+
+    /// Write down where the window is, for the next time it opens.
+    ///
+    /// The outer corner rather than the inner one: it is the corner the window system
+    /// positions and the one the user drags by, and a window recalled by its inner corner
+    /// would drift by the width of a frame every time it was closed.
+    ///
+    /// A corner that is on no screen is not written, which is the same rule the file is
+    /// read under and is what keeps a window closed while minimized from teaching the
+    /// next one where the taskbar's own coordinates are.
+    fn remember(&self, loop_: &ActiveEventLoop) {
+        if !self.app.config().window.remember_position {
+            return;
+        }
+        let Some(window) = self.window() else {
+            return;
+        };
+        let Ok(at) = window.outer_position() else {
+            return;
+        };
+        let Some(path) = placement::default_path() else {
+            return;
+        };
+        let position = placement::Position::new(at.x, at.y);
+        if placement::on_a_screen(position, &Self::screens(loop_)).is_some() {
+            placement::save(&path, position);
+        }
+    }
+
     /// The window's size in logical pixels.
     fn logical_size(&self) -> (f64, f64) {
         let Some(window) = self.window() else {
@@ -326,22 +393,26 @@ impl Host {
 
     /// Create the window and the device that draws into it.
     fn attach(&mut self, loop_: &ActiveEventLoop) -> Result<(), StartupError> {
+        let attributes = Window::default_attributes()
+            .with_title(APP_NAME)
+            // DESIGN.md draws its own titlebar and caption buttons, and a second set
+            // drawn by Windows over them would be two titlebars stacked on each other.
+            .with_decorations(false)
+            .with_inner_size(OPEN_SIZE)
+            .with_min_inner_size(MIN_SIZE)
+            // Asked for at creation rather than called afterwards, because a window that
+            // is maximized after it opens is a window the user watches jump — once, on
+            // the frame they were looking at. The remembered position is set here for
+            // the same reason: a window that moves itself is a window that moved.
+            .with_maximized(self.app.config().window.start_maximized);
+        let attributes = match self.remembered(loop_) {
+            Some(position) => attributes.with_position(position),
+            None => attributes,
+        };
+
         let window = Arc::new(
             loop_
-                .create_window(
-                    Window::default_attributes()
-                        .with_title(APP_NAME)
-                        // DESIGN.md draws its own titlebar and caption buttons, and a
-                        // second set drawn by Windows over them would be two titlebars
-                        // stacked on each other.
-                        .with_decorations(false)
-                        .with_inner_size(OPEN_SIZE)
-                        .with_min_inner_size(MIN_SIZE)
-                        // Asked for at creation rather than called afterwards, because a
-                        // window that is maximized after it opens is a window the user
-                        // watches jump — once, on the frame they were looking at.
-                        .with_maximized(self.app.config().window.start_maximized),
-                )
+                .create_window(attributes)
                 .map_err(StartupError::Window)?,
         );
         set_opacity(&window, self.app.config().window.opacity);
@@ -1530,6 +1601,19 @@ pub enum StartupError {
 }
 
 impl ApplicationHandler<Wake> for Host {
+    /// The one place every way out of the loop passes through.
+    ///
+    /// `loop_.exit()` is called from five places — the quit action, the caption's close
+    /// button, the last tab's shell exiting, the window's own close request, and a failed
+    /// start — and a position written down at each of them would be a position written
+    /// down at four of them the day a sixth is added. This is winit's own last call, and
+    /// it happens after the loop has stopped rather than during the event that stopped
+    /// it, which is also the first moment the window's position is certainly its final
+    /// one.
+    fn exiting(&mut self, loop_: &ActiveEventLoop) {
+        self.remember(loop_);
+    }
+
     fn resumed(&mut self, loop_: &ActiveEventLoop) {
         // `resumed` fires again after a suspend on the platforms that have them, and a
         // second window is not what that means.
