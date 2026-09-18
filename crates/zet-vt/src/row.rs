@@ -149,6 +149,53 @@ impl Row {
         for cell in &mut self.cells[start..end] {
             *cell = blank;
         }
+        // The erase can end between the two halves of a wide character, and the half it
+        // left outside the range is now half a character.
+        self.repair_wide(cols, start.saturating_sub(1)..=end, &blank);
+    }
+
+    /// Blank any half of a wide character in `range` whose partner is not there.
+    ///
+    /// A wide character is two cells, and every edit that moves or erases a run of cells
+    /// moves the two halves independently. What is left is a leading half with no spacer
+    /// — a full-width glyph with nowhere to put it, which the renderer draws overlapping
+    /// its neighbour — or a spacer with no lead, which is a stray space where a character
+    /// used to be and which `content_len` deliberately keeps, so it survives the trim
+    /// into the scrollback and scrolls away with the line.
+    ///
+    /// A partner is recognised by its flag, so a half is orphaned exactly when the
+    /// neighbour that should carry the matching flag does not, and no record of how the
+    /// pair was cut is needed. `range` is the few columns around a boundary rather than
+    /// the whole row: a pair that moved together is still whole.
+    pub fn repair_wide(
+        &mut self,
+        cols: usize,
+        range: core::ops::RangeInclusive<usize>,
+        blank: &Cell,
+    ) {
+        for col in range {
+            if col >= cols {
+                break;
+            }
+            let cell = self.get(col);
+            let lead = cell.flags.contains(CellFlags::WIDE_CHAR);
+            let spacer = cell.flags.contains(CellFlags::WIDE_CHAR_SPACER);
+            if !lead && !spacer {
+                continue;
+            }
+            let whole = if lead {
+                col + 1 < cols
+                    && self
+                        .get(col + 1)
+                        .flags
+                        .contains(CellFlags::WIDE_CHAR_SPACER)
+            } else {
+                col > 0 && self.get(col - 1).flags.contains(CellFlags::WIDE_CHAR)
+            };
+            if !whole {
+                *self.get_mut(col) = *blank;
+            }
+        }
     }
 
     /// Write the character in `template` at `col`, returning how many columns it used.
@@ -238,6 +285,15 @@ impl Row {
         for cell in &mut self.cells[start..start + count] {
             *cell = blank;
         }
+        // Two places a pair came apart: the gap's two edges, where a character whose
+        // halves ended up on opposite sides of it is in two pieces, and the right margin,
+        // where the half that was pushed past the end is gone. One range covers both, and
+        // a pair it did not touch is whole and is left alone.
+        self.repair_wide(
+            cols,
+            start.saturating_sub(1)..=cols.saturating_sub(1),
+            &blank,
+        );
     }
 
     /// Shift cells in `[start, end)` left by `count`, filling the tail with `blank`.
@@ -252,6 +308,14 @@ impl Row {
         for cell in &mut self.cells[tail..] {
             *cell = blank;
         }
+        // The same two places as an insert: the seam at `start`, where the run to the
+        // right is pulled left out from under a character that had a half to the left of
+        // it, and the tail, where a half that was blanked leaves its partner behind.
+        self.repair_wide(
+            cols,
+            start.saturating_sub(1)..=cols.saturating_sub(1),
+            &blank,
+        );
     }
 
     /// The index one past the last cell that would draw something.

@@ -1278,6 +1278,7 @@ impl Perform for Term {
 mod tests {
     use super::*;
     use crate::attrs::UnderlineStyle;
+    use crate::cell::CellFlags;
     use crate::parser::Parser;
 
     /// A terminal and the parser feeding it.
@@ -1988,6 +1989,74 @@ mod tests {
         assert!(t.is_synchronized(), "the host must hold the frame");
         feed(&mut t, b"\x1b[?2026l");
         assert!(!t.is_synchronized());
+    }
+
+    /// Every wide character in the terminal is a lead followed by its spacer.
+    ///
+    /// The two halves are two cells and every edit that moves or erases a run of cells
+    /// moves them independently, so this is the invariant those edits have to leave
+    /// behind: a lead with no spacer is drawn as a full-width glyph with nowhere to put
+    /// it, and a spacer with no lead is a stray space where a character used to be.
+    fn assert_no_orphan_halves(term: &Term) {
+        for row in 0..term.grid().rows() {
+            let line = term.grid().row(row);
+            for col in 0..term.grid().cols() {
+                let cell = line.get(col);
+                if cell.flags.contains(CellFlags::WIDE_CHAR) {
+                    assert!(
+                        col + 1 < term.grid().cols() && line.get(col + 1).is_wide_spacer(),
+                        "row {row} column {col} is the half of a wide character whose \
+                         other half is not there: {:?}",
+                        line.cells()
+                    );
+                }
+                if cell.is_wide_spacer() {
+                    assert!(
+                        col > 0 && line.get(col - 1).flags.contains(CellFlags::WIDE_CHAR),
+                        "row {row} column {col} is a spacer with no character before it: \
+                         {:?}",
+                        line.cells()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_edit_that_cuts_a_row_does_not_cut_a_wide_character_in_half() {
+        // `ICH`, `DCH` and `ECH` all move or blank a run of cells, and a wide character
+        // is two cells. Every one of these leaves the row holding half of a character
+        // unless the edit is told to look: the halves travel apart, and nothing
+        // downstream can tell — the renderer draws a lead as a full-width glyph wherever
+        // it finds one, so a lead whose spacer went missing overlaps its neighbour, and
+        // `content_len` keeps a trailing spacer so an orphan at the end of a line
+        // survives the trim into the scrollback.
+        let wide = "\u{4e2d}\u{4e2d}"; // four cells: lead, spacer, lead, spacer.
+
+        for (name, sequence) in [
+            ("ICH", "\x1b[1;2H\x1b[1@"),
+            ("DCH", "\x1b[1;2H\x1b[1P"),
+            ("ECH", "\x1b[1;2H\x1b[1X"),
+            ("EL", "\x1b[1;2H\x1b[0K"),
+            ("ED", "\x1b[1;2H\x1b[0J"),
+        ] {
+            let mut t = open(4, 2);
+            feed(&mut t, wide.as_bytes());
+            feed(&mut t, b"\x1b[1;1H");
+            feed(&mut t, sequence.as_bytes());
+            assert_no_orphan_halves(&t);
+            assert!(t.grid().row(0).cells().len() <= 4, "{name} grew the row");
+        }
+    }
+
+    #[test]
+    fn a_wide_character_pushed_off_the_right_edge_leaves_nothing_behind() {
+        // `ICH` at the second column pushes the last pair one cell past the end, so the
+        // spacer falls off and the lead is left in the last column on its own.
+        let mut t = open(4, 1);
+        feed(&mut t, "\u{4e2d}\u{4e2d}".as_bytes());
+        feed(&mut t, b"\x1b[1;2H\x1b[1@");
+        assert_no_orphan_halves(&t);
     }
 
     #[test]

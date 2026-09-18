@@ -388,9 +388,15 @@ impl Grid {
         if r.len() < cols {
             r.resize(cols);
         }
-        for cell in &mut r.cells_mut(cols)[start.min(cols)..end.min(cols)] {
+        let (start, end) = (start.min(cols), end.min(cols));
+        for cell in &mut r.cells_mut(cols)[start..end] {
             *cell = blank;
         }
+        // An erase that ends between the two halves of a wide character leaves the half
+        // outside the range without its partner. `EL` and `ED` are where a user meets
+        // this most: clearing from the cursor to the end of a line that holds CJK text
+        // puts the cursor in the middle of a character about half the time.
+        r.repair_wide(cols, start.saturating_sub(1)..=end, &blank);
         // A row cleared from end to end holds no first half of anything, so it is no
         // longer the continuation of the row above it. Leaving the flag set makes a
         // later reflow or copy treat a blank row as part of a logical line, which
