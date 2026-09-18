@@ -227,6 +227,11 @@ toggle-tab-position = "Ctrl+Shift+P"</code></pre>
       <p>The window's background is a tagged table. <code>kind</code> says which of the three it is,
       and the fields that follow belong to that kind.</p>
 
+      <p>It covers the whole window. The chrome paints its own surfaces over it, and the grid
+      leaves its ground unpainted, so what shows through the terminal is the background. A cell a
+      program gave a background to still paints it: a gradient is the window's, not the
+      program's.</p>
+
 <pre><code><span class="c"># The theme's ground colour, flat. This is the default.</span>
 [window.background]
 kind = "solid"

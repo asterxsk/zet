@@ -65,6 +65,36 @@ use crate::waker::Wake;
 /// The app's own name, as the titlebar's name slot shows it.
 const APP_NAME: &str = "zet";
 
+/// The window's background, as the frame wants it: a thing to draw or nothing at all.
+///
+/// The configuration's own vocabulary turned into the renderer's, in one place, because
+/// the two disagree about what "solid" means in a way that is correct on both sides:
+/// `Background::Solid` is the theme's ground, which reaches the frame as the clear colour
+/// and therefore as no backdrop at all, and a caller that turned it into a flat gradient
+/// would be drawing the ground twice and paying for a shader to do it.
+///
+/// The size is the surface's, in physical pixels: a gradient is defined across the window
+/// and a window that is resized has its gradient resized with it, which is what a
+/// background is rather than what a picture in it would be.
+fn backdrop(
+    background: &zet_config::Background,
+    width: f32,
+    height: f32,
+) -> Option<zet_render::Gradient> {
+    match background {
+        zet_config::Background::Solid | zet_config::Background::Image { .. } => None,
+        zet_config::Background::Gradient { from, to, angle } => Some(zet_render::Gradient::new(
+            0.0,
+            0.0,
+            width,
+            height,
+            from.to_linear(),
+            to.to_linear(),
+            *angle,
+        )),
+    }
+}
+
 /// The grid size a window with no renderer yet is measured against.
 ///
 /// A window with no terminal in it is still a window, and its size is what a tab opened
@@ -516,6 +546,22 @@ impl Host {
         // without a flag to keep true.
     }
 
+    /// Begin a frame: the capacity kept, and what it is painted on settled.
+    ///
+    /// The colour the surface is cleared to and the backdrop over it are the two answers
+    /// to "what is behind everything", and they are set together because the pair can
+    /// disagree. `Background::Solid` is the theme's ground, which reaches the frame as the
+    /// clear colour and as no backdrop at all, and a caller that took the ground from one
+    /// setting and the gradient from another would have a window whose floor and whose
+    /// wallpaper were two different decisions.
+    fn begin_frame(&mut self, size: (u32, u32)) {
+        let ground = self.app.theme().background.to_linear();
+        let background = self.app.config().window.background.clone();
+        self.frame.reset();
+        self.frame.clear = ground;
+        self.frame.backdrop = backdrop(&background, size.0 as f32, size.1 as f32);
+    }
+
     /// Draw everything and put it on screen.
     fn redraw(&mut self) {
         // Before the renderer is borrowed: `reconcile` may reload a face, and it needs
@@ -531,9 +577,13 @@ impl Host {
         let Some(window) = self.window.clone() else {
             return;
         };
-        if self.renderer.is_none() {
+        // The surface's size in physical pixels, and the frame's ground settled with it.
+        // Both here rather than below, because the renderer is borrowed mutably for the
+        // rest of the frame and neither of these needs it for anything else.
+        let Some(size) = self.renderer.as_ref().map(Renderer::size) else {
             return;
-        }
+        };
+        self.begin_frame(size);
 
         // Everything that reads the whole host is gathered before the renderer is
         // borrowed mutably, and that ordering is load-bearing rather than stylistic: a
@@ -610,9 +660,6 @@ impl Host {
         };
         // Copied rather than borrowed, because the renderer is needed mutably below.
         let metrics = *renderer.metrics();
-
-        frame.reset();
-        frame.clear = theme.background.to_linear();
 
         // The grid first, so the chrome lands on top of it. It is positioned with the
         // previous frame's layout — see the module documentation — and the fresh layout

@@ -14,6 +14,21 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Added
 
+- **`zet-render` / `zet`** — `window.background`'s gradient, which the schema has documented since it
+  was written and which nothing drew.
+  - A third shader and a third pipeline, and a `Frame::backdrop` that is *not* a batch: it can only
+    ever be the first thing drawn, so a run would give a caller a way to get the order wrong that
+    buys nothing. It sits beside `clear` because it is the same kind of thing — what the frame is
+    painted on — and a frame with a gradient differs from one without in a single value rather than
+    in the shape of the list.
+  - The arithmetic that turns an angle into an axis is on the CPU, in `Gradient::new`, and is
+    unit-tested there against the formula the shader runs. A length that ignored the angle would run
+    out of colour before the far corner and clamp for the rest of the rectangle, which reads as a
+    hard edge in a soft background; the tests fail for exactly that change.
+  - The grid stops painting its ground when there is a backdrop, and that is the whole of how a
+    background shows through a terminal: a cell whose colour is the theme's paints nothing already,
+    and the one rectangle that stood for all of them was the thing standing in the way. A cell a
+    program gave a colour to still paints it.
 - **`zet-app` / `zet-ui` / `zet`** — the settings panel, which is the config file with a face on it.
   - `Ctrl+Shift+Comma` opens a 380px panel over the right edge of the grid. The terminal stays
     visible behind it and keeps updating: the preview is not a preview.

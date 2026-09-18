@@ -36,7 +36,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-use crate::frame::{BatchKind, Frame, GlyphQuad, Quad};
+use crate::frame::{BatchKind, Frame, GlyphQuad, Gradient, Quad};
 
 /// Something went wrong talking to the graphics device.
 #[derive(Debug, thiserror::Error)]
@@ -95,6 +95,23 @@ const QUAD_VERTICES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayou
     array_stride: size_of::<Quad>() as u64,
     step_mode: wgpu::VertexStepMode::Instance,
     attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4],
+};
+
+/// How the frame's backdrop is read as instance data.
+///
+/// One instance, four vectors: the rectangle, its two colours, and the axis the colours
+/// run along. It is a separate layout from the quads' rather than an extra attribute on
+/// them, because a rectangle of one colour is the common case by several thousand to one
+/// and every quad in a frame would carry sixteen bytes of second colour it never reads.
+const BACKDROP_VERTICES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    array_stride: size_of::<Gradient>() as u64,
+    step_mode: wgpu::VertexStepMode::Instance,
+    attributes: &wgpu::vertex_attr_array![
+        0 => Float32x4,
+        1 => Float32x4,
+        2 => Float32x4,
+        3 => Float32x4,
+    ],
 };
 
 /// How a run of [`GlyphQuad`]s is read as instance data.
@@ -177,6 +194,9 @@ pub struct Gpu {
     quads: wgpu::RenderPipeline,
     /// The pipeline that draws runs of [`Frame::glyphs`].
     glyphs: wgpu::RenderPipeline,
+    /// The pipeline that draws [`Frame::backdrop`], the one thing in a frame that is not
+    /// a rectangle of one colour.
+    backdrop: wgpu::RenderPipeline,
     /// The screen-size uniform, written whenever the size changes.
     screen: wgpu::Buffer,
     /// The layout the atlas group is created from, kept for the uploads that rebuild it.
@@ -190,6 +210,9 @@ pub struct Gpu {
     quad_vertices: wgpu::Buffer,
     /// Instance data for the last frame's glyphs. Grows, never shrinks.
     glyph_vertices: wgpu::Buffer,
+    /// Instance data for the last frame's backdrop: one rectangle, rewritten every frame
+    /// it is drawn. Sized once, because there is never more than one.
+    backdrop_vertex: wgpu::Buffer,
 }
 
 impl Gpu {
@@ -373,6 +396,14 @@ impl Gpu {
             GLYPH_VERTICES,
             "zet glyphs",
         );
+        let backdrop = pipeline(
+            &device,
+            &pipeline_layout,
+            format,
+            &device.create_shader_module(wgpu::include_wgsl!("../shaders/backdrop.wgsl")),
+            BACKDROP_VERTICES,
+            "zet backdrop",
+        );
 
         let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zet atlas"),
@@ -400,6 +431,7 @@ impl Gpu {
         atlas.write(&queue, (1, 1), &[0; 4]);
         let quad_vertices = vertex_buffer(&device, "zet quad vertices");
         let glyph_vertices = vertex_buffer(&device, "zet glyph vertices");
+        let backdrop_vertex = vertex_buffer(&device, "zet backdrop vertex");
 
         Self {
             device,
@@ -409,12 +441,14 @@ impl Gpu {
             target,
             quads,
             glyphs,
+            backdrop,
             screen,
             atlas_layout,
             atlas_sampler,
             atlas,
             quad_vertices,
             glyph_vertices,
+            backdrop_vertex,
         }
     }
 
@@ -504,6 +538,13 @@ impl Gpu {
             .write_buffer(&self.quad_vertices, 0, bytemuck::cast_slice(&frame.quads));
         self.queue
             .write_buffer(&self.glyph_vertices, 0, bytemuck::cast_slice(&frame.glyphs));
+        // One instance and no growth: a frame has one backdrop or none, so the buffer is
+        // exactly the size of one and the write is unconditional only in the sense that
+        // it does not have to be sized first.
+        if let Some(backdrop) = &frame.backdrop {
+            self.queue
+                .write_buffer(&self.backdrop_vertex, 0, bytemuck::bytes_of(backdrop));
+        }
 
         // The view is taken first and the acquisition kept, because the swapchain image
         // has to be given back to the surface after the work on it is submitted.
@@ -577,6 +618,14 @@ impl Gpu {
         });
 
         pass.set_bind_group(0, &self.atlas.group, &[]);
+        // The backdrop first, before every batch and after the clear. It is what the
+        // window is made of rather than something drawn on the window, which is also why
+        // the grid leaves its own ground unpainted when there is one.
+        if frame.backdrop.is_some() {
+            pass.set_pipeline(&self.backdrop);
+            pass.set_vertex_buffer(0, self.backdrop_vertex.slice(..));
+            pass.draw(CORNERS, 0..1);
+        }
         let mut bound: Option<BatchKind> = None;
         for batch in &frame.batches {
             // A run with nothing in it would be a draw of nothing, and binding an empty

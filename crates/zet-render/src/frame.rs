@@ -119,6 +119,80 @@ pub enum BatchKind {
     Glyphs,
 }
 
+/// A rectangle of two colours, one at each end of an axis.
+///
+/// The one thing in a frame that is not a flat colour, and it is here rather than in the
+/// quad array because it is a different kind of thing: a quad is one colour for the whole
+/// of itself and this is a colour that changes across itself. `window.background`'s
+/// gradient is the only caller.
+///
+/// The colours are linear and premultiplied like a [`Quad`]'s, and the mix happens in the
+/// shader between two values that are already in that space — interpolating premultiplied
+/// linear values between two opaque colours is interpolating the colours, which is what a
+/// gradient is.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Pod, Zeroable)]
+pub struct Gradient {
+    /// `x`, `y`, `width`, `height` in physical pixels, from the top-left of the surface.
+    pub rect: [f32; 4],
+    /// The colour the axis starts at, linear premultiplied.
+    pub from: [f32; 4],
+    /// The colour it ends at.
+    pub to: [f32; 4],
+    /// `dx`, `dy`, the length to divide the projection by, and where the first stop sits.
+    ///
+    /// The direction is a vector rather than an angle because that is the only form the
+    /// shader wants it in, and the other two are carried here rather than worked out per
+    /// pixel: together they are what makes the first stop land on one edge of the
+    /// rectangle and the second on the other, at every angle. The shader is then one
+    /// subtract, one dot product, one divide and one mix — the frame is built on the CPU
+    /// and the device is given arithmetic it cannot get wrong.
+    pub axis: [f32; 4],
+}
+
+impl Gradient {
+    /// A two-stop gradient across a rectangle, at an angle in degrees clockwise from
+    /// pointing right.
+    ///
+    /// The arithmetic that turns the angle into an axis lives here rather than in the
+    /// shader, because it is the part that is easy to get subtly wrong. A gradient whose
+    /// length ignored the angle would run out of colour before the far corner and clamp
+    /// for the rest of the rectangle, which reads as a hard edge in a soft background.
+    ///
+    /// The projection of the rectangle onto the direction is what the two numbers are:
+    /// the interval it covers is `low` to `low + length`, and `t` is how far along that
+    /// interval a pixel is. At an angle of zero they are the left and right edges; at
+    /// ninety, the top and the bottom; at forty-five, two opposite corners.
+    #[must_use]
+    pub fn new(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        from: [f32; 4],
+        to: [f32; 4],
+        angle: f32,
+    ) -> Self {
+        let radians = angle.to_radians();
+        let (dx, dy) = (radians.cos(), radians.sin());
+        // How far the rectangle reaches along the direction, and where that interval
+        // starts. Both are sums of the two sides' contributions: a box is the sum of its
+        // parts under a linear projection, whatever the angle between them.
+        let length = (width * dx).abs() + (height * dy).abs();
+        let low = (width * dx).min(0.0) + (height * dy).min(0.0);
+        Self {
+            rect: [x, y, width, height],
+            from,
+            to,
+            // A rectangle with no extent in either direction has no interval to be a
+            // fraction of, and a divide by zero in a shader is a NaN across the screen
+            // rather than a colour. Nothing draws such a background, and this is what
+            // makes that a fact about the frame instead of a hope about its callers.
+            axis: [dx, dy, length.max(f32::EPSILON), low],
+        }
+    }
+}
+
 /// A run of one kind of thing to draw in one go.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Batch {
@@ -143,6 +217,14 @@ pub struct Frame {
     pub batches: Vec<Batch>,
     /// The colour the surface is cleared to before the first batch, linear.
     pub clear: [f32; 4],
+    /// What covers the window before any batch, if it is not the clear colour alone.
+    ///
+    /// Not a batch, and deliberately: it can only ever be the first thing drawn, so
+    /// making it a run would give a caller a way to get the order wrong that buys nothing.
+    /// It is a field beside `clear` because it is the same kind of thing — what the frame
+    /// is painted on — and because a frame with a gradient and a frame without one differ
+    /// in one value rather than in the shape of the list.
+    pub backdrop: Option<Gradient>,
 }
 
 impl Default for Frame {
@@ -160,6 +242,7 @@ impl Frame {
             glyphs: Vec::new(),
             batches: Vec::new(),
             clear: [0.0, 0.0, 0.0, 1.0],
+            backdrop: None,
         }
     }
 
@@ -167,8 +250,10 @@ impl Frame {
     ///
     /// The capacity is the point: a terminal rebuilds its frame every time anything
     /// changes, and reallocating two buffers sixty times a second is a cost with no
-    /// benefit. `Frame` is reused across frames for this reason and `clear` is the only
-    /// thing that survives.
+    /// benefit. `Frame` is reused across frames for this reason, and `clear` and
+    /// `backdrop` are the only things that survive — both of them answers to a question
+    /// about the window rather than about its contents, and both set on the way into a
+    /// frame by the same caller that resets it.
     pub fn reset(&mut self) {
         self.quads.clear();
         self.glyphs.clear();
@@ -260,6 +345,89 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `t` the fragment shader computes for a pixel.
+    ///
+    /// Written out here rather than trusted, because it is the other half of the contract
+    /// `Gradient::new` has to keep: the numbers in `axis` exist to make this come out
+    /// between zero and one across the rectangle, and only running it shows whether they
+    /// do. The formula is the one in `backdrop.wgsl`, to the letter.
+    fn fraction(gradient: &Gradient, x: f32, y: f32) -> f32 {
+        let [dx, dy, length, low] = gradient.axis;
+        let [ox, oy, ..] = gradient.rect;
+        (((x - ox) * dx + (y - oy) * dy) - low) / length
+    }
+
+    /// A rectangle wide enough that a wrong axis is visible in the fourth decimal place,
+    /// and not square, so that an angle's two sides cannot cancel each other out.
+    const RECT: (f32, f32, f32, f32) = (10.0, 20.0, 200.0, 100.0);
+
+    fn gradient_at(angle: f32) -> Gradient {
+        Gradient::new(
+            RECT.0,
+            RECT.1,
+            RECT.2,
+            RECT.3,
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0],
+            angle,
+        )
+    }
+
+    #[test]
+    fn a_gradient_starts_on_one_edge_and_ends_on_the_other_at_every_quarter_turn() {
+        let (x, y, w, h) = RECT;
+        let cases = [
+            // Angle, the corner the first colour is at, the corner the second is at.
+            (0.0, (x, y), (x + w, y)),
+            (90.0, (x, y), (x, y + h)),
+            (180.0, (x + w, y), (x, y)),
+            (270.0, (x, y + h), (x, y)),
+        ];
+        for (angle, first, last) in cases {
+            let gradient = gradient_at(angle);
+            let start = fraction(&gradient, first.0, first.1);
+            let end = fraction(&gradient, last.0, last.1);
+            assert!(
+                start.abs() < 1e-4,
+                "at {angle} degrees the first stop is at {start} of the way along, not 0"
+            );
+            assert!(
+                (end - 1.0).abs() < 1e-4,
+                "at {angle} degrees the second stop is at {end} of the way along, not 1"
+            );
+        }
+    }
+
+    #[test]
+    fn a_diagonal_gradient_puts_its_halfway_line_through_the_other_two_corners() {
+        // A square, so that the answer is a symmetry rather than a number: at forty-five
+        // degrees the 50% line runs between the two corners the axis does not touch, and
+        // every one of them is halfway along it. This is the case a length that ignored
+        // the angle would get wrong — it would reach full colour at the top-right corner
+        // and clamp for the whole of the bottom-left half.
+        let gradient = Gradient::new(0.0, 0.0, 100.0, 100.0, [1.0; 4], [0.0; 4], 45.0);
+        for (x, y) in [(0.0, 0.0), (100.0, 100.0), (100.0, 0.0), (0.0, 100.0)] {
+            let t = fraction(&gradient, x, y);
+            assert!(
+                (0.0..=1.0).contains(&t),
+                "the corner at ({x}, {y}) is off the end of the gradient at {t}"
+            );
+        }
+        assert!((fraction(&gradient, 100.0, 0.0) - 0.5).abs() < 1e-4);
+        assert!((fraction(&gradient, 0.0, 100.0) - 0.5).abs() < 1e-4);
+        assert!(fraction(&gradient, 0.0, 0.0).abs() < 1e-4);
+        assert!((fraction(&gradient, 100.0, 100.0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_gradient_with_no_extent_has_a_length_to_divide_by() {
+        // Not a window anyone can make, and a shader dividing by zero is a screen of NaN
+        // rather than a colour: the frame is where that has to be a fact and not a hope.
+        let gradient = Gradient::new(0.0, 0.0, 0.0, 0.0, [1.0; 4], [0.0; 4], 30.0);
+        assert!(gradient.axis[2] > 0.0);
+        assert!(fraction(&gradient, 0.0, 0.0).is_finite());
+    }
 
     #[test]
     fn a_batch_covers_exactly_what_was_pushed_into_it() {

@@ -283,15 +283,23 @@ pub fn draw_grid(
     // One rectangle for the whole grid, so that a screen of default backgrounds costs
     // one quad instead of one per cell. Chrome is drawn around and over this, and the
     // surface itself is cleared to the theme's ground, which is a third colour.
-    frame.begin_quads();
-    frame.push_quad(Quad::new(
-        origin_x,
-        origin_y,
-        grid.cols() as f32 * metrics.cell_width,
-        grid.rows() as f32 * metrics.cell_height,
-        theme.background.to_linear(),
-    ));
-    frame.end_quads();
+    //
+    // Not when the window has a backdrop, and that is the whole of how a background shows
+    // through the terminal: a cell whose background is the theme's paints nothing — the
+    // rectangle below is what stood for it — so leaving the rectangle out is what lets a
+    // gradient or a picture be the ground the text sits on. A cell a program gave a
+    // background to still paints it, which is what keeps a program's own colours its own.
+    if frame.backdrop.is_none() {
+        frame.begin_quads();
+        frame.push_quad(Quad::new(
+            origin_x,
+            origin_y,
+            grid.cols() as f32 * metrics.cell_width,
+            grid.rows() as f32 * metrics.cell_height,
+            theme.background.to_linear(),
+        ));
+        frame.end_quads();
+    }
 
     for row in 0..grid.rows() {
         // The row is a window row: zero is the top of what the user is looking at, which
