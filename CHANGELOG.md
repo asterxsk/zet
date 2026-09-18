@@ -305,6 +305,27 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-render`** — a cursor on a wide character was drawn one cell wide.
+  - A wide character is one glyph in two cells: the lead cell holds the character and the spacer
+    holds the other half of its advance, and the glyph is one quad that overflows the lead cell
+    into the spacer's column. Every rectangle in a frame is drawn before every glyph, so a
+    one-cell cursor under a two-cell glyph is a cursor with half a character over it. On a block
+    cursor it is worse than half-drawn: the glyph is drawn in the cell's background colour, so the
+    half left outside the cursor is the background painted over the background, and it disappears.
+  - A cursor sent to the spacer's own column now lands on the character that half belongs to, and
+    the rectangle covers both cells. Two tests, because those are two doors to the same place: one
+    moves the cursor back onto the character and one moves it onto the second half.
+- **`zet-render` / `zet`** — a translucent pixel of a picture was premultiplied in the wrong space.
+  - Premultiplying is a linear-light operation: `rgb * a` means half the light. The decoder did it
+    on the sRGB bytes and the result went into an sRGB texture, which is the transfer function
+    applied on the wrong side of the multiply — so a picture with transparency came out darker than
+    itself. White at half alpha over black reached the screen at a quarter of the light rather than
+    half, which for a photograph with soft edges is every pixel of the fade being wrong in the same
+    direction.
+  - The upload is now the pixels as they are, in RGBA order, with alpha straight, and the shader
+    premultiplies after the sampler has decoded the texel to linear light. That is also less work
+    than before: the per-pixel multiply and all of its rounding are gone from the CPU, and the
+    texture format that does the decode is the one it already was.
 - **`zet-app`** — the Problems section described the file as it was at launch, not as it is.
   - The rows are the loader's own words about the file rather than settings in it, which is what
     makes them worth reading and what makes them expire. The panel writes the file on every click,

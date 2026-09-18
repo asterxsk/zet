@@ -169,9 +169,11 @@ struct Atlas {
 ///
 /// Borrowed rather than owned, because the caller decodes it and the device copies it: an
 /// image is tens of megabytes and nothing between the two needs to keep it. `pixels` is
-/// `width * height * 4` bytes of RGBA, row-major from the top, premultiplied — the same
-/// form and the same layout as an atlas upload, because it ends up in the same kind of
-/// texture.
+/// `width * height * 4` bytes of RGBA, row-major from the top, with straight alpha — the
+/// layout of an atlas upload, because it ends up in the same kind of texture, and straight
+/// where the atlas is premultiplied because the shader has to multiply by alpha after the
+/// sRGB sampler has decoded the texel: a premultiplied byte in an sRGB texture is a
+/// multiply that happened before the transfer function rather than after it.
 pub struct Picture<'a> {
     /// The picture's width in pixels.
     pub width: u32,
@@ -1401,6 +1403,34 @@ mod tests {
         frame.backdrop = Some(Backdrop::Picture { opacity: 0.5 });
         let pixels = render(&mut gpu, &frame);
 
+        assert_pixel(&pixels, (32, 32), [srgb(0.5), srgb(0.5), srgb(0.5), 255]);
+    }
+
+    #[test]
+    fn a_translucent_pixel_of_a_picture_keeps_its_own_colour() {
+        // Premultiplying is a linear-light operation: `rgb * a` means half the *light*.
+        // Doing it on the encoded bytes and then handing the result to an sRGB texture
+        // multiplies a number that is about to be decoded, which is the conversion
+        // applied to the wrong side of the multiply — and it shows: white at half alpha
+        // over black comes back at a quarter of the light, which is a translucent
+        // picture darker than the picture.
+        let Some(mut gpu) = device() else {
+            return;
+        };
+        let texels = [255u8, 255, 255, 128].repeat(4);
+        gpu.set_picture(Some(Picture {
+            width: 2,
+            height: 2,
+            pixels: &texels,
+        }));
+
+        let mut frame = Frame::new();
+        frame.clear = [0.0, 0.0, 0.0, 1.0];
+        frame.backdrop = Some(Backdrop::Picture { opacity: 1.0 });
+        let pixels = render(&mut gpu, &frame);
+
+        // Half white over black is half the light, which is the same pixel the opaque
+        // white at half opacity above lands on.
         assert_pixel(&pixels, (32, 32), [srgb(0.5), srgb(0.5), srgb(0.5), 255]);
     }
 

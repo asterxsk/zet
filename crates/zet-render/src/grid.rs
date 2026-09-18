@@ -28,7 +28,7 @@
 use zet_config::rgb::linear_to_srgb;
 use zet_config::{CursorSettings, CursorShape, Rgb, Theme};
 use zet_font::{GlyphSpec, Metrics, Weight};
-use zet_vt::{Attrs, Cell, CellFlags, Pos, Term, UnderlineStyle};
+use zet_vt::{Attrs, Cell, CellFlags, Pos, Row, Term, UnderlineStyle};
 
 use crate::atlas::Placement;
 use crate::frame::{Frame, GlyphQuad, Quad};
@@ -316,6 +316,7 @@ pub fn draw_grid(
         // long and costs nothing to skip. So does a row the cursor is not on and nothing
         // has selected.
         let cursor_row = cursor.visible && cursor_row_at == row;
+        let cursor_col = cursor_row.then(|| cursor_column(line, cursor_at.col));
         let selected_row = view
             .selection
             .is_some_and(|selection| selection.touches_row(row));
@@ -379,9 +380,9 @@ pub fn draw_grid(
                 }
             }
 
-            let lit_by_cursor = cursor_row && cursor_at.col == col;
+            let lit_by_cursor = cursor_col == Some(col);
             if lit_by_cursor {
-                push_cursor(frame, cursor, rect, metrics, theme);
+                push_cursor(frame, cursor, cursor_rect(&cell, rect), metrics, theme);
             }
 
             // A blinking cell is drawn on the lit half of the cycle and left as its
@@ -564,6 +565,37 @@ fn push_glyph(
         GlyphQuad::alpha(at, placement.uv, color.to_linear())
     };
     frame.push_glyph(quad);
+}
+
+/// The column the cursor is drawn in, which is the character's rather than the cell's.
+///
+/// A wide character is two cells holding one glyph, and a cursor sent to the column of its
+/// spacer is on that character: a cursor is where the user sees it, and what the user sees
+/// in that column is the right half of one letter. Drawn at the spacer's own rectangle it
+/// lands under the right half of the glyph instead, which is the one place a cursor is not
+/// — nothing is drawn in the spacer cell to invert.
+fn cursor_column(line: &Row, col: usize) -> usize {
+    if line.get(col).flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+        col.saturating_sub(1)
+    } else {
+        col
+    }
+}
+
+/// The rectangle the cursor covers for one cell.
+///
+/// Two cells when the character is two cells, because the cursor covers what it is on and
+/// what it is on is a character. The glyph is one quad and it is drawn after every
+/// rectangle in the grid, so a one-cell cursor under a two-cell glyph is a cursor with half
+/// a character over it — and a block cursor draws that glyph in the background colour,
+/// which on the half outside the cursor is the background over the background, so that
+/// half of the character disappears.
+fn cursor_rect(cell: &Cell, rect: [f32; 4]) -> [f32; 4] {
+    if cell.flags.contains(CellFlags::WIDE_CHAR) {
+        [rect[0], rect[1], rect[2] * 2.0, rect[3]]
+    } else {
+        rect
+    }
 }
 
 /// Draw the cursor, which is the one element both planes claim.
@@ -980,6 +1012,40 @@ mod tests {
         parser.advance_slice(b"\x1b[1;1H", &mut back);
         let frame = render(&back, &view);
         assert_eq!(frame.glyphs[0].color, ZET_DARK.background.to_linear());
+    }
+
+    #[test]
+    fn the_cursor_on_a_wide_character_covers_both_of_its_cells() {
+        // A wide character is one glyph in two cells, and the glyph is a single quad that
+        // overflows the lead cell into the spacer's column. Every rectangle in the grid
+        // is drawn before every glyph, so a cursor one cell wide is a cursor with half
+        // the character drawn over it — and on a block cursor the glyph is drawn in the
+        // background colour, so the half left outside the cursor is drawn in the
+        // background over the background: half the character disappears.
+        let mut term = term(4, 1, "\u{4e2d}".as_bytes());
+        let mut parser = Parser::new();
+        parser.advance_slice(b"\x1b[1;1H", &mut term);
+        let frame = render(&term, &View::new());
+
+        let cursor = quads_of(&frame, ZET_DARK.cursor.to_linear());
+        assert_eq!(cursor.len(), 1, "one cursor over one character");
+        assert_eq!(cursor[0].rect, [0.0, 0.0, 16.0, 18.0], "two cells, not one");
+    }
+
+    #[test]
+    fn a_cursor_moved_onto_the_second_half_lands_on_the_character() {
+        // The other door to the same place. A cursor sent to the column of the spacer is
+        // on the character whose second half that is, because that is what the user sees
+        // there — and drawing it at the spacer's own rectangle puts the cursor under the
+        // right half of the glyph, which is the one place a cursor is not.
+        let mut term = term(4, 1, "\u{4e2d}".as_bytes());
+        let mut parser = Parser::new();
+        parser.advance_slice(b"\x1b[1;2H", &mut term);
+        let frame = render(&term, &View::new());
+
+        let cursor = quads_of(&frame, ZET_DARK.cursor.to_linear());
+        assert_eq!(cursor.len(), 1, "one cursor, not one per half");
+        assert_eq!(cursor[0].rect, [0.0, 0.0, 16.0, 18.0]);
     }
 
     #[test]

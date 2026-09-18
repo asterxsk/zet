@@ -16,10 +16,11 @@
 //!
 //! What GDI+ gives for `PixelFormat32bppARGB` is straight alpha, in the order B, G, R, A
 //! — the format's name is about the value in a register rather than the bytes in memory.
-//! What leaves here is RGBA, premultiplied: the order a texture wants and the form every
-//! colour in a frame is in. An image with no alpha — a JPEG, or a PNG without a
-//! transparency channel — premultiplies to itself, so the conversion costs one multiply
-//! per pixel and removes a case from the renderer.
+//! What leaves here is the same pixels in RGBA order, and nothing else: the alpha stays
+//! straight, and the shader premultiplies it. That is the only place the multiply is worth
+//! doing — the texture is sRGB, so the sampler decodes a texel to linear light on the way
+//! in, and multiplying before the decode would be multiplying in a space where half of
+//! white is not half the light.
 
 // Win32 is an unsafe API, and this module is the third of the three that call it.
 // Every block carries a SAFETY comment naming the contract it satisfies.
@@ -262,26 +263,23 @@ fn rescale(from: *mut GpBitmap, into: *mut GpBitmap, width: u32, height: u32) ->
     drawn == Ok
 }
 
-/// Turn a buffer of GDI+'s BGRA into the RGBA a texture wants, premultiplied.
+/// Turn a buffer of GDI+'s BGRA into the RGBA a texture wants.
 ///
-/// Two conversions in one pass because they are both per-pixel and both about the same
-/// four bytes, and because the order it comes back in is the part of this module most
-/// likely to be got wrong quietly: every pixel of every picture is a different colour if
-/// the red and blue are left swapped, and the result is still a picture. It is not
-/// something a type can say, so it is something a test has to.
+/// The order it comes back in is the part of this module most likely to be got wrong
+/// quietly: every pixel of every picture is a different colour if the red and blue are
+/// left swapped, and the result is still a picture. It is not something a type can say, so
+/// it is something a test has to.
 ///
-/// GDI+ hands back straight alpha and every colour in a frame is premultiplied; the
-/// conversion is here rather than in the shader because it is once per picture instead of
-/// once per pixel per frame. A picture with no transparency is unchanged by the multiply.
+/// Alpha is left straight, which is GDI+'s form and the shader's input: the fragment
+/// multiplies the texel by its own alpha *after* the sampler has decoded it to linear
+/// light, because premultiplying is a linear-light operation and the bytes here are
+/// encoded. Doing the multiply on this side and storing the result in an sRGB texture
+/// premultiplies a number that is about to be decoded — white at half alpha reaching the
+/// screen as a quarter of the light — and it is the same mistake in the other direction
+/// for every pixel of a translucent picture.
 fn to_rgba(pixels: &mut [u8]) {
     for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
-        let alpha = u32::from(pixel[3]);
-        for channel in &mut pixel[..3] {
-            // Rounded rather than truncated: a fully opaque pixel has to come back as
-            // itself, and truncating the multiply would take 255 to 254.
-            *channel = u8::try_from((u32::from(*channel) * alpha + 127) / 255).unwrap_or(255);
-        }
     }
 }
 
@@ -324,23 +322,27 @@ mod tests {
     }
 
     #[test]
-    fn a_transparent_pixel_loses_its_colour_entirely() {
-        // What premultiplied alpha means: a pixel with nothing in it contributes nothing
-        // to what it is drawn over, whatever colour it claims to be.
+    fn a_transparent_pixel_keeps_the_colour_it_claims_to_be() {
+        // The buffer leaves here with straight alpha, and premultiplying is the shader's:
+        // it happens after the sampler has decoded the texel to linear light, which is
+        // the only place the multiply means what it says. A pixel that had been
+        // premultiplied here would be a colour that has been through the transfer
+        // function once too often — white at half alpha arriving as a quarter of the
+        // light rather than half of it.
         let mut pixels = vec![0, 128, 255, 0];
         to_rgba(&mut pixels);
-        assert_eq!(pixels, vec![0, 0, 0, 0]);
+        assert_eq!(pixels, vec![255, 128, 0, 0]);
     }
 
     #[test]
-    fn half_transparent_white_arrives_as_half_grey() {
-        // 255 * 128 / 255 is 128 to the byte, and 254 * 128 / 255 is 127.5 — which rounds
-        // to 128 in the first case and 127 in the second, as arithmetic rather than as
-        // truncation: a buffer that lost the half every time would darken the edges of
-        // every transparent picture by a step.
+    fn half_transparent_white_is_still_white() {
+        // Nothing is scaled here, so the two pixels differ only in the byte the swap
+        // moved: what a colour is and how much of it there is are separate, and the
+        // conversion between the two orders must not quietly do arithmetic to one of
+        // them.
         let mut pixels = vec![255, 255, 255, 128, 254, 254, 254, 128];
         to_rgba(&mut pixels);
-        assert_eq!(pixels, vec![128, 128, 128, 128, 127, 127, 127, 128]);
+        assert_eq!(pixels, vec![255, 255, 255, 128, 254, 254, 254, 128]);
     }
 
     #[test]
@@ -349,7 +351,7 @@ mod tests {
         // bytes at a time, or the buffer comes out shifted by however much it is not.
         let mut pixels = vec![0, 0, 255, 255, 255, 0, 0, 128, 9, 9, 9, 0];
         to_rgba(&mut pixels);
-        assert_eq!(pixels, vec![255, 0, 0, 255, 0, 0, 128, 128, 0, 0, 0, 0]);
+        assert_eq!(pixels, vec![255, 0, 0, 255, 0, 0, 255, 128, 9, 9, 9, 0]);
     }
 
     /// The picture the tests decode, which is four pixels and one of each case the
@@ -388,9 +390,10 @@ mod tests {
     }
 
     #[test]
-    fn a_picture_with_transparency_arrives_premultiplied() {
-        // The four cases, and the half-transparent one is the reason the conversion
-        // exists: white at half alpha is half-grey in every channel, not white.
+    fn a_picture_with_transparency_arrives_with_its_colours_unchanged() {
+        // The four cases, and the half-transparent one is the one a premultiplying
+        // decoder would have darkened: white at half alpha is white at half alpha all
+        // the way to the shader, which is where the half is taken.
         let picture = fixture();
         let pixel = |x: usize, y: usize| {
             let at = (y * 2 + x) * 4;
@@ -398,10 +401,10 @@ mod tests {
         };
         assert_eq!(
             pixel(1, 0),
-            [0, 0, 0, 0],
-            "a transparent pixel keeps nothing"
+            [0, 255, 0, 0],
+            "a transparent pixel keeps the colour it claims and gives none of it"
         );
-        assert_eq!(pixel(0, 1), [128, 128, 128, 128], "half of white");
+        assert_eq!(pixel(0, 1), [255, 255, 255, 128], "still white at half");
     }
 
     #[test]

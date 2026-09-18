@@ -61,9 +61,13 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // The texture is sRGB, so this arrives already converted to linear light and already
-    // premultiplied — which is the form every colour in a frame is in, and the reason
-    // fading a picture is one multiply of all four channels rather than an alpha blend
-    // written out by hand.
-    return textureSample(picture, picture_sampler, in.uv) * in.opacity;
+    // The texture is sRGB, so this arrives already converted to linear light and with its
+    // alpha still straight, and the premultiply happens here rather than on the way in:
+    // multiplying a stored byte by its alpha and *then* decoding it is the transfer
+    // function applied on the wrong side of the multiply, which costs a translucent
+    // pixel most of its light. In linear light the multiply means what it says, and every
+    // colour in a frame is premultiplied — which is what makes fading a picture one
+    // multiply of all four channels rather than an alpha blend written out by hand.
+    let texel = textureSample(picture, picture_sampler, in.uv);
+    return vec4<f32>(texel.rgb * texel.a, texel.a) * in.opacity;
 }
