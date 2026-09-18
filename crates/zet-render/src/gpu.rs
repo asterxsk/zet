@@ -36,7 +36,7 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-use crate::frame::{BatchKind, Frame, GlyphQuad, Gradient, Quad};
+use crate::frame::{Backdrop, BatchKind, Frame, GlyphQuad, Gradient, PictureQuad, Quad};
 
 /// Something went wrong talking to the graphics device.
 #[derive(Debug, thiserror::Error)]
@@ -114,6 +114,18 @@ const BACKDROP_VERTICES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferL
     ],
 };
 
+/// How the frame's picture is read as instance data.
+///
+/// One instance: the rectangle, the part of the texture that lands in it, and the opacity.
+/// A separate layout from the gradient's rather than a shape they share, because the two
+/// are drawn by different pipelines with different numbers of attributes and the only
+/// thing they have in common is that neither is a rectangle of one colour.
+const PICTURE_VERTICES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+    array_stride: size_of::<PictureQuad>() as u64,
+    step_mode: wgpu::VertexStepMode::Instance,
+    attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32],
+};
+
 /// How a run of [`GlyphQuad`]s is read as instance data.
 const GLYPH_VERTICES: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
     array_stride: size_of::<GlyphQuad>() as u64,
@@ -150,6 +162,36 @@ struct Atlas {
     group: wgpu::BindGroup,
     /// The texture's size in texels, so that an upload of the same size can skip
     /// rebuilding the texture and the group with it.
+    size: (u32, u32),
+}
+
+/// A picture's pixels on their way to the device.
+///
+/// Borrowed rather than owned, because the caller decodes it and the device copies it: an
+/// image is tens of megabytes and nothing between the two needs to keep it. `pixels` is
+/// `width * height * 4` bytes of RGBA, row-major from the top, premultiplied — the same
+/// form and the same layout as an atlas upload, because it ends up in the same kind of
+/// texture.
+pub struct Picture<'a> {
+    /// The picture's width in pixels.
+    pub width: u32,
+    /// Its height.
+    pub height: u32,
+    /// The pixels themselves.
+    pub pixels: &'a [u8],
+}
+
+/// The window's picture, as a texture and the group that binds it.
+///
+/// The texture is not kept: a bind group holds a reference to every resource it was made
+/// from, so the picture stays alive for exactly as long as something can sample it, and
+/// there is no second owner to keep in step.
+struct PictureTexture {
+    /// The group the pass binds in place of the atlas's: the picture's view, with the same
+    /// sampler and the same screen uniform.
+    group: wgpu::BindGroup,
+    /// The texture's size in texels, which is the half of the cover arithmetic that is not
+    /// the window's.
     size: (u32, u32),
 }
 
@@ -194,9 +236,13 @@ pub struct Gpu {
     quads: wgpu::RenderPipeline,
     /// The pipeline that draws runs of [`Frame::glyphs`].
     glyphs: wgpu::RenderPipeline,
-    /// The pipeline that draws [`Frame::backdrop`], the one thing in a frame that is not
+    /// The pipeline that draws a gradient backdrop, the one thing in a frame that is not
     /// a rectangle of one colour.
     backdrop: wgpu::RenderPipeline,
+    /// The pipeline that draws a picture backdrop, which is the other one.
+    picture_pipeline: wgpu::RenderPipeline,
+    /// The window's picture, once the configuration has named one.
+    picture: Option<PictureTexture>,
     /// The screen-size uniform, written whenever the size changes.
     screen: wgpu::Buffer,
     /// The layout the atlas group is created from, kept for the uploads that rebuild it.
@@ -213,6 +259,10 @@ pub struct Gpu {
     /// Instance data for the last frame's backdrop: one rectangle, rewritten every frame
     /// it is drawn. Sized once, because there is never more than one.
     backdrop_vertex: wgpu::Buffer,
+    /// Instance data for the window's picture, under the same rules as the backdrop's —
+    /// except that this one changes when the window is resized, since where the crop falls
+    /// depends on the shape of the window.
+    picture_vertex: wgpu::Buffer,
 }
 
 impl Gpu {
@@ -343,37 +393,7 @@ impl Gpu {
         scale: f32,
         target: Target,
     ) -> Self {
-        let atlas_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("zet atlas"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let atlas_layout = atlas_layout(&device);
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("zet"),
             bind_group_layouts: &[Some(&atlas_layout)],
@@ -404,6 +424,14 @@ impl Gpu {
             BACKDROP_VERTICES,
             "zet backdrop",
         );
+        let picture_pipeline = pipeline(
+            &device,
+            &pipeline_layout,
+            format,
+            &device.create_shader_module(wgpu::include_wgsl!("../shaders/picture.wgsl")),
+            PICTURE_VERTICES,
+            "zet picture",
+        );
 
         let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zet atlas"),
@@ -432,6 +460,7 @@ impl Gpu {
         let quad_vertices = vertex_buffer(&device, "zet quad vertices");
         let glyph_vertices = vertex_buffer(&device, "zet glyph vertices");
         let backdrop_vertex = vertex_buffer(&device, "zet backdrop vertex");
+        let picture_vertex = vertex_buffer(&device, "zet picture vertex");
 
         Self {
             device,
@@ -442,6 +471,8 @@ impl Gpu {
             quads,
             glyphs,
             backdrop,
+            picture_pipeline,
+            picture: None,
             screen,
             atlas_layout,
             atlas_sampler,
@@ -449,6 +480,7 @@ impl Gpu {
             quad_vertices,
             glyph_vertices,
             backdrop_vertex,
+            picture_vertex,
         }
     }
 
@@ -510,6 +542,67 @@ impl Gpu {
         self.atlas.write(&self.queue, (width, height), pixels);
     }
 
+    /// Make `picture` the window's picture, or take the current one away.
+    ///
+    /// The texture is rebuilt rather than overwritten when the size changes, which a
+    /// picture never does in practice — the path is what changes, and a different path is
+    /// a different image at a different size. `None` is a configuration with no picture in
+    /// it, and it drops the texture rather than leaving the last one up: the window shows
+    /// what the configuration says, including when what it says is nothing.
+    pub fn set_picture(&mut self, picture: Option<Picture<'_>>) {
+        let Some(picture) = picture else {
+            self.picture = None;
+            return;
+        };
+        let size = (picture.width.max(1), picture.height.max(1));
+        let texture = device_texture(&self.device, size);
+        // A texture is written as a whole, rows and all, so the row stride is the
+        // picture's own width: nothing here is packed for a copy that pads.
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            picture.pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size.0 * 4),
+                rows_per_image: Some(size.1),
+            },
+            wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // The atlas's layout, and therefore the atlas's sampler and the atlas's screen
+        // uniform: the picture pipeline reads the same three bindings and two of them are
+        // the same object. One layout for both is what makes the two interchangeable in
+        // the middle of a pass.
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("zet picture"),
+            layout: &self.atlas_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.screen.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.atlas_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+            ],
+        });
+        self.picture = Some(PictureTexture { group, size });
+    }
+
     /// Draw one frame and present it.
     ///
     /// A surface that has gone out of date is reconfigured and the frame is skipped
@@ -541,9 +634,27 @@ impl Gpu {
         // One instance and no growth: a frame has one backdrop or none, so the buffer is
         // exactly the size of one and the write is unconditional only in the sense that
         // it does not have to be sized first.
-        if let Some(backdrop) = &frame.backdrop {
-            self.queue
-                .write_buffer(&self.backdrop_vertex, 0, bytemuck::bytes_of(backdrop));
+        match &frame.backdrop {
+            Some(Backdrop::Gradient(gradient)) => {
+                self.queue
+                    .write_buffer(&self.backdrop_vertex, 0, bytemuck::bytes_of(gradient));
+            }
+            // Where the crop falls is a fact about the window's shape as much as the
+            // picture's, so it is worked out per frame rather than at upload: a window
+            // dragged narrower keeps showing the middle of the picture instead of the
+            // left-hand part of it.
+            Some(Backdrop::Picture { opacity }) => {
+                if let Some(picture) = &self.picture {
+                    let quad = PictureQuad::new(
+                        (self.size.0 as f32, self.size.1 as f32),
+                        picture.size,
+                        *opacity,
+                    );
+                    self.queue
+                        .write_buffer(&self.picture_vertex, 0, bytemuck::bytes_of(&quad));
+                }
+            }
+            None => {}
         }
 
         // The view is taken first and the acquisition kept, because the swapchain image
@@ -617,15 +728,32 @@ impl Gpu {
             ..Default::default()
         });
 
-        pass.set_bind_group(0, &self.atlas.group, &[]);
         // The backdrop first, before every batch and after the clear. It is what the
         // window is made of rather than something drawn on the window, which is also why
         // the grid leaves its own ground unpainted when there is one.
-        if frame.backdrop.is_some() {
-            pass.set_pipeline(&self.backdrop);
-            pass.set_vertex_buffer(0, self.backdrop_vertex.slice(..));
-            pass.draw(CORNERS, 0..1);
+        match &frame.backdrop {
+            Some(Backdrop::Gradient(_)) => {
+                pass.set_pipeline(&self.backdrop);
+                pass.set_vertex_buffer(0, self.backdrop_vertex.slice(..));
+                pass.draw(CORNERS, 0..1);
+            }
+            // A picture the device does not have draws nothing and falls through to the
+            // clear colour, which is the theme's ground. That is the same failure a
+            // gradient has when it is a solid colour, and it leaves a window that looks
+            // like a window rather than one with a hole in it.
+            Some(Backdrop::Picture { .. }) => {
+                if let Some(picture) = &self.picture {
+                    pass.set_bind_group(0, &picture.group, &[]);
+                    pass.set_pipeline(&self.picture_pipeline);
+                    pass.set_vertex_buffer(0, self.picture_vertex.slice(..));
+                    pass.draw(CORNERS, 0..1);
+                }
+            }
+            None => {}
         }
+        // The atlas's group for everything that follows, set after the backdrop rather
+        // than before it because the picture binds its own in the same slot.
+        pass.set_bind_group(0, &self.atlas.group, &[]);
         let mut bound: Option<BatchKind> = None;
         for batch in &frame.batches {
             // A run with nothing in it would be a draw of nothing, and binding an empty
@@ -832,6 +960,71 @@ fn surface_format(available: &[wgpu::TextureFormat]) -> Option<wgpu::TextureForm
     .into_iter()
     .find(|format| available.contains(format))
     .or_else(|| available.first().copied())
+}
+
+/// The bindings every pipeline in this module is given.
+///
+/// One layout for all three of them, which is what lets the pass swap between the atlas
+/// and a picture in the middle of a frame: both groups are made from this, so both fit
+/// the slot. Two of the three pipelines read only the uniform and one reads all three, and
+/// a binding a shader never mentions costs nothing.
+fn atlas_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("zet atlas"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// A texture holding a picture.
+///
+/// The same format as the atlas and for the same reason: an sRGB texture is decoded to
+/// linear light by the sampler, which is the space a frame's colours are in. The bytes
+/// uploaded are the picture's own, so what arrives at the shader is what the file says,
+/// converted exactly once and by the hardware.
+fn device_texture(device: &wgpu::Device, size: (u32, u32)) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("zet picture"),
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        // No `COPY_SRC`: nothing reads a picture back, and asking for the usage would be
+        // asking the driver to keep a path open that is never used.
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
 }
 
 /// A texture a frame can be drawn into and read back out of.

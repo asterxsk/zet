@@ -48,6 +48,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Memory",
     # `GetSysColor`, which is where the forced-colours highlight actually lives.
     "Win32_Graphics_Gdi",
+    # Decoding the picture `window.background` can name, which is nine GDI+ calls rather
+    # than a PNG parser and a supply chain in a crate that has no other use for one.
+    "Win32_Graphics_GdiPlus",
     # `HIGHCONTRASTW` and `HCF_HIGHCONTRASTON`.
     "Win32_UI_Accessibility",
     # `SystemParametersInfoW`, `GetSysColor`, and the `SPI_*` constants.

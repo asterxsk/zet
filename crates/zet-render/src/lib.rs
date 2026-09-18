@@ -41,7 +41,9 @@ pub mod grid;
 pub mod renderer;
 
 pub use atlas::{Atlas, Placement};
-pub use frame::{Batch, BatchKind, Frame, GlyphQuad, Gradient, Quad, glyph_flags};
-pub use gpu::{Gpu, GpuError, GpuResult};
+pub use frame::{
+    Backdrop, Batch, BatchKind, Frame, GlyphQuad, Gradient, PictureQuad, Quad, glyph_flags,
+};
+pub use gpu::{Gpu, GpuError, GpuResult, Picture};
 pub use grid::{Cursor, GlyphSource, Marks, Selection, View, draw_grid};
 pub use renderer::{ChromeGlyphs, Renderer, RendererError};

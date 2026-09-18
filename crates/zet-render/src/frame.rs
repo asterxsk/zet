@@ -193,6 +193,80 @@ impl Gradient {
     }
 }
 
+/// A picture covering the window, cropped to fill it.
+///
+/// The instance data for the one rectangle a picture is drawn as, and the arithmetic that
+/// decides which part of the texture lands in it is in [`PictureQuad::new`] rather than in
+/// the shader: the aspect ratio of the window against the aspect ratio of the picture is
+/// the whole of the decision, and it is the kind of thing that is a one-line test on the
+/// CPU and an afternoon of squinting on the device.
+///
+/// The colours come from the texture rather than from a vertex, so what is here is where
+/// to draw it and how much of the picture to use. `opacity` is the configuration's own and
+/// is applied to the sampled texel; the rest of the picture's numbers are the texture's.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, Pod, Zeroable)]
+pub struct PictureQuad {
+    /// `x`, `y`, `width`, `height` in physical pixels: always the whole window.
+    pub rect: [f32; 4],
+    /// The part of the texture that lands in it, as `u0`, `v0`, `u1`, `v1`.
+    pub uv: [f32; 4],
+    /// How strongly to draw it, from zero to one.
+    pub opacity: f32,
+}
+
+impl PictureQuad {
+    /// Cover a `surface` of this many physical pixels with a picture of this many texels.
+    ///
+    /// Scaled to fill, which means the shorter of the two ratios: a picture wider than the
+    /// window is cropped left and right, a picture taller than it is cropped top and
+    /// bottom, and one of exactly the window's shape is cropped nowhere. What is never
+    /// done is stretching, which would turn a photograph of a person into a photograph of
+    /// a different person, or fitting, which would leave bars of the theme's ground down
+    /// two sides of a background.
+    ///
+    /// The crop is centred, so the part of the picture that is lost is the same amount off
+    /// each edge. `uv` is the fraction of the texture that survives: a window half as wide
+    /// as the picture it is showing keeps the middle half of it.
+    #[must_use]
+    pub fn new(surface: (f32, f32), picture: (u32, u32), opacity: f32) -> Self {
+        let (width, height) = (surface.0.max(f32::EPSILON), surface.1.max(f32::EPSILON));
+        let (across, down) = (picture.0.max(1) as f32, picture.1.max(1) as f32);
+        // The fraction of the picture the window shows, in each direction, at the scale
+        // that fills it. Both are at most one: the axis that decided the scale shows all
+        // of itself and the other shows less.
+        let shown_x = (width / across / (width / across).max(height / down)).min(1.0);
+        let shown_y = (height / down / (width / across).max(height / down)).min(1.0);
+        let (left, top) = ((1.0 - shown_x) / 2.0, (1.0 - shown_y) / 2.0);
+        Self {
+            rect: [0.0, 0.0, width, height],
+            uv: [left, top, left + shown_x, top + shown_y],
+            opacity,
+        }
+    }
+}
+
+/// What the window is painted on before anything else in the frame.
+///
+/// The two kinds of background that are not the clear colour. `Background::Solid` is not
+/// here at all: it is the theme's ground, which is what the surface is cleared to, and a
+/// value that drew it a second time would be the same pixels for the price of a shader.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Backdrop {
+    /// Two colours across the window.
+    Gradient(Gradient),
+    /// The window's picture.
+    ///
+    /// The pixels are not here: they are a texture on the device, uploaded once when the
+    /// configuration names them, and a frame that carried them would be copying megabytes
+    /// per redraw to say something that has not changed. What is left for the frame to
+    /// decide is how strongly to draw it.
+    Picture {
+        /// How much of the picture shows, from zero to one.
+        opacity: f32,
+    },
+}
+
 /// A run of one kind of thing to draw in one go.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Batch {
@@ -222,9 +296,9 @@ pub struct Frame {
     /// Not a batch, and deliberately: it can only ever be the first thing drawn, so
     /// making it a run would give a caller a way to get the order wrong that buys nothing.
     /// It is a field beside `clear` because it is the same kind of thing — what the frame
-    /// is painted on — and because a frame with a gradient and a frame without one differ
+    /// is painted on — and because a frame with a backdrop and a frame without one differ
     /// in one value rather than in the shape of the list.
-    pub backdrop: Option<Gradient>,
+    pub backdrop: Option<Backdrop>,
 }
 
 impl Default for Frame {
@@ -427,6 +501,98 @@ mod tests {
         let gradient = Gradient::new(0.0, 0.0, 0.0, 0.0, [1.0; 4], [0.0; 4], 30.0);
         assert!(gradient.axis[2] > 0.0);
         assert!(fraction(&gradient, 0.0, 0.0).is_finite());
+    }
+
+    /// The fraction of the picture the window shows, as the shader would interpolate it:
+    /// `uv` is the rectangle of texture the quad's corners name, so what it covers is the
+    /// difference across it.
+    fn shown(quad: &PictureQuad) -> (f32, f32) {
+        (quad.uv[2] - quad.uv[0], quad.uv[3] - quad.uv[1])
+    }
+
+    /// Whether a quad's `uv` is this rectangle of the texture, to within a rounding.
+    ///
+    /// Every number a picture is described by is a division or two of numbers that are not
+    /// powers of two, so the arithmetic here is compared the way the gradient's is: an
+    /// exact comparison would be a test of the compiler's rounding rather than of the crop.
+    fn shows(quad: &PictureQuad, uv: [f32; 4]) -> bool {
+        quad.uv
+            .iter()
+            .zip(uv)
+            .all(|(got, want)| (got - want).abs() < 1e-6)
+    }
+
+    #[test]
+    fn a_picture_the_shape_of_the_window_is_shown_whole() {
+        let quad = PictureQuad::new((800.0, 600.0), (1600, 1200), 1.0);
+        assert_eq!(shown(&quad), (1.0, 1.0));
+        assert!(shows(&quad, [0.0, 0.0, 1.0, 1.0]));
+        // And it covers the window, which is the other half of the answer.
+        assert!(
+            quad.rect
+                .iter()
+                .zip([0.0, 0.0, 800.0, 600.0])
+                .all(|(got, want)| (got - want).abs() < 1e-6)
+        );
+    }
+
+    #[test]
+    fn a_picture_wider_than_the_window_keeps_its_middle_and_loses_its_ends() {
+        // A 2:1 picture in a square window: the height fills it exactly and the width has
+        // twice as much as fits, so half of it — the middle half — is what is left. A
+        // scale that took the smaller ratio instead would stretch it, and one that took
+        // the larger without centring would keep the left half.
+        let quad = PictureQuad::new((500.0, 500.0), (2000, 1000), 1.0);
+        assert_eq!(shown(&quad), (0.5, 1.0));
+        assert!(shows(&quad, [0.25, 0.0, 0.75, 1.0]));
+    }
+
+    #[test]
+    fn a_picture_taller_than_the_window_keeps_its_middle_and_loses_its_ends() {
+        let quad = PictureQuad::new((500.0, 500.0), (1000, 2000), 1.0);
+        assert_eq!(shown(&quad), (1.0, 0.5));
+        assert!(shows(&quad, [0.0, 0.25, 1.0, 0.75]));
+    }
+
+    #[test]
+    fn the_picture_never_shows_outside_itself_in_either_direction() {
+        // Every pair of sizes, including the degenerate ones: whatever the window and
+        // whatever the picture, nothing sampled is outside the texture — a wrap or a
+        // clamp there would be the picture's far edge smeared down one side of the
+        // window, which is a bug that only shows up at one window size.
+        let sizes = [1.0, 3.0, 640.0, 1920.0];
+        let pictures = [(1, 1), (4, 3), (3, 4), (3840, 2160), (1, 900)];
+        for width in sizes {
+            for height in sizes {
+                for picture in pictures {
+                    let quad = PictureQuad::new((width, height), picture, 1.0);
+                    let (shown_x, shown_y) = shown(&quad);
+                    assert!(
+                        shown_x > 0.0 && shown_x <= 1.0 && shown_y > 0.0 && shown_y <= 1.0,
+                        "{picture:?} in a {width}x{height} window shows {shown_x}x{shown_y}"
+                    );
+                    assert!(quad.uv[0] >= 0.0 && quad.uv[2] <= 1.0);
+                    assert!(quad.uv[1] >= 0.0 && quad.uv[3] <= 1.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_picture_is_cropped_by_the_same_amount_off_both_ends() {
+        // Centring, stated as the thing it is rather than as the arithmetic that gets
+        // there: the margin on the left is the margin on the right.
+        let quad = PictureQuad::new((640.0, 480.0), (4000, 1000), 1.0);
+        assert!((quad.uv[0] - (1.0 - quad.uv[2])).abs() < 1e-6);
+        assert!((quad.uv[1] - (1.0 - quad.uv[3])).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_opacity_reaches_the_instance_untouched() {
+        // The frame says how strongly to draw it and the renderer multiplies by it; a
+        // clamp here would silently disagree with the configuration that validated it.
+        let opacity = PictureQuad::new((10.0, 10.0), (10, 10), 0.4).opacity;
+        assert!((opacity - 0.4).abs() < f32::EPSILON);
     }
 
     #[test]

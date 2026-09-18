@@ -250,6 +250,19 @@ from = "#0a0b0d"
 to = "#1a1030"
 angle = 45.0</code></pre>
 
+      <p>A picture is scaled to fill: it is cropped, never stretched and never letterboxed, so a
+      picture wider than the window loses the same amount off each end. A window that is dragged
+      narrower keeps showing the middle of the picture rather than the left-hand part of it. PNG,
+      JPEG, BMP, GIF, and TIFF all work, told apart by their contents rather than their extension,
+      and the file is read when zet starts and when the path changes — editing the picture under a
+      running zet shows the new one the next time zet starts.</p>
+
+      <p>A picture with a side longer than 8192 pixels is scaled down to fit before it is uploaded,
+      with a high-quality resample. That is the largest texture the graphics device is asked for,
+      and the resize is not a preference: a picture over it is one the device refuses, and the
+      window would rather show a slightly smaller photograph than fail to open. Nothing is lost by
+      it in practice — a background is drawn across a window, not at the size it was taken at.</p>
+
       <h2 id="diagnostics">Diagnostics</h2>
 
       <p>Values that parse but cannot be used are reported separately from values that do not parse

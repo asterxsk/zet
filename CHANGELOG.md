@@ -14,6 +14,33 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Added
 
+- **`zet-render` / `zet`** — `window.background`'s picture, the last of the three kinds the schema
+  has documented since it was written, and the last inert key in the `[window]` section.
+  - Decoded by GDI+, through the `windows-sys` declarations the crate already had, rather than by a
+    PNG decoder added to the workspace: Windows has been the image path since XP, reads PNG, JPEG,
+    BMP, GIF, and TIFF without being told which is which, and is already installed on every machine
+    zet runs on. A dependency that parses a format designed for hostile input is a supply chain and
+    an afternoon, and it would do a worse job.
+  - `PictureQuad::new` decides the crop on the CPU and the shader only samples: scaled to fill, so a
+    picture wider than the window loses the same amount off each end rather than being stretched or
+    letterboxed, and a window dragged narrower keeps showing the middle of the picture. The
+    aspect-ratio arithmetic is the part that is a one-line test here and an afternoon of squinting
+    on the device, which is why it is not in the shader.
+  - The bytes GDI+ returns for `PixelFormat32bppARGB` are B, G, R, A in memory, and the module
+    converts them to the premultiplied RGBA a texture wants in one pass. Both halves of that are
+    caught by a test against a four-pixel PNG committed under `crates/zet/tests/data/`: leaving the
+    swap out is a picture of a different colour that still looks like a picture, which is a bug no
+    amount of looking at the code finds.
+  - A picture with a side over 8192 is drawn into a smaller bitmap before it is read, with GDI+'s
+    bicubic filter. That is the largest texture `wgpu` will make, and the first attempt at this
+    panicked — `Dimension X value 9000 exceeds the limit of 8192` — on a 9000-pixel-wide source,
+    which is an ordinary size for a photograph and a wallpaper. The resize is exact integer
+    arithmetic, unit-tested for the aspect ratio it has to preserve.
+  - Uploaded once, when the configuration names a different file, and only then: the opacity rides
+    in the frame like every other colour, so turning a picture down does not re-read it, and the
+    window's shape is not baked into the texture, so resizing re-crops rather than re-decodes.
+  - The picture is drawn where the gradient is, before every batch and over the theme's ground, so
+    the two kinds of backdrop are one slot in the frame rather than two paths through the device.
 - **`zet-render` / `zet`** — `window.background`'s gradient, which the schema has documented since it
   was written and which nothing drew.
   - A third shader and a third pipeline, and a `Frame::backdrop` that is *not* a batch: it can only

@@ -39,6 +39,7 @@
     clippy::cast_sign_loss
 )]
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -53,7 +54,7 @@ use zet_app::{Action, App, AppError, Command};
 use zet_config::{Config, FontSettings, Palette, TabSettings, WindowSettings};
 use zet_font::{FontError, FontStack};
 use zet_input::{Chord, Key, KeyEvent, KeyKind, Modifiers, MouseEvent, encode_focus, encode_mouse};
-use zet_render::{Frame, Renderer, RendererError, View};
+use zet_render::{Frame, Picture, Renderer, RendererError, View};
 use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabInfo};
 
 use crate::keys;
@@ -75,23 +76,30 @@ const APP_NAME: &str = "zet";
 ///
 /// The size is the surface's, in physical pixels: a gradient is defined across the window
 /// and a window that is resized has its gradient resized with it, which is what a
-/// background is rather than what a picture in it would be.
+/// background is rather than what a picture in it would be. A picture is the other way
+/// round — it has a size of its own that the window does not change — which is why the
+/// frame only carries how strongly to draw it and the renderer keeps the rest.
 fn backdrop(
     background: &zet_config::Background,
     width: f32,
     height: f32,
-) -> Option<zet_render::Gradient> {
+) -> Option<zet_render::Backdrop> {
     match background {
-        zet_config::Background::Solid | zet_config::Background::Image { .. } => None,
-        zet_config::Background::Gradient { from, to, angle } => Some(zet_render::Gradient::new(
-            0.0,
-            0.0,
-            width,
-            height,
-            from.to_linear(),
-            to.to_linear(),
-            *angle,
-        )),
+        zet_config::Background::Solid => None,
+        zet_config::Background::Gradient { from, to, angle } => {
+            Some(zet_render::Backdrop::Gradient(zet_render::Gradient::new(
+                0.0,
+                0.0,
+                width,
+                height,
+                from.to_linear(),
+                to.to_linear(),
+                *angle,
+            )))
+        }
+        zet_config::Background::Image { opacity, .. } => {
+            Some(zet_render::Backdrop::Picture { opacity: *opacity })
+        }
     }
 }
 
@@ -218,6 +226,15 @@ pub struct Host {
     styled: FontSettings,
     /// The chrome's settings as of the last build, so a change is noticed.
     tabbed: TabSettings,
+    /// The file the window's picture was decoded from, as of the last upload.
+    ///
+    /// A picture is the one part of a background that is not a value a frame can carry:
+    /// its pixels live in a texture, and getting them there is a file read and a decode.
+    /// Keeping the path is how a redraw tells whether there is anything to upload, and it
+    /// is compared rather than the file's timestamp because the configuration is the only
+    /// thing that can change it — a picture edited on disk under a running zet is a new
+    /// picture the next time zet starts.
+    pictured: Option<PathBuf>,
     /// The window's settings as of the last time they were applied to the window.
     ///
     /// The opacity is a Win32 call rather than a value a frame reads, so a change to it
@@ -291,6 +308,9 @@ impl Host {
         // starts empty rather than claiming the configuration is already in force.
         // `attach` applies it to the window it makes and fills this in.
         let windowed = WindowSettings::default();
+        // Nothing has been decoded yet, and `reconcile` uploads whatever the configuration
+        // names the first time it runs.
+        let pictured = None;
         let styled = grid_settings(&app, text_scale(app.config(), settings.text_scale));
         let now = Instant::now();
         Self {
@@ -314,6 +334,7 @@ impl Host {
             os_title: APP_NAME.to_owned(),
             styled,
             tabbed,
+            pictured,
             windowed,
             placed: Layout::default(),
             // What `resumed` opens the first tab at, before any frame has been laid out
@@ -508,6 +529,30 @@ impl Host {
         if self.app.config().tabs != self.tabbed {
             self.chrome = Chrome::new(&self.app.config().tabs, &self.app.config().window);
             self.tabbed = self.app.config().tabs.clone();
+        }
+
+        // The picture is the one part of the background that is not a value in a frame:
+        // the pixels are a texture, and how they get there is a file read and a decode.
+        // Uploaded when the configuration names a different file, and only then — the
+        // opacity rides in the frame like every other colour, so turning a picture down
+        // does not re-read it.
+        let named = match &self.app.config().window.background {
+            zet_config::Background::Image { path, .. } => Some(path.clone()),
+            _ => None,
+        };
+        if named != self.pictured {
+            // Decoded before the renderer is borrowed, both because it touches the disk
+            // and because a picture that will not decode has to reach the device as
+            // nothing at all rather than as the last one still up.
+            let decoded = named.as_ref().and_then(|path| crate::picture::load(path));
+            if let Some(renderer) = self.renderer.as_mut() {
+                renderer.set_picture(decoded.as_ref().map(|picture| Picture {
+                    width: picture.width,
+                    height: picture.height,
+                    pixels: &picture.pixels,
+                }));
+                self.pictured = named;
+            }
         }
 
         // The one thing in the window section that reaches the window: the rest of it is

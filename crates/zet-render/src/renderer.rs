@@ -43,7 +43,7 @@ use zet_font::{FontError, FontStack, Glyph, GlyphSpec, Metrics};
 
 use crate::atlas::{Atlas, Placement};
 use crate::frame::Frame;
-use crate::gpu::{Gpu, GpuError};
+use crate::gpu::{Gpu, GpuError, Picture};
 use crate::grid::GlyphSource;
 
 /// Something that stopped the renderer being set up or a frame being drawn.
@@ -281,6 +281,17 @@ impl Renderer {
         self.grid_settings = settings.clone();
         self.discard_glyphs();
         Ok(())
+    }
+
+    /// Make `picture` the window's picture, or take the current one away with `None`.
+    ///
+    /// Called when the configuration names a different picture rather than every frame:
+    /// the pixels are uploaded once and stay on the device, and a frame only says how
+    /// strongly to draw them. Nothing is loaded or decoded here — this crate does not read
+    /// files — so a caller that cannot decode a picture passes `None` and gets the theme's
+    /// ground, which is what a background that failed to load should look like.
+    pub fn set_picture(&mut self, picture: Option<Picture<'_>>) {
+        self.gpu.set_picture(picture);
     }
 
     /// Draw a frame and present it.
