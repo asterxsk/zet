@@ -49,7 +49,11 @@ fn a_problem_the_panel_fixes_stops_being_reported() {
     let path = write(&dir, "config.toml", "theme = \"nope\"\n");
 
     let mut app = app(&path);
-    assert_eq!(app.diagnostics().len(), 1, "the loader complains about `nope`");
+    assert_eq!(
+        app.diagnostics().len(),
+        1,
+        "the loader complains about `nope`"
+    );
 
     // What a click on the theme row does: change the value, then write the file.
     app.adjust(Id::Theme, true);

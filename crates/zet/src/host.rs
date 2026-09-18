@@ -945,6 +945,12 @@ impl Host {
                     }
                 }
                 Command::OpenUrl(url) => crate::platform::open_url(&url),
+                // stderr and not a message box, for the reason a configuration that
+                // could not be written goes to stderr: the window is up and working, and
+                // a modal box over a terminal for something a user can live with is a
+                // worse interruption than the thing it is reporting. A user who launched
+                // zet from a shell is the one who can do anything about it.
+                Command::Report(message) => eprintln!("zet: {message}"),
                 Command::NewWindow => {
                     // A second process rather than a second window in this loop. Two
                     // windows would otherwise share one `App` and therefore one tab
@@ -1365,7 +1371,8 @@ impl Host {
             }
             Hit::NewTab => {
                 let (cols, rows) = self.grid_size();
-                let _ = self.app.open_tab(cols.max(1), rows.max(1));
+                let commands = self.app.new_tab(cols.max(1), rows.max(1));
+                self.carry_out(loop_, commands);
                 true
             }
             Hit::Caption(caption) => {
@@ -1418,7 +1425,8 @@ impl Host {
                 if !self.app.picker_is_open() {
                     return false;
                 }
-                let _ = self.app.picker_choose_at(row);
+                let commands = Command::unopened(self.app.picker_choose_at(row));
+                self.carry_out(loop_, commands);
                 true
             }
             // The popover's surface, between and around its rows. Swallowed for the same
@@ -1538,14 +1546,20 @@ impl Host {
     /// does not. Everything else wants zet's scrollback, which is the only history there
     /// is. `encode_mouse` answers `None` for the first case when reporting is off, so
     /// asking it is the whole test.
-    fn wheel(&mut self, delta: MouseScrollDelta) {
+    ///
+    /// Answers whether the window is owed a frame. Nothing draws on its own: the event
+    /// loop draws when something asks it to, and a wheel that scrolled the view without
+    /// asking is a scroll the user does not see until the shell next prints — which on an
+    /// idle prompt is never. A wheel the program wants is the one case that owes nothing,
+    /// because the program is about to print and that is what wakes the loop.
+    fn wheel(&mut self, delta: MouseScrollDelta) -> bool {
         let cell = self
             .renderer
             .as_ref()
             .map_or(0.0, |r| f64::from(r.metrics().cell_height));
         let lines = mouse::wheel(delta, cell / f64::from(self.scale()));
         if lines == 0.0 {
-            return;
+            return false;
         }
 
         // The panel is a list that can be longer than the window, and a list with no
@@ -1554,14 +1568,11 @@ impl Host {
         // under the cursor is the one the user is looking at.
         if self.settings_open && self.pointer.is_some_and(|(x, y)| self.over_panel(x, y)) {
             self.settings_scroll = (self.settings_scroll - lines as f32 * PANEL_WHEEL).max(0.0);
-            if let Some(window) = self.window.clone() {
-                window.request_redraw();
-            }
-            return;
+            return true;
         }
 
         if self.wheel_to_program(lines) {
-            return;
+            return false;
         }
 
         // A terminal has no sub-line scrolling, so a trackpad's fraction of a line is
@@ -1570,15 +1581,16 @@ impl Host {
         self.partial += lines;
         let whole = self.partial.trunc();
         if whole == 0.0 {
-            return;
+            return false;
         }
         self.partial -= whole;
         let Ok(step) = i32::try_from(whole as i64) else {
-            return;
+            return false;
         };
         if let Some(session) = self.app.active_mut() {
             session.scroll(step);
         }
+        true
     }
 
     /// Send the wheel to the program, and say whether it wanted it.
@@ -1932,7 +1944,13 @@ impl ApplicationHandler<Wake> for Host {
                 self.end_drags();
             }
             WindowEvent::MouseInput { state, button, .. } => self.button(state, button, loop_),
-            WindowEvent::MouseWheel { delta, .. } => self.wheel(delta),
+            WindowEvent::MouseWheel { delta, .. } => {
+                if self.wheel(delta)
+                    && let Some(window) = self.window()
+                {
+                    window.request_redraw();
+                }
+            }
             _ => {}
         }
     }
@@ -2183,6 +2201,23 @@ mod tests {
         assert_eq!(next_focus(1, None, true), Some(0));
         assert_eq!(next_focus(1, Some(0), true), None);
         assert_eq!(next_focus(1, Some(0), false), None);
+    }
+
+    #[test]
+    fn a_wheel_over_the_grid_asks_for_the_frame_that_shows_what_it_moved() {
+        // The viewport is read when a frame is drawn and nothing asks for one on its own:
+        // an idle terminal has no output to wake the loop, and the blink comes round
+        // twice a second. A wheel that scrolled the view and asked for no frame is a
+        // scroll nobody sees until the shell next prints.
+        let mut host = Host::new(app());
+        let _ = host.app.open_tab(80, 24).expect("this machine has a shell");
+
+        assert!(
+            host.wheel(MouseScrollDelta::LineDelta(0.0, 3.0)),
+            "the view moved, so a frame is owed"
+        );
+        // And a wheel with nothing in it is not a frame's worth of work.
+        assert!(!host.wheel(MouseScrollDelta::LineDelta(0.0, 0.0)));
     }
 
     #[test]

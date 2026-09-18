@@ -305,6 +305,17 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet`** — the wheel scrolled the view and the window did not redraw.
+  - `Host::wheel` did the scrolling and answered nothing, so the mouse-wheel arm of `window_event`
+    had no reason to ask for a frame afterwards and did not. Nothing draws on its own — the event
+    loop draws when it is asked to — so the scrollback moved and the screen kept showing what it had
+    already shown. On an idle prompt that is a wheel that does nothing at all, because the next
+    thing that would have asked for a frame is output that is never coming.
+  - `wheel` now answers whether the window is owed a frame, and the event asks only when it is.
+    True for the panel, which is a list the pointer may have scrolled without the list being the
+    thing under the cursor. True for a scroll of zet's scrollback, which is the bug. False for a
+    trackpad's fraction of a line that has not accumulated to one yet, and false for the wheel that
+    went to the program, which is about to print and whose printing is what wakes the loop.
 - **`zet-render`** — a cursor on a wide character was drawn one cell wide.
   - A wide character is one glyph in two cells: the lead cell holds the character and the spacer
     holds the other half of its advance, and the glyph is one quad that overflows the lead cell

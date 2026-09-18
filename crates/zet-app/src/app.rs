@@ -56,8 +56,27 @@ pub enum Command {
     NewWindow,
     /// Open this URL in whatever the system opens URLs with.
     OpenUrl(String),
+    /// Tell the user this, because nothing else can.
+    Report(String),
     /// The last tab closed. The host decides whether that closes the window.
     Quit,
+}
+
+impl Command {
+    /// What a tab that did not open has to say, as the command that says it.
+    ///
+    /// A constructor rather than a print at each call site, because a shell that will
+    /// not start has three doors into it — the `+` in the strip, the chord, and a row of
+    /// the profile picker — and this is the half of the program with no console to print
+    /// to. The failure's whole symptom otherwise is that nothing happened, which is the
+    /// one symptom a user cannot tell from a keystroke that missed.
+    #[must_use]
+    pub fn unopened(result: Result<u32, AppError>) -> Vec<Self> {
+        match result {
+            Ok(_) => Vec::new(),
+            Err(error) => vec![Command::Report(error.to_string())],
+        }
+    }
 }
 
 /// Something went wrong that the user has to be told about.
@@ -557,6 +576,15 @@ impl App {
         }
     }
 
+    /// Open a tab with the first profile, and answer with what has to be said about it.
+    ///
+    /// The form the doors into a new tab want, all three of them: `Ctrl+Shift+T` with the
+    /// picker turned off, the `+` in the tab strip, and a row of the picker itself. None
+    /// of the three has anywhere to say why nothing happened, and the command does.
+    pub fn new_tab(&mut self, cols: u16, rows: u16) -> Vec<Command> {
+        Command::unopened(self.open_tab(cols, rows))
+    }
+
     /// Open a tab with a named profile.
     ///
     /// # Errors
@@ -787,7 +815,7 @@ impl App {
                     self.pick.close();
                 } else if self.config.tabs.open_default_without_asking {
                     let (cols, rows) = self.grid_size();
-                    let _ = self.open_tab(cols, rows);
+                    return self.new_tab(cols, rows);
                 } else {
                     self.pick.open();
                 }
@@ -2081,7 +2109,11 @@ mod tests {
         let _first = app.open_tab(80, 24).expect("a shell starts");
         let second = app.open_tab(80, 24).expect("a shell starts");
         let mut app = settled_find(app);
-        assert_eq!(app.active_number(), Some(second), "the bar is over this one");
+        assert_eq!(
+            app.active_number(),
+            Some(second),
+            "the bar is over this one"
+        );
 
         let _ = app.close_tab(second);
 
@@ -2186,6 +2218,27 @@ mod tests {
         for number in app.tab_numbers() {
             let session = app.sessions().get(number).expect("open");
             assert_eq!((session.cols(), session.rows()), (100, 30));
+        }
+    }
+
+    #[test]
+    fn a_tab_that_will_not_open_is_reported_rather_than_dropped() {
+        // The failure whose whole symptom is that nothing happened. There are three
+        // doors into it — the `+`, the chord, and a row of the picker — and all three
+        // dropped the answer, which leaves the user pressing the button again with
+        // nothing to say whether that is worth doing.
+        let mut app = app();
+        assert!(
+            app.new_tab(80, 24).is_empty(),
+            "a tab that opens says nothing"
+        );
+
+        let commands = Command::unopened(app.open_tab_with("no-such-profile", 80, 24));
+        match commands.as_slice() {
+            [Command::Report(message)] => {
+                assert!(message.contains("no-such-profile"), "{message}");
+            }
+            other => panic!("expected one report, got {other:?}"),
         }
     }
 

@@ -2198,7 +2198,10 @@ mod tests {
         let typed = || modes_with(|m| m.keyboard = KeyboardFlags::EVENT_TYPES);
         for key in [Key::Enter, Key::Tab, Key::Backspace] {
             assert_eq!(
-                encode_key(&with_kind(key, Modifiers::empty(), KeyKind::Release), &typed()),
+                encode_key(
+                    &with_kind(key, Modifiers::empty(), KeyKind::Release),
+                    &typed()
+                ),
                 None,
                 "{key:?} has no release event without all keys"
             );
