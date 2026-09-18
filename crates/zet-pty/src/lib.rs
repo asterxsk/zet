@@ -84,10 +84,3 @@ pub enum PtyError {
     #[error("no such program: {0}")]
     NotFound(PathBuf),
 }
-
-/// What this crate is compiled for.
-///
-/// zet is Windows-only for v1, and `PRODUCT.md` says so. The constant exists so that the
-/// rest of the workspace can gate on it rather than repeating `cfg(windows)` in a dozen
-/// places and getting one of them wrong.
-pub const PLATFORM_SUPPORTED: bool = cfg!(windows);

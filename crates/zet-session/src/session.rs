@@ -218,16 +218,6 @@ impl Session {
         })
     }
 
-    /// The child's process id.
-    ///
-    /// For logging and for a host that has to hand the child to something else. It is not
-    /// how the child is killed: the pty's job object reaches the grandchildren a pid
-    /// knows nothing about.
-    #[must_use]
-    pub fn process_id(&self) -> u32 {
-        self.pty().pid()
-    }
-
     /// What to show on the tab.
     ///
     /// The grid holds whatever `OSC 0`/`OSC 2` set, and that is empty until the program

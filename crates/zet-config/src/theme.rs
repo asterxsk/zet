@@ -34,11 +34,10 @@ pub const ANSI_EXEMPT: [usize; 2] = [0, 8];
 
 /// A terminal colour scheme.
 ///
-/// `'static` rather than owned because every theme is compiled in: the settings panel
-/// offers a fixed list plus whatever a user drops in a file, and the latter is
-/// converted to an owned [`Theme`] at load time through [`Theme::from_toml`]. Keeping
-/// the shipped ones as constants means a theme cannot be mutated at runtime, which is
-/// what makes it safe to hand a `&'static Theme` to the renderer every frame.
+/// `'static` rather than owned because every theme is compiled in: [`builtin`] is the whole
+/// list, and a slug in the configuration file names one of them or is refused. Keeping the
+/// shipped ones as constants means a theme cannot be mutated at runtime, which is what makes
+/// it safe to hand a `&'static Theme` to the renderer every frame.
 #[derive(Debug)]
 pub struct Theme {
     /// The name shown in the settings panel.
@@ -239,15 +238,6 @@ pub fn contrast_theme() -> &'static Theme {
 #[must_use]
 pub fn by_slug(slug: &str) -> Option<&'static Theme> {
     builtin().iter().copied().find(|theme| theme.slug == slug)
-}
-
-/// The suggested config value for a theme name, for the settings panel's readout.
-#[must_use]
-pub fn slug_of(name: &str) -> Option<&'static str> {
-    builtin()
-        .iter()
-        .find(|theme| theme.name == name)
-        .map(|theme| theme.slug)
 }
 
 #[cfg(test)]

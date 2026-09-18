@@ -232,6 +232,20 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Removed
 
+- **`zet-vt` / `zet-pty` / `zet-config` / `zet-session`** — four public items nothing called, each
+  with a doc comment naming a caller that does not exist. Found by reading the workspace's public
+  surface against its own call graph; none is used by any crate here or by any test.
+  - `zet_vt::cell::BLANK`. Every caller writes `Cell::blank()`, and the function is `const`, so the
+    constant saved nothing a compiler does not already fold.
+  - `zet_pty::PLATFORM_SUPPORTED`, which claimed to exist "so that the rest of the workspace can
+    gate on it rather than repeating `cfg(windows)` in a dozen places". It was referenced nowhere,
+    and it could not have replaced the gates it was written for: those are `#[cfg(windows)]`
+    attributes, and a `cfg` predicate cannot read a runtime `const bool`.
+  - `zet_config::theme::slug_of`, "for the settings panel's readout". The panel shows a theme's
+    *name* and cycles through slugs it already has; the reverse lookup had no caller.
+  - `zet_session::Session::process_id`, "for logging and for a host that has to hand the child to
+    something else". zet does neither, and the doc's own note — the job object reaches the
+    grandchildren a pid knows nothing about — is why the pid was never the right handle anyway.
 - **`zet-config`** — the `[update] check-on-launch` key, and the `[update]` section it lived in.
   - It was reserved when the schema was written, for a check zet would make on launch, and the
     check was never built: eight places in the docs had to say the key did nothing. Wiring it up

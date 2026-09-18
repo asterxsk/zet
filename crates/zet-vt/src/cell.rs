@@ -51,9 +51,6 @@ pub struct Cell {
     pub flags: CellFlags,
 }
 
-/// What the cursor should do to a cell, for a renderer that wants to avoid branching.
-pub const BLANK: Cell = Cell::blank();
-
 impl Cell {
     /// A blank cell: a space with default colours and no attributes.
     pub const fn blank() -> Self {

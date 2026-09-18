@@ -336,6 +336,33 @@
 
       <h3>Removed</h3>
 
+      <h4>zet-vt, zet-pty, zet-config, zet-session — four public items nothing called</h4>
+
+      <p>Each carried a doc comment naming a caller that does not exist, which is worse than dead
+      code: it reads as a contract. Found by reading the workspace's public surface against its own
+      call graph — none of the four is used by any crate here or by any test.</p>
+
+      <ul>
+        <li><code>zet_vt::cell::BLANK</code>. Every caller writes <code>Cell::blank()</code>, and the
+        function is <code>const</code>, so the constant saved nothing a compiler does not already
+        fold.</li>
+
+        <li><code>zet_pty::PLATFORM_SUPPORTED</code>, which claimed to exist "so that the rest of the
+        workspace can gate on it rather than repeating <code>cfg(windows)</code> in a dozen places".
+        It was referenced nowhere, and it could not have replaced the gates it was written for:
+        those are <code>#[cfg(windows)]</code> attributes, and a <code>cfg</code> predicate cannot
+        read a runtime <code>const bool</code>.</li>
+
+        <li><code>zet_config::theme::slug_of</code>, "for the settings panel's readout". The panel
+        shows a theme's <em>name</em> and cycles through slugs it already has; the reverse lookup
+        had no caller.</li>
+
+        <li><code>zet_session::Session::process_id</code>, "for logging and for a host that has to
+        hand the child to something else". zet does neither, and the doc's own note — the job object
+        reaches the grandchildren a pid knows nothing about — is why the pid was never the right
+        handle anyway.</li>
+      </ul>
+
       <h4>zet-config — the <code>[update] check-on-launch</code> key, and the <code>[update]</code> section it lived in</h4>
 
       <p>It was reserved when the schema was written, for a check zet would make on launch, and the
