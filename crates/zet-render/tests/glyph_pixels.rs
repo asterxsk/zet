@@ -66,6 +66,60 @@ fn srgb(linear: f32) -> u8 {
     (encoded * 255.0).round() as u8
 }
 
+/// The two boxes a cell draws, in the coordinates the cell gives them.
+///
+/// The renderer's own arithmetic, spelled out once so that a test can ask where a glyph
+/// would land without a device, a frame, or an atlas: `left` is the bearing away from the
+/// pen, and `top` counts up from the baseline while the cell counts down from its top.
+fn box_in_cell(glyph: &zet_font::Glyph, baseline: f32) -> (f32, f32, f32, f32) {
+    let (x, y) = glyph.offset_in_cell(baseline);
+    (x, y, glyph.width as f32, glyph.height as f32)
+}
+
+/// A combining mark reaches over the letter it belongs to, from the same pen.
+///
+/// This is the half of the mark's story that a fake glyph source cannot tell: it gives
+/// every character the same rectangle, so it can say the renderer *asked* for U+0301 —
+/// which `zet-render`'s own tests do, and which is where the fault was — but not that the
+/// answer is a shape that lands on the letter. A mark the face gives no advance to, drawn
+/// from its base's pen, is the whole reason the renderer leaves a zero-advance glyph where
+/// its own bearing put it instead of centring it in the cell.
+#[test]
+fn a_combining_mark_lands_over_the_letter_it_belongs_to() {
+    let mut stack = stack();
+    let metrics = *stack.metrics();
+    let base = stack.rasterize(GlyphSpec::new('e'));
+    let mark = stack.rasterize(GlyphSpec::new('\u{301}'));
+
+    assert!(
+        !mark.is_blank(),
+        "U+0301 rasterised to nothing, so the accent would be invisible"
+    );
+    assert!(
+        mark.advance.abs() < f32::EPSILON,
+        "the face gave the mark an advance of {} — a mark that moves the pen is a \
+         character beside its base rather than over it",
+        mark.advance
+    );
+
+    let (bx, by, bw, bh) = box_in_cell(&base, metrics.baseline);
+    let (mx, my, mw, mh) = box_in_cell(&mark, metrics.baseline);
+    assert!(
+        mx < bx + bw && bx < mx + mw,
+        "the mark's box ({mx}..{}) and its base's ({bx}..{}) do not overlap across the \
+         cell, so the accent is drawn beside the letter",
+        mx + mw,
+        bx + bw
+    );
+    assert!(
+        my + mh <= by + bh,
+        "the mark's ink reaches down to {} and its base's to {}, so the accent is below \
+         the letter rather than above it",
+        my + mh,
+        by + bh
+    );
+}
+
 /// A character's mask, drawn as itself.
 ///
 /// `H` is the character to reach for. Two stems and the counter between them are the

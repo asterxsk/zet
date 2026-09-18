@@ -396,9 +396,13 @@ pub fn draw_grid(
                 } else {
                     foreground
                 };
-                if let Some(spec) = glyph_spec(&cell) {
-                    push_glyph(frame, spec, rect, text_color, metrics, glyphs);
-                }
+                // The marks of a cluster live in a side table keyed by *screen* position,
+                // so a row above the live screen has no entry and the cell's own
+                // character is the whole cluster there.
+                let cluster = (top + row)
+                    .checked_sub(grid.scrollback_len())
+                    .and_then(|screen| term.cluster_at(Pos::new(screen, col)));
+                push_cluster(frame, &cell, cluster, rect, text_color, metrics, glyphs);
             }
 
             push_decoration(frame, &cell, rect, foreground, metrics);
@@ -442,19 +446,46 @@ fn faded(color: Rgb, alpha: f32) -> [f32; 4] {
     [r * alpha, g * alpha, b * alpha, alpha]
 }
 
+/// Draw every code point of one cell's text, from that cell's pen.
+///
+/// A cell holds one `char`, so the terminal keeps the rest of the cluster — the
+/// combining marks — in a side table and leaves the base character in the cell. Those
+/// marks are the cell's text and not decoration: asking the face for the cell's own
+/// character alone draws a bare `e` where the screen holds `é`, while a copy of that
+/// same cell returns both code points, because the text side reads the table. The two
+/// would disagree about the very same cell, and the accent would exist in the clipboard
+/// and nowhere on the screen.
+///
+/// Every code point is drawn from the same pen, which is what a combining mark's own
+/// bearings are measured against, so the rectangle does not move between them.
+fn push_cluster(
+    frame: &mut Frame,
+    cell: &Cell,
+    cluster: Option<&str>,
+    rect: [f32; 4],
+    color: Rgb,
+    metrics: &Metrics,
+    glyphs: &mut dyn GlyphSource,
+) {
+    let mut characters = cluster.unwrap_or("").chars();
+    let base = characters.next().unwrap_or(cell.ch);
+    for ch in core::iter::once(base).chain(characters) {
+        if let Some(spec) = glyph_spec(cell, ch) {
+            push_glyph(frame, spec, rect, color, metrics, glyphs);
+        }
+    }
+}
+
 /// A character with its face, or nothing when there is nothing to draw.
 ///
 /// A space produces no glyph rather than a blank one: the atlas would give it a
 /// zero-sized placement and the device would skip it anyway, and asking costs a hash
 /// lookup per space in the grid, which on a screen of prose is most of it.
-fn glyph_spec(cell: &Cell) -> Option<GlyphSpec> {
-    if cell.ch == ' ' {
+fn glyph_spec(cell: &Cell, ch: char) -> Option<GlyphSpec> {
+    if ch == ' ' {
         return None;
     }
-    // A combining mark is part of its base character's cluster, and the cluster was
-    // composed into `ch` before it reached the grid, so there is one glyph per cell and
-    // never a second one stacked on top.
-    let mut spec = GlyphSpec::new(cell.ch);
+    let mut spec = GlyphSpec::new(ch);
     if cell.attrs.contains(Attrs::BOLD) {
         spec = spec.with_weight(Weight::BOLD);
     }
@@ -503,8 +534,13 @@ fn push_glyph(
     // of a pixel off as two half-strength columns: the whole screen slightly blurred, for
     // a shift that was meant for a fallback face. Rounded, the primary's slack is zero
     // and a fallback is still centred — by a whole pixel, which does not smear it either.
+    //
+    // A glyph with no advance is not centred at all. A combining mark is the case: it is
+    // drawn from its base character's pen and reaches back over it, so its advance is
+    // zero and its bearing is the whole of where it goes. Centring it would push it half
+    // a cell to the right of the letter it belongs to.
     let slack = metrics.cell_width - placement.advance.round();
-    if slack > 0.0 {
+    if slack > 0.0 && placement.advance > 0.0 {
         left += (slack / 2.0).round();
     }
 
@@ -688,6 +724,9 @@ mod tests {
     /// top-left corner four pixels down the cell.
     const INK: (i32, i32, u32, u32) = (0, 10, 7, 9);
 
+    /// A combining acute, the mark this file's tests hang above a letter.
+    const MARK: char = '\u{301}';
+
     struct FakeGlyphs {
         advance: f32,
         asked: Vec<GlyphSpec>,
@@ -713,13 +752,19 @@ mod tests {
         fn place(&mut self, spec: GlyphSpec) -> Option<Placement> {
             self.asked.push(spec);
             let (left, top, width, height) = INK;
+            // A combining mark is charged for nothing. Every face that has one draws it
+            // from its base character's pen and reaches back over it, and a fake that
+            // gave it an advance could not see the rule that keys off one: with the mark
+            // advancing, the centring below has no slack to move it by, and with it at
+            // zero the same centring would slide it half a cell off its letter.
+            let advance = if spec.ch == MARK { 0.0 } else { self.advance };
             Some(Placement {
                 uv: [0.0, 0.0, 0.25, 0.25],
                 left,
                 top,
                 width,
                 height,
-                advance: self.advance,
+                advance,
                 color: false,
             })
         }
@@ -1155,6 +1200,45 @@ mod tests {
         let mut glyphs = FakeGlyphs::with_advance(4.0);
         let frame = render_with(&term(4, 1, b"A"), &View::new(), &mut glyphs);
         assert_eq!(frame.glyphs[0].rect[0], 2.0);
+    }
+
+    #[test]
+    fn a_combining_mark_is_drawn_over_its_base() {
+        // A cell holds one `char`, so the terminal keeps the full cluster in a side
+        // table and leaves the base in the cell. The renderer asked the face for the
+        // cell's character and nothing else, so `e` followed by U+0301 drew a bare `e`
+        // — while a copy of the same cell returned both code points, because the text
+        // side reads the side table. The screen and the clipboard disagreed about the
+        // same cell, and the mark existed nowhere in the frame.
+        let mut glyphs = FakeGlyphs::new();
+        let frame = render_with(
+            &term(4, 1, "e\u{0301}x".as_bytes()),
+            &View::new(),
+            &mut glyphs,
+        );
+        let _ = frame;
+        let drawn: Vec<char> = glyphs.asked.iter().map(|spec| spec.ch).collect();
+        assert_eq!(drawn, ['e', MARK, 'x']);
+    }
+
+    #[test]
+    fn a_combining_mark_is_not_centred_in_the_cell_it_reaches_back_over() {
+        // Every glyph narrower than its cell is centred in it, and a combining mark is
+        // narrower than its cell by the whole of one: its advance is zero. Centring it
+        // would put the accent half a cell to the right of the letter it belongs to —
+        // on the character after it, or off the end of the row.
+        let mut glyphs = FakeGlyphs::new();
+        let frame = render_with(
+            &term(4, 1, "e\u{301}".as_bytes()),
+            &View::new(),
+            &mut glyphs,
+        );
+        let x: Vec<f32> = frame.glyphs.iter().map(|glyph| glyph.rect[0]).collect();
+        assert_eq!(x.len(), 2, "the base and its mark should both be drawn");
+        assert_eq!(
+            x[0], x[1],
+            "the mark must be drawn from its base character's pen"
+        );
     }
 
     #[test]
