@@ -30,9 +30,9 @@ use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, 
 use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, LWA_ALPHA, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
-    SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST, SW_SHOWNORMAL, SetLayeredWindowAttributes,
-    SetWindowLongPtrW, SystemParametersInfoW, WS_EX_LAYERED,
+    GWL_EXSTYLE, GetLayeredWindowAttributes, GetWindowLongPtrW, LWA_ALPHA, MB_ICONERROR, MB_OK,
+    MB_SETFOREGROUND, MessageBoxW, SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST, SW_SHOWNORMAL,
+    SetLayeredWindowAttributes, SetWindowLongPtrW, SystemParametersInfoW, WS_EX_LAYERED,
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
@@ -64,6 +64,15 @@ pub fn alert(title: &str, message: &str) {
     }
 }
 
+/// `WS_EX_LAYERED` as the extended style is read and written.
+///
+/// A `u32` in the API and pointer-sized at the window. The lint cannot see that the value
+/// is `0x0008_0000`, which is a positive `i32` and so is exact at every width; a named
+/// constant is worth more than a cast it cannot read, and the alternative is spelling the
+/// bit out.
+#[allow(clippy::cast_possible_wrap)]
+const LAYERED: isize = WS_EX_LAYERED as isize;
+
 /// How opaque the window is, as the desktop understands it.
 ///
 /// `window.opacity` is a promise the configuration has been making since it was written
@@ -80,32 +89,19 @@ pub fn alert(title: &str, message: &str) {
 /// Called once when the window is made and again whenever the configuration's window
 /// section changes. Both go through this one function, so a window that has been faded
 /// cannot differ from one that was born faded — there is no second path to drift from.
-#[allow(clippy::cast_possible_wrap)]
 pub fn set_opacity(window: &Window, opacity: f32) {
     let Some(hwnd) = window_handle(window) else {
         return;
     };
-    // `WS_EX_LAYERED` is a `u32` in the API and the extended style is pointer-sized here.
-    // The lint cannot see that the value is `0x0008_0000`, which is a positive `i32` and
-    // so is exact at every width; a named constant is worth more than a cast it cannot
-    // read, and the alternative is spelling the bit out.
-    let layered = WS_EX_LAYERED as isize;
     // SAFETY: `hwnd` is this process's own window, taken from the handle the window
     // handed out and alive for as long as it is. `GWL_EXSTYLE` asks for one pointer-sized
     // value, which is what the API returns; it reads the window's own state and cannot
     // fail in a way that needs reporting, because a window that has gone away is a window
     // there is nothing left to fade.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-    // The window is left alone when it is already wearing what was asked for, which is
-    // the default window's whole story: it is made without the layered bit, so a user who
-    // never touches the setting never pays a write for it.
-    let wanted = match layered_alpha(opacity) {
-        Some(_) => style | layered,
-        None => style & !layered,
-    };
-    if wanted == style {
+    let Some((wanted, alpha)) = fade(style, LAYERED, layered_now(hwnd), opacity) else {
         return;
-    }
+    };
     // SAFETY: both calls take the same live window. `SetWindowLongPtrW` writes one
     // pointer-sized value — the extended style with the layered bit set or cleared — and
     // returns the previous one, which is not needed here. `SetLayeredWindowAttributes`
@@ -123,10 +119,54 @@ pub fn set_opacity(window: &Window, opacity: f32) {
         // that is not gets its alpha set: a layered window is composited by the desktop
         // instead of being handed to the display controller, and paying that for a window
         // that is not translucent buys nothing at all.
-        if let Some(alpha) = layered_alpha(opacity) {
+        if let Some(alpha) = alpha {
             let _ = SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
         }
     }
+}
+
+/// What to write to the window, or [`None`] when it is already wearing it.
+///
+/// Separate from the two calls it feeds because this is the part that can be wrong: the
+/// extended style is not the whole of what was asked for. A window that is already
+/// layered is already wearing the bit, so a change from one fade to another leaves the
+/// style exactly as it was and the alpha is the only thing that moved — a comparison
+/// against the style alone calls that nothing to do and leaves the window at the opacity
+/// the user has just moved away from, which is every change between two values below 1.0.
+///
+/// The alpha is passed in rather than remembered, because the window is the only place
+/// the answer lives: a copy kept here would be a copy to drift from the compositor's.
+fn fade(
+    style: isize,
+    layered: isize,
+    alpha_now: Option<u8>,
+    opacity: f32,
+) -> Option<(isize, Option<u8>)> {
+    let alpha = layered_alpha(opacity);
+    let wanted = match alpha {
+        Some(_) => style | layered,
+        None => style & !layered,
+    };
+    ((wanted, alpha) != (style, alpha_now)).then_some((wanted, alpha))
+}
+
+/// The alpha the desktop is compositing the window at, if it is compositing it.
+///
+/// [`None`] for a window that is not layered at all, and [`None`] for one that is layered
+/// by a colour key rather than by an alpha: the two are different attributes, the byte
+/// beside the key is not a fade, and treating it as one would be reading a number the
+/// window never meant as an opacity.
+fn layered_now(hwnd: HWND) -> Option<u8> {
+    let mut key = 0;
+    let mut alpha = 0;
+    let mut flags = 0;
+    // SAFETY: the window is this process's own and alive for the call, and all three
+    // output parameters point at live locals. The API writes nothing and returns zero for
+    // a window that is not layered, which is the case the return value is checked for;
+    // nothing is read from an output parameter unless it says the call succeeded.
+    let ok =
+        unsafe { GetLayeredWindowAttributes(hwnd, &raw mut key, &raw mut alpha, &raw mut flags) };
+    (ok != 0 && flags & LWA_ALPHA != 0).then_some(alpha)
 }
 
 /// Open a URL in whatever the system opens URLs with.
@@ -425,6 +465,52 @@ mod tests {
         // 0.9 × 255 is 229.5, the one value here where the rule is visible: truncating
         // would read 229, a step darker than the user asked for.
         assert_eq!(layered_alpha(0.9), Some(230));
+    }
+
+    #[test]
+    fn a_fade_that_moved_is_not_mistaken_for_one_that_did_not() {
+        // The defect this pins: a window that is already layered is already wearing the
+        // style bit, so a change from one fade to another leaves the extended style
+        // exactly as it was. Comparing the style alone calls that nothing to do and
+        // leaves the window at the opacity the user has just moved away from.
+        let style = LAYERED | 0x100;
+        assert_eq!(
+            fade(style, LAYERED, Some(204), 0.5),
+            Some((style, Some(128))),
+            "0.8 to 0.5 is a fade that has to be written"
+        );
+        assert_eq!(
+            fade(style, LAYERED, Some(128), 0.75),
+            Some((style, Some(191))),
+            "and so is 0.5 to 0.75"
+        );
+    }
+
+    #[test]
+    fn a_window_already_wearing_the_fade_is_left_alone() {
+        let style = LAYERED | 0x100;
+        assert_eq!(fade(style, LAYERED, Some(128), 0.5), None);
+        // The default window's whole story: made without the bit, so a user who never
+        // touches the setting never pays a write for it.
+        assert_eq!(fade(0x100, LAYERED, None, 1.0), None);
+    }
+
+    #[test]
+    fn a_window_faded_by_something_else_is_faded_anyway() {
+        // A window layered with a colour key rather than with an alpha is layered as far
+        // as the style goes and has no alpha to compare against. Reading the style alone
+        // would find it already wearing a fade it does not have.
+        let style = LAYERED | 0x100;
+        assert_eq!(fade(style, LAYERED, None, 0.5), Some((style, Some(128))));
+    }
+
+    #[test]
+    fn going_opaque_takes_the_style_off_as_well_as_the_alpha() {
+        assert_eq!(
+            fade(LAYERED | 0x100, LAYERED, Some(128), 1.0),
+            Some((0x100, None)),
+            "a layered window is composited by the desktop, which an opaque one is not"
+        );
     }
 
     #[test]

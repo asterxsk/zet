@@ -305,6 +305,21 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet`** — `window.opacity` changed once and then never again.
+  - A window is faded by setting `WS_EX_LAYERED` and an alpha together, and the function that did
+    it returned early when the extended style already matched what was wanted. The style is not the
+    whole of what was asked for: a window that is already layered is already wearing the bit, so a
+    change from 0.8 to 0.5 leaves the style exactly as it was and the alpha is the only thing that
+    moved. Comparing the style alone called that nothing to do, which is every change between two
+    values below 1.0 — the first fade worked, and the setting was dead from then on.
+  - What the window is wearing is now read back rather than assumed: the style is compared together
+    with the alpha the desktop is compositing at, and the pair is what decides whether there is
+    anything to write. A window layered by a colour key rather than by an alpha has no fade to
+    compare against and is faded anyway, which is the case a style-only comparison gets wrong in
+    the other direction.
+  - The comparison is a plain function of the numbers, so it has tests: a fade that moved, a fade
+    that did not, a window faded by something else, and going back to opaque, which takes the style
+    off as well as the alpha.
 - **`zet`** — a `CF_UNICODETEXT` block with no terminator was read past the end of its own
   allocation.
   - The format is a null-terminated string and the block is an allocation, and the two ends are
