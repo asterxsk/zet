@@ -50,7 +50,7 @@ Out of scope:
 
 ## Release integrity
 
-Releases are built by GitHub Actions from a signed tag in this repository and published with a
+Releases are built by GitHub Actions from a tag in this repository and published with a
 `SHA256SUMS` file alongside the two artifacts — the bare binary the updater replaces in place,
 and the per-user installer a person downloads. The updater refuses an archive whose checksum does
 not match its line. The build pipeline is in [`.github/workflows/release.yml`](.github/workflows/release.yml)

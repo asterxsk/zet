@@ -215,8 +215,8 @@ palette and never the chrome's.
 
 - Default: solid block, drawn in the theme foreground with the cell's character
   inverted to the theme background.
-- Options: block, bar, underline, hollow block. Thickness is adjustable to 1, 2, or
-  3px for bar and underline, which is the accessibility lever for low vision.
+- Options: block, bar, underline, hollow block. Thickness is adjustable from 1 to 8px
+  for bar and underline, which is the accessibility lever for low vision.
 - Blink: 530ms on, 530ms off, hard transitions, no fade. Blinking curses if you can
   see the in-between. Off is a first-class setting and is the default when
   reduce-motion is on.

@@ -99,8 +99,9 @@
       </table>
 
       <p><code>zet-update</code> is the exception to the ordering and is the only crate here published
-      as a library in its own right. It depends on nothing in the workspace and nothing in the
-      workspace depends on it except the binary, which does not call it yet.</p>
+      as a library in its own right. It depends on nothing in the workspace, and nothing in the
+      workspace depends on it except the binary, which calls it for <code>--version</code> and for
+      the two typed update flags.</p>
 
       <h2>Why it is split this way</h2>
 
@@ -249,9 +250,10 @@
 
       <p><code>host</code> is the event loop's callback and the only place the platform and the state
       machine meet. <code>keys</code> and <code>mouse</code> translate between the platform's events
-      and the vocabulary <code>zet-app</code> speaks. <code>clipboard</code> and <code>platform</code>
-      call Win32 directly and are the only files in the binary with an <code>unsafe</code> block; the
-      crate denies <code>unsafe_code</code> everywhere else.</p>
+      and the vocabulary <code>zet-app</code> speaks. <code>clipboard</code>, <code>platform</code>,
+      and <code>picture</code> call Win32 directly — <code>picture</code> through GDI+, for the
+      decoders — and are the only files in the binary with an <code>unsafe</code> block; the crate
+      denies <code>unsafe_code</code> everywhere else.</p>
 
       <h3>zet-update — becoming the next version</h3>
 
@@ -261,9 +263,11 @@
       on the next launch. Windows will not let a running executable be overwritten or deleted, but it
       will let one be renamed, and that is the entire mechanism.</p>
 
-      <p>Nothing in the binary calls it yet, so the current build never touches the network on its own.
-      That is described in <a href="privacy.html">Privacy</a>, and what verification does and does not
-      prove is in <a href="security.html">Security</a>.</p>
+      <p>The binary calls it, and only from two typed flags: <code>zet --check-update</code> asks and
+      <code>zet --update</code> installs. Nothing checks on launch and nothing checks on a timer, so
+      the current build never touches the network unless you type one of those. That is described in
+      <a href="privacy.html">Privacy</a>, and what verification does and does not prove is in
+      <a href="security.html">Security</a>.</p>
 
       <h2>The workspace</h2>
 

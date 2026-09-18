@@ -7,8 +7,8 @@ renderer.
 > with its own VT engine and its own GPU renderer. It speaks the kitty keyboard protocol in
 > both directions — the flag stack, the query, and the `CSI u` encoding, with `Report alternate
 > keys` the one flag it does not implement. What is missing is the depth around that:
-> the update check exists as `zet --check-update` and `zet --update`, but does not yet run on
-> launch.
+> the update check exists as `zet --check-update` and `zet --update`, and never runs on launch —
+> nothing is planned to change that.
 > Nothing here is usable as a daily driver, and nothing here is worth installing.
 
 ## Why

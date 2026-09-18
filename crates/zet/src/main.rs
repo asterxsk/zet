@@ -7,12 +7,12 @@
 //! of zet have tests and this file has a `main`.
 //!
 //! What is here is the set of things that cannot be a library: the event loop, the
-//! window, and the four modules that talk to Win32. [`host`] is the event loop's
+//! window, and the three modules that talk to Win32. [`host`] is the event loop's
 //! callback and the only place the platform and the state machine meet.
 
 // The crate's lints live in `Cargo.toml`, and `unsafe_code` is denied there rather than
-// forbidden — `platform` and `clipboard` call Win32 directly and each says so at the top
-// of its own file. Nothing else in the binary contains an `unsafe` block.
+// forbidden — `clipboard`, `platform` and `picture` call Win32 directly and each says so
+// at the top of its own file. Nothing else in the binary contains an `unsafe` block.
 
 mod clipboard;
 mod host;

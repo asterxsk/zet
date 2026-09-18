@@ -354,6 +354,55 @@
 
       <h3>Fixed</h3>
 
+      <h4>docs — ten claims the code had stopped keeping</h4>
+
+      <p>Every page read against the binary, and ten sentences that had gone stale:</p>
+
+      <ul>
+        <li><a href="security.html">Security</a> said the update check "is not wired in the current
+        build at all, so there is no network path to attack yet". It is: <code>--check-update</code>
+        and <code>--update</code> are dispatched by the binary and construct a
+        <code>zet_update::Checker</code>. The page says what they do, and that nothing checks on
+        launch. <a href="architecture.html">Architecture</a> said the same false thing about
+        <code>zet-update</code> in three places.</li>
+
+        <li><a href="keybindings.html">Keybindings</a> promised that "a chord is compared exactly,
+        including the case of a character" and that <code>Ctrl+Shift+T</code> and
+        <code>Ctrl+Shift+t</code> "are two different chords, and only one of them is bound". Letters
+        are matched without regard to case, deliberately, because Caps Lock decides which one the
+        system reports — <code>crates/zet-input/src/chord.rs</code> has said so in a comment and in a
+        test since it was written. The same page's punctuation paragraph promised a named key
+        "fires whether your layout produces <code>&lt;</code> there or something else", which holds
+        only where the layout keeps the PC-101 pairing the matcher resolves shifted characters
+        through.</li>
+
+        <li><a href="design.html">Design</a> capped cursor thickness at "1, 2, or 3px", in
+        <code>docs/design.html</code> and in <code>DESIGN.md</code>. The range has been 1 to 8 since
+        three literals became one constant, and both the configuration reference and the panel's
+        stepper already said so.</li>
+
+        <li><a href="privacy.html">Privacy</a> listed "shell profiles" among what
+        <code>config.toml</code> holds, in <code>PRIVACY.md</code> and in
+        <code>docs/privacy.html</code>. Profiles are discovered from the machine on every launch and
+        no key in the schema names one.</li>
+
+        <li><a href="security.html">Security</a> said releases are built "from a signed tag". Nothing
+        signs or verifies a tag: <code>README.md</code> documents the release step as a plain
+        <code>git tag</code>, and the workflow's only tag check verifies that the tag exists on the
+        remote. Both pages now name what does stand in for provenance, which the second of them
+        already described correctly a section further down.</li>
+
+        <li><a href="architecture.html">Architecture</a> listed <code>clipboard</code> and
+        <code>platform</code> as "the only files in the binary with an <code>unsafe</code> block".
+        <code>picture</code> — the GDI+ decoder behind <code>window.background</code>'s images — is
+        a third, and <code>crates/zet/src/main.rs</code>'s own header made the same stale claim
+        about the same file.</li>
+
+        <li><code>README.md</code> and the site index said the update check "does not yet run on
+        launch", which reads as a plan. It was dropped as not planned, and the index says exactly
+        that twenty lines below.</li>
+      </ul>
+
       <h4>zet-app — a <code>[keys]</code> value that is not a chord was dropped without a word</h4>
 
       <p><code>parse_bindings</code>'s own comment said "the config loader has already reported the

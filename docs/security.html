@@ -127,7 +127,7 @@
 
       <h2>Release integrity</h2>
 
-      <p>Releases are built by GitHub Actions from a signed tag in the repository and published with
+      <p>Releases are built by GitHub Actions from a tag in the repository and published with
       a <code>SHA256SUMS</code> file alongside the artifacts. The updater refuses an archive whose
       checksum does not match. The build pipeline is in
       <code>.github/workflows/release.yml</code> and is readable in full.</p>
@@ -154,10 +154,13 @@
       <ul>
         <li>It does not sandbox the programs you run. A child process is your process, with your
         rights, and the job object is there to reap it at teardown rather than to contain it.</li>
-        <li>It does not verify who published a release, because nothing is signed.</li>
-        <li>It does not check for updates in the current build at all, so there is no network path to
-        attack yet. See <a href="privacy.html">Privacy</a> for what the check will do when it is
-        wired in.</li>
+        <li>It does not verify who published a release, because nothing is signed. What stands in
+        for provenance is the repository's own controls: 2FA on the account, branch protection, and
+        a workflow that builds from a tag rather than from a laptop.</li>
+        <li>It does not check for updates on launch, and none is planned. The updater is wired in
+        behind <code>zet --check-update</code> and <code>zet --update</code>, and a request is made
+        only when one of those two is typed — which is the whole of zet's network surface. See
+        <a href="privacy.html">Privacy</a> for what that request discloses.</li>
       </ul>
     </article>
   </main>

@@ -247,6 +247,35 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **docs** — ten claims the code had stopped keeping, found by reading every page against the binary.
+  - Security said the update check "is not wired in the current build at all, so there is no network
+    path to attack yet". It is: `Args::CheckUpdate` and `Args::Update` are dispatched by
+    `crates/zet/src/main.rs` and construct a `zet_update::Checker`, and the page now says what they
+    do and that nothing checks on launch. The architecture page's `zet-update` section said the same
+    false thing in two places, and its crate table a third.
+  - Keybindings promised that "a chord is compared exactly, including the case of a character" and
+    that `Ctrl+Shift+T` and `Ctrl+Shift+t` "are two different chords, and only one of them is
+    bound". Letters are matched without regard to case, deliberately, because Caps Lock decides
+    which one the system reports — `crates/zet-input/src/chord.rs` has said so in a comment and in a
+    test since it was written. The same page's punctuation paragraph promised that a named key
+    "fires whether your layout produces `<` there or something else", which holds only where the
+    layout keeps the PC-101 pairing the matcher resolves shifted characters through.
+  - Design capped cursor thickness at "1, 2, or 3px" in `docs/design.html` and in `DESIGN.md`. The
+    range has been 1 to 8 since the three literals became one constant, and both the configuration
+    reference and the panel's stepper say so.
+  - Privacy listed "shell profiles" among what `config.toml` holds, in `PRIVACY.md` and in
+    `docs/privacy.html`. Profiles are discovered from the machine on every launch and no key in the
+    schema names one.
+  - Security said releases are built "from a signed tag", in `SECURITY.md` and in
+    `docs/security.html`. Nothing signs or verifies a tag: `README.md` documents the release step as
+    a plain `git tag`, and the workflow's only tag check verifies the tag exists on the remote. Both
+    pages now name what does stand in for provenance, which the second of them already described
+    correctly a section further down.
+  - Architecture listed `clipboard` and `platform` as "the only files in the binary with an
+    `unsafe` block". `picture` — the GDI+ decoder behind `window.background`'s images — is a third,
+    and `crates/zet/src/main.rs`'s own header made the same stale claim about the same file.
+  - README and the site index said the update check "does not yet run on launch", which reads as a
+    plan. It was dropped as not planned, and the index says exactly that twenty lines below.
 - **`zet-app`** — a `[keys]` value that is not a chord was dropped without a word.
   - `parse_bindings`'s own comment said "the config loader has already reported the ones it could
     see", and `docs/keybindings.html` promises that "a misspelled modifier is reported as an unknown
