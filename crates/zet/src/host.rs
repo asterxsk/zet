@@ -942,8 +942,15 @@ impl Host {
         self.pressed_at = None;
     }
 
-    /// The pointer moved.
+    /// The pointer moved, in the physical pixels the event carried.
+    ///
+    /// The conversion is here rather than at each of the five things that read the
+    /// pointer, because they are all measured in logical pixels — the chrome's regions,
+    /// the panel, the resize borders, the scrollbar, and the grid — and a pointer stored
+    /// as it arrived is a pointer a scale factor away from the user on every display
+    /// that is not at 100%.
     fn moved(&mut self, x: f64, y: f64) {
+        let (x, y) = mouse::logical(x, y, self.scale());
         self.pointer = Some((x, y));
         let Some(window) = self.window.clone() else {
             return;

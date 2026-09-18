@@ -16,14 +16,15 @@
 //!
 //! # The units, which are the whole difficulty
 //!
-//! `winit` reports a pointer position in *logical* pixels, which is physical pixels
-//! divided by the DPI scale. [`Metrics`] is in *physical* pixels, because that is what
-//! the rasteriser measured and what the GPU draws with. The chrome's [`Rect`] is in
-//! logical pixels, because it was laid out from a logical window size. So the one thing
-//! every function here has to do is divide the cell size by the scale before comparing
-//! it to anything the pointer said, and a version of this file that forgot would put a
-//! click on the wrong cell by a factor of the user's display scaling — which on a 200%
-//! laptop is every click.
+//! `winit` reports a pointer position in *physical* pixels, and the event that carries it
+//! says so in its type. [`Metrics`] is in *physical* pixels too, because that is what the
+//! rasteriser measured and what the GPU draws with. The chrome's [`Rect`] is in *logical*
+//! pixels, because it was laid out from a logical window size. So the one thing every
+//! function here has to do is divide the cell size by the scale before comparing it to
+//! anything the pointer said, and the one thing a caller has to do is hand over a point
+//! in the pixels the window was measured in — [`logical`] is that conversion, and a
+//! version of this file that forgot either would put a click on the wrong cell by a
+//! factor of the user's display scaling, which on a 200% laptop is every click.
 
 // A pointer position is a logical pixel count and a cell is a physical one, so every
 // conversion here is a division by a DPI scale and a floor. Both operands are window
@@ -119,6 +120,25 @@ fn logical_cell(metrics: &Metrics, scale: f32) -> (f64, f64) {
         f64::from(metrics.cell_width) / scale,
         f64::from(metrics.cell_height) / scale,
     )
+}
+
+/// A point as the platform reported it, in the logical pixels everything here is in.
+///
+/// `winit` measures the pointer in physical pixels — `CursorMoved` and the wheel's
+/// `PixelDelta` both — while every surface this module hit-tests is measured in logical
+/// ones: the chrome's regions, the settings panel, the resize borders, and the grid
+/// rectangle the caller passes to [`cell`]. A point stored as it arrived and then tested
+/// as if it were logical is a point one scale factor from where the user is pointing,
+/// which at 150% is a close caption at the window's right edge that no click can reach
+/// and a tab strip that switches to the tab next to the one under the pointer.
+///
+/// Zero is not a scale, and a division by it would answer with an infinity and put the
+/// pointer nowhere at all. Every other value, including a negative one, is left to the
+/// caller: the platform is the one that decides what it means.
+#[must_use]
+pub fn logical(x: f64, y: f64, scale: f32) -> (f64, f64) {
+    let scale = if scale > 0.0 { f64::from(scale) } else { 1.0 };
+    (x / scale, y / scale)
 }
 
 /// Which edge or corner of the window a point is on, if any.
@@ -294,6 +314,43 @@ mod tests {
             cap_height: 9.0,
             x_height: 7.0,
         }
+    }
+
+    #[test]
+    fn a_point_from_the_platform_is_measured_in_the_pixels_the_window_is() {
+        // `CursorMoved` hands over physical pixels. The chrome, the panel, the resize
+        // borders and the grid are all logical, so an unconverted point is wrong by the
+        // display's scale — which is every click on a laptop at 150% and none at all on
+        // a monitor at 100%, and is why this reads as a broken close button rather than
+        // as arithmetic.
+        assert_eq!(logical(150.0, 75.0, 1.5), (100.0, 50.0));
+        assert_eq!(logical(150.0, 75.0, 1.0), (150.0, 75.0));
+        assert_eq!(logical(150.0, 75.0, 2.0), (75.0, 37.5));
+    }
+
+    #[test]
+    fn a_scale_that_is_not_a_scale_leaves_the_point_alone() {
+        // Not a realistic value, but the division is the whole function and an infinity
+        // out of it puts the pointer nowhere rather than at the origin, which is the
+        // difference between a window responding oddly and a window not responding.
+        assert_eq!(logical(150.0, 75.0, 0.0), (150.0, 75.0));
+    }
+
+    #[test]
+    fn a_physical_pointer_lands_on_the_cell_the_user_is_pointing_at() {
+        // The two steps composed, which is how the host uses them: a cell is ten by
+        // twenty *physical* pixels, so at 150% it is 6.67 by 13.33 logical ones, and a
+        // pointer the platform reports at physical (20, 40) is over the cell at
+        // logical (13.33, 26.67).
+        let grid = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let (x, y) = logical(20.0, 40.0, 1.5);
+        assert_eq!(cell(x, y, grid, &metrics(), 1.5), Some(Pos::new(2, 2)));
+        // The same coordinates read as logical rather than converted — which is what the
+        // host did — are a cell past the one the user is pointing at.
+        assert_eq!(
+            cell(20.0, 40.0, grid, &metrics(), 1.5),
+            Some(Pos::new(3, 3))
+        );
     }
 
     #[test]
