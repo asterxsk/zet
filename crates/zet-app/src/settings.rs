@@ -859,10 +859,15 @@ mod tests {
         config.font.family = "No Such Mono".into();
         let list = candidates(&config, &["Cascadia Mono".to_owned()]);
         assert_eq!(list[0], "No Such Mono");
-        assert_eq!(
-            lines(&config, &parse_bindings(&config)).len(),
-            lines(&config, &parse_bindings(&config)).len()
-        );
+        // And the row reads what the file says rather than what the machine has. The
+        // family is offered first *and* shown, because the two are the same question: a
+        // panel that listed the installed families under a name the file does not contain
+        // would be describing a setting that is not the one in force.
+        let row = lines(&config, &parse_bindings(&config))
+            .into_iter()
+            .find(|line| line.id() == Some(Id::Font))
+            .expect("the font row");
+        assert_eq!(row.value(), "No Such Mono");
     }
 
     #[test]

@@ -305,6 +305,20 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-app`** — the Problems section described the file as it was at launch, not as it is.
+  - The rows are the loader's own words about the file rather than settings in it, which is what
+    makes them worth reading and what makes them expire. The panel writes the file on every click,
+    and a complaint about a value the user has just changed through the rows below it is the panel
+    reporting a problem it fixed itself — with no way to be rid of it short of a restarting zet.
+    A `theme = "nope"` that the user repicked from the theme row stayed on screen for the rest of
+    the session.
+  - The write moved from the host into `App::save`, which writes the file and then reads it back:
+    the same question, asked of the same authority that answered it at launch, so the list cannot
+    drift from the file it describes. The configuration is not taken from the re-read — a file
+    something else has edited since must not walk back a click made in this window.
+  - What the re-read does not fix stays. An unknown action name survives every write, because the
+    file is edited leaf by leaf and nothing removes a line the user put there, and there is a test
+    that says so: a save is not a way to make the panel stop complaining.
 - **`zet-vt`** — two edits that lost text a program had already written.
   - A narrowing reflow anchored the screen by pulling the viewport up until the cursor was inside
     it. That pull is the bug: the cursor reflows above the top of the new screen exactly when the

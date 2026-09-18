@@ -1153,10 +1153,17 @@ impl Host {
     /// that never offered it, so a failure is reported on stderr where a user who
     /// launched zet from a shell will see it. It is not fatal: the change is live either
     /// way, and losing it at exit is a smaller loss than losing the window.
+    ///
+    /// The write is the app's rather than this file's because the app is where the
+    /// Problems section lives, and a save is what makes those rows expire — a host that
+    /// wrote the file itself would leave the panel describing a file that no longer
+    /// exists.
     fn saved(&mut self) {
-        let path = self.app.config_path().to_path_buf();
-        if let Err(error) = zet_config::save(self.app.config(), &path) {
-            eprintln!("zet: could not write {}: {error}", path.display());
+        if let Err(error) = self.app.save() {
+            eprintln!(
+                "zet: could not write {}: {error}",
+                self.app.config_path().display()
+            );
         }
     }
 

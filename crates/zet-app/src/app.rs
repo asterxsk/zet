@@ -171,7 +171,7 @@ impl App {
     pub fn new(
         config: Config,
         config_path: PathBuf,
-        mut diagnostics: Vec<Diagnostic>,
+        diagnostics: Vec<Diagnostic>,
         waker: Arc<dyn Waker>,
     ) -> Result<Self, AppError> {
         let profiles = discovery::discover();
@@ -180,9 +180,7 @@ impl App {
         }
         let theme = by_slug(&config.theme).unwrap_or_else(|| zet_config::default_theme());
         let bindings = parse_bindings(&config);
-        // After the loader's own, so the panel reads them in the order they were found:
-        // what is wrong with the file's shape, and then what is wrong with its bindings.
-        report_unparseable_bindings(&config, &mut diagnostics);
+        let diagnostics = diagnostics_for(&config, diagnostics);
         let now = Instant::now();
         Ok(App {
             config,
@@ -414,6 +412,31 @@ impl App {
             self.apply();
         }
         effect
+    }
+
+    /// Write the configuration back to the file it was read from, and take in what the
+    /// loader makes of what was written.
+    ///
+    /// The Problems section is about the file rather than in it, which is what makes it
+    /// worth reading and also what makes it expire: the panel writes the file on every
+    /// click, so a complaint about a value the user has just changed through the rows
+    /// below it is the panel reporting a problem it fixed itself, with no way to be rid
+    /// of it short of a restart. Reading the file back asks the question of the authority
+    /// that answered it at launch, so the list cannot drift from the file it describes.
+    ///
+    /// The configuration is *not* taken from the re-read. A file something else has
+    /// edited since, or one that half landed, must not walk back a click made here.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the file cannot be written, or if what is already there is not TOML —
+    /// writing would destroy something the user typed.
+    pub fn save(&mut self) -> Result<(), zet_config::ConfigError> {
+        zet_config::save(&self.config, &self.config_path)?;
+        if let Ok(loaded) = load(&self.config_path) {
+            self.diagnostics = diagnostics_for(&self.config, loaded.diagnostics);
+        }
+        Ok(())
     }
 
     /// Bind a chord to an action, replacing whatever ran it before.
@@ -1310,6 +1333,17 @@ fn report_unparseable_bindings(config: &Config, diagnostics: &mut Vec<Diagnostic
             });
         }
     }
+}
+
+/// Everything wrong with `config`: what the loader found, and what only this crate can.
+///
+/// One function because there are two ways in — a launch and a save — and the panel must
+/// not be able to tell which of them it is looking at. The loader's come first, so the
+/// rows read in the order they were found: what is wrong with the file's shape, and then
+/// what is wrong with its bindings.
+fn diagnostics_for(config: &Config, mut diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+    report_unparseable_bindings(config, &mut diagnostics);
+    diagnostics
 }
 
 #[cfg(test)]

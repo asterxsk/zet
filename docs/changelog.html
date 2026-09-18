@@ -448,6 +448,28 @@
 
       <h3>Fixed</h3>
 
+      <h4>zet-app — the Problems section described the file as it was at launch, not as it is</h4>
+
+      <ul>
+        <li>The rows are the loader's own words about the file rather than settings in it, which is
+        what makes them worth reading and what makes them expire. The panel writes the file on
+        every click, and a complaint about a value the user has just changed through the rows below
+        it is the panel reporting a problem it fixed itself — with no way to be rid of it short of
+        restarting zet. A <code>theme = "nope"</code> that the user repicked from the theme row
+        stayed on screen for the rest of the session.</li>
+
+        <li>The write moved from the host into <code>App::save</code>, which writes the file and
+        then reads it back: the same question, asked of the same authority that answered it at
+        launch, so the list cannot drift from the file it describes. The configuration is not taken
+        from the re-read — a file something else has edited since must not walk back a click made
+        in this window.</li>
+
+        <li>What the re-read does not fix stays. An unknown action name survives every write,
+        because the file is edited leaf by leaf and nothing removes a line the user put there, and
+        there is a test that says so: a save is not a way to make the panel stop
+        complaining.</li>
+      </ul>
+
       <h4>zet-vt — two edits that lost text a program had already written</h4>
 
       <ul>
