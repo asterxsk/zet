@@ -354,6 +354,23 @@
 
       <h3>Fixed</h3>
 
+      <h4>zet-app — the theme picker never said which palettes ship as published</h4>
+
+      <p>PRODUCT.md's seventh criterion promises that imported palettes "ship unmodified so they
+      look like themselves, and the theme picker says so", and DESIGN.md repeats it along with the
+      reason: a picker that showed them beside zet's own without a word would imply they had been
+      checked for contrast. <code>Theme::published</code> has been set correctly on all eight
+      themes since they were written, and both <code>theme.rs</code> and <code>imported.rs</code>
+      say the settings panel reads it to know — the panel did not, so the criterion was kept by a
+      field no user could see.</p>
+
+      <p>The Theme row is labelled <code>Theme (as published)</code> when the selected palette is
+      one of the five imported ones. The marker is on the label rather than on the value, which is
+      where the name goes: that column is 118px — wide enough for a chord and no wider — and the
+      painter draws a run of text into the frame without clipping it, so
+      <code>Solarized Light (as published)</code> would not be cut off at the control, it would run
+      out of the panel and over the grid.</p>
+
       <h4>docs — ten claims the code had stopped keeping</h4>
 
       <p>Every page read against the binary, and ten sentences that had gone stale:</p>

@@ -247,6 +247,18 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-app`** — the theme picker never said which palettes ship as their authors published them.
+  - PRODUCT.md's seventh criterion promises that imported palettes "ship unmodified so they look
+    like themselves, and the theme picker says so", and DESIGN.md repeats it along with the reason:
+    a picker that showed them beside zet's own without a word would imply they had been checked for
+    contrast. `Theme::published` has been set correctly on all eight themes since they were
+    written, and both `theme.rs` and `imported.rs` say the settings panel reads it to know — the
+    panel did not, so the criterion was kept by a field no user could see.
+  - The Theme row is labelled `Theme (as published)` when the selected palette is one of the five
+    imported ones. The marker is on the label rather than on the value, which is where the name
+    goes: that column is 118px — wide enough for a chord and no wider — and the painter draws a run
+    of text into the frame without clipping it, so `Solarized Light (as published)` would not be
+    cut off at the control, it would run out of the panel and over the grid.
 - **docs** — ten claims the code had stopped keeping, found by reading every page against the binary.
   - Security said the update check "is not wired in the current build at all, so there is no network
     path to attack yet". It is: `Args::CheckUpdate` and `Args::Update` are dispatched by

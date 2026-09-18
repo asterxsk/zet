@@ -233,11 +233,41 @@ pub fn problems(diagnostics: &[Diagnostic]) -> Vec<Line> {
 /// The font row's *value* is the family in the file and needs nothing else; the list of
 /// families it can be stepped through is only needed when it is clicked, which is why
 /// [`adjust`] takes it and this does not.
+/// The Theme row, labelled with whether the palette is zet's own.
+///
+/// PRODUCT.md's seventh criterion promises it — imported palettes "ship unmodified so they
+/// look like themselves, and the theme picker says so" — and DESIGN.md gives the reason the
+/// sentence exists at all: a picker that showed them beside zet's own without a word would
+/// imply they had been checked for contrast. They have not been, and could not be without
+/// changing them, which is the whole point of importing a palette. `Theme::published` has
+/// been set correctly on all eight since the themes were written and read by nothing, so
+/// the promise was being kept by a field no user could see.
+///
+/// The marker is on the label rather than on the value, which is where the name goes: that
+/// column is 118px — wide enough for a chord, no wider — and the painter draws a run of
+/// text into the frame without clipping it, so `Solarized Light (as published)` would not
+/// be cut off at the control, it would run out of the panel and over the grid.
+#[must_use]
+fn theme_row(config: &Config) -> Line {
+    let imported = zet_config::by_slug(&config.theme).is_some_and(|theme| theme.published);
+    let label = if imported {
+        "Theme (as published)"
+    } else {
+        "Theme"
+    };
+    setting(Id::Theme, label, theme_name(config), Kind::Choice)
+}
+
+/// The rows, read out of a configuration.
+///
+/// The font row's *value* is the family in the file and needs nothing else; the list of
+/// families it can be stepped through is only needed when it is clicked, which is why
+/// [`adjust`] takes it and this does not.
 #[must_use]
 pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
     let mut lines = vec![
         Line::Heading("Appearance"),
-        setting(Id::Theme, "Theme", theme_name(config), Kind::Choice),
+        theme_row(config),
         setting(
             Id::TextScale,
             "Text scale",
@@ -624,6 +654,47 @@ mod tests {
             .filter(|line| matches!(line.id(), Some(Id::Binding(_))))
             .count();
         assert_eq!(rows, Action::ALL.len());
+    }
+
+    #[test]
+    fn an_imported_palette_says_it_ships_as_published() {
+        // PRODUCT.md's seventh criterion: imported palettes "ship unmodified so they look
+        // like themselves, and the theme picker says so". DESIGN.md gives the reason the
+        // sentence exists at all — a picker that showed them beside zet's own without a
+        // word would imply they had been checked for contrast, and they have not been,
+        // and could not be without changing them.
+        //
+        // `Theme::published` has been set correctly on all eight since the themes were
+        // written and read by nothing, so the promise was kept by a field no user saw.
+        fn theme_row(config: &Config) -> (String, String) {
+            let rows = lines(config, &parse_bindings(config));
+            let row = rows
+                .iter()
+                .find(|line| line.id() == Some(Id::Theme))
+                .expect("the row is in the panel");
+            (row.text().to_owned(), row.value().to_owned())
+        }
+
+        let mut imported = config();
+        imported.theme = "nord".into();
+        assert_eq!(
+            theme_row(&imported),
+            (
+                "Theme (as published)".to_owned(),
+                "Nord".to_owned(),
+                // The name is still the value and still readable: the marker is on the
+                // label because the value's column is 118px — wide enough for a chord —
+                // and the painter draws a run of text without clipping it, so a suffix
+                // here would run out of the panel and over the grid.
+            )
+        );
+
+        // And one of zet's own carries nothing, because there is nothing to say: zet
+        // checked these, and DESIGN.md's contrast table is where that is written down.
+        assert_eq!(
+            theme_row(&config()),
+            ("Theme".to_owned(), "zet dark".to_owned())
+        );
     }
 
     #[test]
