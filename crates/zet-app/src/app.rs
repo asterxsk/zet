@@ -470,6 +470,14 @@ impl App {
             self.sessions.set_active(number);
             // A selection belongs to the terminal it was made in.
             self.drag = None;
+            // So does a find. The match list, the count, and the marks were all built
+            // out of the terminal that was active a moment ago, and the marks are the
+            // ones that hurt: they are painted by row, so they land on whatever the new
+            // tab has on those rows, and the bar reads "3 of 3" about a terminal that has
+            // never contained the query. A tab switch is the same event as a terminal
+            // printing — the grid under the query is a different one — so it is the same
+            // note that says so.
+            self.find.touch();
             self.blink.restart(Instant::now(), false);
         }
     }
@@ -710,9 +718,7 @@ impl App {
             return;
         };
         let grid = session.term().grid();
-        let from = grid
-            .scrollback_len()
-            .saturating_sub(session.scroll_offset());
+        let from = grid.history_top(session.scroll_offset());
         find.search(grid, from);
     }
 
@@ -796,9 +802,7 @@ impl App {
         };
         let want = {
             let grid = session.term().grid();
-            let top = grid
-                .scrollback_len()
-                .saturating_sub(session.scroll_offset());
+            let top = grid.history_top(session.scroll_offset());
             let Some(want) = reveal_row(found, top, grid.rows()) else {
                 return;
             };
@@ -825,9 +829,7 @@ impl App {
         let grid = session.term().grid();
         let rows = grid.rows();
         let cols = grid.cols();
-        let top = grid
-            .scrollback_len()
-            .saturating_sub(session.scroll_offset());
+        let top = grid.history_top(session.scroll_offset());
         let mut marks = Vec::new();
         let mut active = None;
         for (index, found) in self.find.matches().iter().enumerate() {
@@ -846,8 +848,12 @@ impl App {
     #[must_use]
     pub fn selection_text(&self) -> Option<String> {
         let selection = self.selection()?;
-        let term = self.active()?.term();
-        Some(selection_text(term, selection))
+        let session = self.active()?;
+        Some(selection_text(
+            session.term(),
+            selection,
+            session.scroll_offset(),
+        ))
     }
 
     // ---------------------------------------------------------------------------
@@ -1404,6 +1410,30 @@ mod tests {
         let mut app = app();
         let _ = app.open_tab(80, 24).expect("a shell starts");
         assert!(!app.pump());
+    }
+
+    #[test]
+    fn a_tab_switch_throws_the_find_results_away() {
+        let mut app = app();
+        let first = app.open_tab(80, 24).expect("a shell starts");
+        app.find.open();
+        app.find.push('a');
+        // One search, so the bar holds a settled match list. The grid is a local one for
+        // the same reason the fixture below uses one: the bar is being driven directly
+        // and a shell that prints on demand is a race.
+        let mut term = zet_vt::Term::new(20, 4);
+        let mut parser = zet_vt::Parser::new();
+        parser.advance_slice(b"alpha", &mut term);
+        app.find.search(term.grid(), 0);
+        assert!(!app.find.is_stale(), "a search settles the bar");
+
+        let _ = app.open_tab(80, 24).expect("a shell starts");
+        app.activate(first);
+
+        assert!(
+            app.find.is_stale(),
+            "the matches and the count are the previous terminal's"
+        );
     }
 
     #[test]

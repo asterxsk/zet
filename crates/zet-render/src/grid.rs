@@ -205,6 +205,13 @@ pub struct View {
     pub blink_on: bool,
     /// What the user has selected, if anything.
     pub selection: Option<Selection>,
+    /// How many rows up from the live screen the view is scrolled.
+    ///
+    /// The rows drawn come from the history rather than from the screen once this is
+    /// non-zero, and the cursor — which belongs to the live screen and not to the view —
+    /// moves down by the same amount, so it is drawn on its own row where that row is
+    /// on screen and not drawn at all where it is not.
+    pub scroll_offset: usize,
 }
 
 impl View {
@@ -216,6 +223,7 @@ impl View {
             focused: true,
             blink_on: true,
             selection: None,
+            scroll_offset: 0,
         }
     }
 }
@@ -224,6 +232,25 @@ impl Default for View {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The cursor for this frame, and the window row it belongs on.
+///
+/// The cursor is the live screen's, and the live screen sits `view.scroll_offset` rows
+/// below the top of what is drawn — so its row moves down by the same amount, and
+/// scrolled far enough back it has left the window, which is a cursor that is not drawn.
+/// Painting it at the row the terminal holds instead would put it on a line of history
+/// that has nothing to do with where the shell is about to print.
+fn cursor_frame(term: &Term, view: &View, settings: &CursorSettings) -> (Cursor, usize) {
+    let cursor = Cursor::resolve(
+        settings,
+        view.focused,
+        view.blink_on,
+        term.modes().cursor_visible,
+    );
+    let row = term.cursor().row + view.scroll_offset;
+    let visible = cursor.visible && row < term.grid().rows();
+    (Cursor { visible, ..cursor }, row)
 }
 
 /// Draw a terminal's grid into a frame.
@@ -246,7 +273,12 @@ pub fn draw_grid(
     let (origin_x, origin_y) = view.origin;
     let modes = term.modes();
     let cursor_at = term.cursor();
-    let cursor = Cursor::resolve(settings, view.focused, view.blink_on, modes.cursor_visible);
+    // The rows to draw come out of the history from here, not out of the screen, so a
+    // view scrolled back is a view of other lines. `grid.rows()` of them either way: the
+    // history is the scrollback and the screen together, and `top` is never past the end
+    // of it.
+    let top = grid.history_top(view.scroll_offset);
+    let (cursor, cursor_row_at) = cursor_frame(term, view, settings);
 
     // One rectangle for the whole grid, so that a screen of default backgrounds costs
     // one quad instead of one per cell. Chrome is drawn around and over this, and the
@@ -262,13 +294,20 @@ pub fn draw_grid(
     frame.end_quads();
 
     for row in 0..grid.rows() {
-        let line = grid.row(row);
+        // The row is a window row: zero is the top of what the user is looking at, which
+        // is the top of the screen only when the view is at the bottom. Everything the
+        // rest of this function compares it against — the selection, the marks, the
+        // cursor — is in that same space, because they are all things the window is
+        // showing rather than things the terminal holds.
+        let Some(line) = grid.row_from_history(top + row) else {
+            continue;
+        };
         let y = origin_y + row as f32 * metrics.cell_height;
 
         // Rows are stored trimmed, so a row that has never been written is zero cells
         // long and costs nothing to skip. So does a row the cursor is not on and nothing
         // has selected.
-        let cursor_row = cursor.visible && cursor_at.row == row;
+        let cursor_row = cursor.visible && cursor_row_at == row;
         let selected_row = view
             .selection
             .is_some_and(|selection| selection.touches_row(row));
@@ -896,6 +935,64 @@ mod tests {
         // `DECTCEM` off outranks every setting there is.
         let frame = render(&term(4, 1, b"\x1b[?25lA"), &View::new());
         assert!(quads_of(&frame, ZET_DARK.cursor.to_linear()).is_empty());
+    }
+
+    /// Six lines into a three-row terminal, ending with the cursor sent home.
+    ///
+    /// The screen holds `DDDD`, `EEEE`, `FFFF` and the three lines above it are history.
+    /// The cursor comes back to the top row so that a test about where it is drawn is
+    /// about the offset rather than about the cursor sitting on the bottom row, where
+    /// any offset at all would hide it.
+    fn scrolled() -> Term {
+        term(4, 3, b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE\r\nFFFF\x1b[H")
+    }
+
+    /// The characters the glyph source was asked for, in the order it was asked.
+    ///
+    /// Every row of the fixtures is full, so there are no trimmed rows to tell apart and
+    /// the run of characters is the picture.
+    fn drawn(term: &Term, offset: usize) -> String {
+        let mut glyphs = FakeGlyphs::new();
+        let view = View {
+            scroll_offset: offset,
+            ..View::new()
+        };
+        render_with(term, &view, &mut glyphs);
+        glyphs.asked.iter().map(|spec| spec.ch).collect()
+    }
+
+    #[test]
+    fn a_view_scrolled_back_draws_the_history_instead_of_the_screen() {
+        let term = scrolled();
+        // The defect this is here for: the frame was a function of the live screen and
+        // nothing else, so every offset drew the same three lines while the scrollbar,
+        // the find bar and the selection all moved as though it had not.
+        assert_eq!(drawn(&term, 0), "DDDDEEEEFFFF", "the live screen");
+        assert_eq!(drawn(&term, 1), "CCCCDDDDEEEE", "one row of history");
+        assert_eq!(drawn(&term, 3), "AAAABBBBCCCC", "the oldest row");
+        // Past the top of the history is the top of the history, not a panic and not a
+        // different set of rows.
+        assert_eq!(drawn(&term, 9), "AAAABBBBCCCC", "clamped");
+    }
+
+    #[test]
+    fn the_cursor_is_drawn_where_the_live_screen_lands_in_a_scrolled_view() {
+        let term = scrolled();
+        let cursor = |offset| {
+            let view = View {
+                scroll_offset: offset,
+                ..View::new()
+            };
+            quads_of(&render(&term, &view), ZET_DARK.cursor.to_linear()).len()
+        };
+        // The cursor is on the live screen's first row. At offset zero that is the top of
+        // the window; scrolled by one it is the second row; scrolled by three the live
+        // screen begins below the window and the cursor is not on screen at all, so it is
+        // not drawn — a cursor painted on a line of history would say the shell is about
+        // to print there.
+        assert_eq!(cursor(0), 1, "at the bottom");
+        assert_eq!(cursor(1), 1, "one row up");
+        assert_eq!(cursor(3), 0, "the live screen is off the bottom");
     }
 
     #[test]

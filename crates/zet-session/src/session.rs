@@ -405,7 +405,7 @@ impl Session {
     #[must_use]
     pub fn visible_rows(&self) -> Vec<&Row> {
         let grid = self.term.grid();
-        let top = grid.scrollback_len() - self.scroll_offset();
+        let top = grid.history_top(self.scroll_offset());
         // In range by construction: `top` and `top + rows` are inside the history the
         // grid holds, which is the scrollback and the screen together.
         (top..top + grid.rows())

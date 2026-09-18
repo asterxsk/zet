@@ -122,6 +122,24 @@ impl Grid {
         self.scrollback.len() + self.rows
     }
 
+    /// The history index of the top of a view scrolled `offset` rows back.
+    ///
+    /// An offset is measured from the live screen and a history index from the oldest
+    /// line, so this is the one subtraction between the two, and it is one function
+    /// because everything that draws or hit-tests a scrolled viewport has to agree on
+    /// the answer: the renderer asks it which rows to draw, the find bar asks it where
+    /// its matches are, and the selection asks it whose text was copied. Computed
+    /// separately at each of those, a view scrolled four rows starts four rows above the
+    /// live screen in one of them and somewhere else in another — which draws a
+    /// highlight over text nobody selected.
+    ///
+    /// Saturating, because an offset past the top of the history is a view of the oldest
+    /// line rather than a panic.
+    #[must_use]
+    pub fn history_top(&self, offset: usize) -> usize {
+        self.scrollback.len().saturating_sub(offset)
+    }
+
     /// A row anywhere in the history, scrollback first.
     ///
     /// This is what a renderer walking a scrolled-back viewport uses, so it never has
