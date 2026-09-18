@@ -198,6 +198,13 @@ close-tab = ""</code></pre>
         unbind it, which the settings panel has a row for.</li>
         <li>The clipboard is plain <code>CF_UNICODETEXT</code> in both directions. There is no rich
         text and no image paste.</li>
+        <li><strong>Ctrl+click opens a hyperlink.</strong> A program that prints an OSC 8 link gets
+        its text drawn underlined, and holding <code>Ctrl</code> while clicking it hands the URL to
+        whatever the system opens URLs with. The modifier is not decoration: a plain click is how a
+        selection starts, and one that followed a link instead would make the link's own text
+        impossible to select. Only <code>http</code>, <code>https</code>, and <code>mailto</code>
+        get through — the string was chosen by the program, and the system's open call runs a path
+        rather than opening it, so anything that is not one of those three is ignored.</li>
       </ul>
     </article>
   </main>

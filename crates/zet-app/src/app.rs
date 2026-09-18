@@ -54,6 +54,8 @@ pub enum Command {
     Paste,
     /// Open a second window at the same size.
     NewWindow,
+    /// Open this URL in whatever the system opens URLs with.
+    OpenUrl(String),
     /// The last tab closed. The host decides whether that closes the window.
     Quit,
 }
@@ -1039,6 +1041,45 @@ impl App {
         self.drag = None;
     }
 
+    /// Open the hyperlink on this screen cell, if it has one.
+    ///
+    /// What is decided here is only what the click landed on; whether the click *is* the
+    /// gesture is the host's, because the modifier that makes it one is the host's to
+    /// read. A cell with no link answers with nothing at all rather than with a command
+    /// the host would have to know to ignore, which is the rule the rest of this file
+    /// follows: every `Command` that comes back is one to carry out.
+    ///
+    /// The row is a screen row, counted from the top of the visible grid, because that is
+    /// what a pointer is in and what a mouse report counts in. Turning it into a history
+    /// index is the same arithmetic the renderer does, and it is the only place the scroll
+    /// offset is allowed to matter.
+    #[must_use]
+    pub fn open_link_at(&mut self, at: Pos) -> Vec<Command> {
+        let Some(session) = self.active() else {
+            return Vec::new();
+        };
+        let term = session.term();
+        let grid = term.grid();
+        let index = grid.history_top(session.scroll_offset()) + at.row;
+        let Some(line) = grid.row_from_history(index) else {
+            return Vec::new();
+        };
+        let Some(url) = term.link_for(&line.get(at.col)) else {
+            return Vec::new();
+        };
+        // Only the schemes that mean "a page". The system's open call does not only open:
+        // handed a path it runs it, and this string was chosen by a program rather than by
+        // the user, so anything that is not a URL is dropped here rather than being handed
+        // to the shell. A program that wants to run something can print a command for the
+        // user to read; one that wants to run something without it being read is the case
+        // this exists for.
+        if openable(url) {
+            vec![Command::OpenUrl(url.to_owned())]
+        } else {
+            Vec::new()
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // The rest of the window's job
     // ---------------------------------------------------------------------------
@@ -1181,6 +1222,27 @@ fn clip_match(found: Match, top: usize, rows: usize, cols: usize) -> Selection {
         },
     );
     Selection::new(start, end)
+}
+
+/// Whether a hyperlink is something to open rather than something to run.
+///
+/// A program chooses the string, and the call that opens a URL is the same call that
+/// starts a program: `C:\Windows\System32\calc.exe` is a perfectly good argument to it.
+/// The three schemes that mean "a page" are the ones that get through, and everything
+/// else — including a bare path and a scheme nobody here has heard of — is refused by
+/// being absent from this list rather than by being on a list of things to refuse.
+///
+/// Case is not significant: the URL specification says schemes are case-insensitive, and
+/// a program that writes `HTTPS://` means what every other program means by `https://`.
+fn openable(url: &str) -> bool {
+    let scheme = url.split_once(':').map(|(scheme, _)| scheme);
+    matches!(
+        scheme,
+        Some(scheme)
+            if scheme.eq_ignore_ascii_case("http")
+                || scheme.eq_ignore_ascii_case("https")
+                || scheme.eq_ignore_ascii_case("mailto")
+    )
 }
 
 /// Turn the config file's `[keys]` table into chords.
@@ -1334,6 +1396,31 @@ mod tests {
         let bound = parse_bindings(&config);
         assert!(!bound.iter().any(|(_, a)| *a == Action::NewTab));
         assert!(bound.iter().any(|(_, a)| *a == Action::CloseTab));
+    }
+
+    #[test]
+    fn only_the_schemes_that_mean_a_page_are_openable() {
+        for url in [
+            "https://example.com",
+            "http://example.com",
+            "mailto:someone@example.com",
+            // The specification says a scheme is not case-sensitive, and a program that
+            // writes it in capitals means what every other program means.
+            "HTTPS://example.com",
+        ] {
+            assert!(openable(url), "{url} should be openable");
+        }
+        for url in [
+            // The one that matters: the system's open call runs a path handed to it.
+            r"C:\Windows\System32\calc.exe",
+            r"Z:\nowhere\evil.exe",
+            "file:///C:/Windows/System32/calc.exe",
+            "javascript:alert(1)",
+            "",
+            "no-scheme-at-all",
+        ] {
+            assert!(!openable(url), "{url} should not be openable");
+        }
     }
 
     #[test]

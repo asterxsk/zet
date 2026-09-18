@@ -28,10 +28,11 @@ use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{COLOR_HIGHLIGHT, GetSysColor};
 use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GetWindowLongPtrW, LWA_ALPHA, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW,
-    SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST, SetLayeredWindowAttributes, SetWindowLongPtrW,
-    SystemParametersInfoW, WS_EX_LAYERED,
+    SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST, SW_SHOWNORMAL, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, SystemParametersInfoW, WS_EX_LAYERED,
 };
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
@@ -126,6 +127,44 @@ pub fn set_opacity(window: &Window, opacity: f32) {
             let _ = SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
         }
     }
+}
+
+/// Open a URL in whatever the system opens URLs with.
+///
+/// `ShellExecuteW` rather than `cmd /c start`, and that is not a preference. The URL was
+/// chosen by whatever program printed the OSC 8 sequence, and handing that string to a
+/// shell means a URL containing `&` or a quote becomes a command line — the exact thing
+/// `docs/security.html` puts out of bounds ("a paste that escapes a bracketed-paste
+/// guard, a title string that reaches a shell"). This call takes the URL as one argument
+/// and parses no metacharacters at all.
+///
+/// The verb is `open`, so the association the user has set up is the one that runs: a
+/// browser for a page, a mail client for `mailto:`. Nothing here decides that, and
+/// nothing here is handed a path — `zet-app` has already refused every scheme that is not
+/// one of the three that mean a page, so what arrives is a URL rather than a program.
+///
+/// Failure is silent. The user asked for a page and the system would not produce one, and
+/// a message box about a browser is a message box between the user and their terminal.
+pub fn open_url(url: &str) {
+    let operation = wide("open");
+    let target = wide(url);
+    // SAFETY: both strings are null-terminated UTF-16 buffers that outlive the call,
+    // which is the whole of what this API asks of them. A null window handle is
+    // documented as meaning "no owner", which is what a terminal that is not asking the
+    // user anything has; the remaining parameters are null, which is "no working
+    // directory and no arguments", and the show command. The return value is an
+    // `HINSTANCE` that the API overloads as a legacy error code, so it is a `<= 32`
+    // failure indicator rather than an allocation, and there is nothing to free.
+    let _ = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            operation.as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
 }
 
 /// The byte the alpha attribute takes, or `None` for a window that should not be layered.

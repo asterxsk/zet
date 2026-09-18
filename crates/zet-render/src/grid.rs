@@ -599,8 +599,19 @@ fn push_cursor(
 }
 
 /// Draw the underline and the strikeout.
+///
+/// A cell with an OSC 8 hyperlink is underlined whether or not the program asked for an
+/// underline, because the sequence says which URL a run of text points at and says nothing
+/// about how it looks. A terminal that stores the link and draws the text plainly has drawn
+/// a link as ordinary text: the text is the same, the target is invisible, and nothing the
+/// user can do reveals it. The underline is what makes it a link on screen, and it is what
+/// every terminal that supports OSC 8 shows.
 fn push_decoration(frame: &mut Frame, cell: &Cell, rect: [f32; 4], color: Rgb, metrics: &Metrics) {
-    let style = cell.attrs.underline_style();
+    let style = if cell.link != 0 {
+        UnderlineStyle::Single
+    } else {
+        cell.attrs.underline_style()
+    };
     if style != UnderlineStyle::None && !cell.attrs.contains(Attrs::HIDDEN) {
         let thickness = metrics.underline_thickness.max(1.0);
         push_rule(
@@ -1158,6 +1169,32 @@ mod tests {
         let bars = quads_of(&frame, ZET_DARK.foreground.to_linear());
         assert_eq!(bars.len(), 1);
         assert_eq!(bars[0].rect, [0.0, 9.0, 8.0, 1.0]);
+    }
+
+    #[test]
+    fn a_hyperlinked_cell_is_underlined() {
+        // OSC 8 says which URL a run of text points at and says nothing about how it
+        // looks, so a terminal that stores the link and draws the text plainly has
+        // rendered a link as ordinary text — which is exactly the state this was in:
+        // `Term::link_for` existed, the table was filled, and no renderer read either.
+        // The underline is the whole of how the link is visible.
+        let frame = render(
+            &term(4, 1, b"\x1b]8;;https://example.com\x07A\x1b]8;;\x07"),
+            &View::new(),
+        );
+        let bars = quads_of(&frame, ZET_DARK.foreground.to_linear());
+        assert_eq!(bars.len(), 1, "a linked cell drew no underline");
+        assert_eq!(bars[0].rect, [0.0, 16.0, 8.0, 1.0]);
+
+        // And the cell after the link ends is not: the underline belongs to the run the
+        // sequence wrapped, not to the rest of the row.
+        let frame = render(
+            &term(4, 1, b"\x1b]8;;https://example.com\x07A\x1b]8;;\x07B"),
+            &View::new(),
+        );
+        let bars = quads_of(&frame, ZET_DARK.foreground.to_linear());
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0].rect[0], 0.0, "the second cell was underlined too");
     }
 
     #[test]

@@ -944,6 +944,7 @@ impl Host {
                         self.app.paste(&text);
                     }
                 }
+                Command::OpenUrl(url) => crate::platform::open_url(&url),
                 Command::NewWindow => {
                     // A second process rather than a second window in this loop. Two
                     // windows would otherwise share one `App` and therefore one tab
@@ -1280,6 +1281,20 @@ impl Host {
                         return;
                     }
                     if let Some(at) = self.grid_cell(x, y) {
+                        // Ctrl+click follows the link under the pointer instead of
+                        // starting a selection, which is what every terminal on this
+                        // platform does and the only reason the modifier is read here at
+                        // all. It is a deliberate gesture on purpose: a program chooses
+                        // the URL, and a plain click on a link that opened it would hand
+                        // a program the ability to open a page under the user's hand.
+                        if self.held.control_key() {
+                            let commands = self.app.open_link_at(at);
+                            if !commands.is_empty() {
+                                self.carry_out(loop_, commands);
+                                window.request_redraw();
+                                return;
+                            }
+                        }
                         self.pressed_at = Some(at);
                         self.app.select_from(at);
                         // A press starts a selection where a previous one was, so the

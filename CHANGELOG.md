@@ -14,6 +14,27 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Added
 
+- **`zet-render` / `zet-app` / `zet`** — hyperlinks, which were parsed and then neither drawn nor
+  followed.
+  - `zet-vt` has stored every OSC 8 target since the sequence was implemented, `Cell::link` has
+    carried the index into the table, and `Term::link_for` is the only way to read one — with no
+    caller anywhere in the workspace. PRODUCT.md's third promise lists OSC 8 hyperlinks among the
+    rendering modes that work, and a link that draws as ordinary text and cannot be followed is the
+    one thing a link is not.
+  - A cell carrying a link is drawn with an underline whether or not the program asked for one,
+    because the sequence says which URL a run of text points at and says nothing about how it
+    looks. Storing the target and drawing the text plainly is drawing a link as ordinary text: the
+    text is identical and the target is invisible.
+  - Ctrl+click follows it, through `ShellExecuteW` with the `open` verb — not `cmd /c start`,
+    because the URL was chosen by the program that printed it and a shell would parse it. The
+    scheme is checked first, in `zet-app`, where the decision is testable: only `http`, `https` and
+    `mailto` reach the host, because the system's open call runs a path rather than opening it, and
+    a program that wants to run something should not be able to do it under a click on what looks
+    like a link.
+  - `crates/zet-app/tests/link.rs` drives a real `cmd.exe` into publishing one through its own
+    prompt — the reason `scroll.rs` and `hold.rs` exist, in the same shape: the app, the parser,
+    and the renderer each have to agree about the same cell, and nothing but a real program proves
+    they do.
 - **`zet-render` / `zet`** — `window.background`'s picture, the last of the three kinds the schema
   has documented since it was written, and the last inert key in the `[window]` section.
   - Decoded by GDI+, through the `windows-sys` declarations the crate already had, rather than by a

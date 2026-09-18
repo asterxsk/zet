@@ -92,6 +92,33 @@
 
       <h3>Added</h3>
 
+      <h4>zet-render, zet-app, zet — hyperlinks, which were parsed and then neither drawn nor followed</h4>
+
+      <p><code>zet-vt</code> has stored every OSC 8 target since the sequence was implemented,
+      <code>Cell::link</code> has carried the index into the table, and <code>Term::link_for</code>
+      is the only way to read one — with no caller anywhere in the workspace.
+      <a href="index.html">PRODUCT.md</a>'s third promise lists OSC 8 hyperlinks among the rendering
+      modes that work, and a link that draws as ordinary text and cannot be followed is the one
+      thing a link is not.</p>
+
+      <p>A cell carrying a link is drawn with an underline whether or not the program asked for one,
+      because the sequence says which URL a run of text points at and says nothing about how it
+      looks. Storing the target and drawing the text plainly is drawing a link as ordinary text:
+      the text is identical and the target is invisible.</p>
+
+      <p><code>Ctrl+click</code> follows it, through <code>ShellExecuteW</code> with the
+      <code>open</code> verb — not <code>cmd /c start</code>, because the URL was chosen by the
+      program that printed it and a shell would parse it. The scheme is checked first, in
+      <code>zet-app</code>, where the decision is testable: only <code>http</code>,
+      <code>https</code> and <code>mailto</code> reach the host, because the system's open call
+      runs a path rather than opening it, and a program that wants to run something should not be
+      able to do it under a click on what looks like a link.</p>
+
+      <p><code>crates/zet-app/tests/link.rs</code> drives a real <code>cmd.exe</code> into
+      publishing one through its own prompt — the reason <code>scroll.rs</code> and
+      <code>hold.rs</code> exist, in the same shape: the app, the parser, and the renderer each
+      have to agree about the same cell, and nothing but a real program proves they do.</p>
+
       <h4>zet-app / zet-ui / zet — the settings panel, which is the config file with a face on it</h4>
 
       <p><code>Ctrl+Shift+Comma</code> opens a 380px panel over the right edge of the grid. The

@@ -55,6 +55,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Accessibility",
     # `SystemParametersInfoW`, `GetSysColor`, and the `SPI_*` constants.
     "Win32_UI_WindowsAndMessaging",
+    # `ShellExecuteW`, which is how a hyperlink in the grid is opened. Not the command
+    # line: the URL was chosen by the program that printed the link, and a shell would
+    # parse it.
+    "Win32_UI_Shell",
     # `RegGetValueW`, for the text-scaling factor.
     "Win32_System_Registry",
 ] }
