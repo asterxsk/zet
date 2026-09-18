@@ -97,11 +97,17 @@
       <p><code>Ctrl+Shift+Comma</code> opens a 380px panel over the right edge of the grid. The
       terminal stays visible behind it and keeps updating: the preview is not a preview.</p>
 
-      <p>Rows are Appearance (theme, text scale, reduce motion, forced colours), Tabs (position),
-      Terminal (font, size, cursor shape, blink, and thickness when the shape has one), and Keys
-      (one row per action). Every row writes straight through to <code>config.toml</code> as it
-      changes, and the file keeps its comments — <code>toml_edit</code> round-trips, so a note you
-      wrote beside a setting survives being set from the panel.</p>
+      <p>Rows are Appearance (theme, text scale, reduce motion, forced colours, window opacity),
+      Tabs (position), Terminal (font, size, cursor shape, blink, and thickness when the shape has
+      one), and Keys (one row per action). Every row writes straight through to
+      <code>config.toml</code> as it changes, and the file keeps its comments —
+      <code>toml_edit</code> round-trips, so a note you wrote beside a setting survives being set
+      from the panel.</p>
+
+      <p>The opacity row steps 10% at a time and stops at 20%: at nothing the window is a ghost
+      with the panel inside it, which is a state you can leave the app in and not get out of.
+      <code>config.toml</code> still accepts the whole range, because a file is not a person
+      holding a mouse.</p>
 
       <p>Four controls: a choice steps through an enum, a stepper moves a number and stops at the ends
       rather than wrapping, a toggle flips, and a chord row asks for the next key you press and says
@@ -317,6 +323,24 @@
       anything to turn off: the only request zet can make is one you typed.</p>
 
       <h3>Fixed</h3>
+
+      <h4>zet-render — every window with a gradient background stopped opening</h4>
+
+      <p>The picture and the gradient draw in the same slot of the frame, and slot 0 has to hold a
+      bind group for whichever pipeline is set. Binding the atlas's group in that slot moved from
+      the top of <code>encode</code> into the picture's own branch, which left the gradient drawing
+      with an empty slot — a validation error the device raises at the draw rather than a picture
+      that comes out wrong. The failure was <code>The current set RenderPipeline with 'zet
+      backdrop' label expects a BindGroup to be set at index 0</code>, and it took a live run with
+      a gradient config to find, because the arithmetic the test suite covers was correct and only
+      the draw was missing.</p>
+
+      <p>The slot is now bound before the branch and again after it, and the branch that changes it
+      puts the atlas's group back. <code>crates/zet-render/src/gpu.rs</code> gained four offscreen
+      tests over both backdrop kinds for it: every column of a gradient against the same
+      interpolation the shader runs, every row of it to catch an axis with a flipped sign, the four
+      quarters of an uploaded texture, half opacity over black, and a picture backdrop with no
+      picture in it. Reverting the one line fails the first of them with the exact error above.</p>
 
       <h4>zet-vt — erasing after setting a background leaves the background behind</h4>
 

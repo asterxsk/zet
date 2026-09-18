@@ -728,6 +728,11 @@ impl Gpu {
             ..Default::default()
         });
 
+        // The atlas's group, which the gradient draws with: a pipeline that reads only the
+        // uniform still has to have something bound where the layout says a binding is,
+        // and a draw with the slot empty is a validation error rather than a picture that
+        // comes out wrong. The picture binds its own over it and puts this one back.
+        pass.set_bind_group(0, &self.atlas.group, &[]);
         // The backdrop first, before every batch and after the clear. It is what the
         // window is made of rather than something drawn on the window, which is also why
         // the grid leaves its own ground unpainted when there is one.
@@ -751,8 +756,10 @@ impl Gpu {
             }
             None => {}
         }
-        // The atlas's group for everything that follows, set after the backdrop rather
-        // than before it because the picture binds its own in the same slot.
+        // And again after it, because a picture bound its own group in the same slot. One
+        // unconditional bind, rather than one inside the branch that changed it: the state
+        // a pass is in when the batches start is then a fact about this line rather than
+        // about every path that reaches it.
         pass.set_bind_group(0, &self.atlas.group, &[]);
         let mut bound: Option<BatchKind> = None;
         for batch in &frame.batches {
@@ -1286,6 +1293,133 @@ mod tests {
         assert_pixel(&pixels, (32, 32), grey);
         assert_pixel(&pixels, (0, 0), grey);
         assert_pixel(&pixels, (63, 63), grey);
+    }
+
+    #[test]
+    fn a_gradient_backdrop_starts_on_one_edge_and_ends_on_the_other() {
+        // The whole path the backdrop takes: a frame carrying one, the pipeline it
+        // chooses, and the group it draws with. The first version of the picture used one
+        // bind group for the backdrop and the atlas, and moving where it was bound broke
+        // this — the frame drew with nothing in slot zero, which the device refuses, and
+        // every window with a gradient stopped opening. Nothing in the unit tests saw it,
+        // because the arithmetic was right and the draw was what was missing.
+        let Some(mut gpu) = device() else {
+            return;
+        };
+
+        let mut frame = Frame::new();
+        frame.clear = [0.0, 0.0, 0.0, 1.0];
+        frame.backdrop = Some(Backdrop::Gradient(Gradient::new(
+            0.0,
+            0.0,
+            64.0,
+            64.0,
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            0.0,
+        )));
+        let pixels = render(&mut gpu, &frame);
+
+        // Every column, by the same arithmetic the shader does: how far along the axis
+        // this pixel's centre is, out of the length the axis covers. A gradient that
+        // reads its stops in the wrong order, or measures from the corner of the window
+        // rather than from the start of its own interval, fails on the first two columns
+        // and the last.
+        for x in 0..64u16 {
+            let along = (f32::from(x) + 0.5) / 64.0;
+            assert_pixel(
+                &pixels,
+                (u32::from(x), 32),
+                [srgb(1.0 - along), 0, srgb(along), 255],
+            );
+        }
+        // The other direction: at an angle of zero the colour does not vary down the
+        // window at all. An axis that took a component of the wrong sign would still run
+        // red to blue along the top row and be visibly wrong here.
+        for y in 0..64u16 {
+            assert_pixel(
+                &pixels,
+                (32, u32::from(y)),
+                [srgb(0.492_187_5), 0, srgb(0.507_812_5), 255],
+            );
+        }
+    }
+
+    #[test]
+    fn a_picture_backdrop_shows_the_texture_it_was_given() {
+        // The other backdrop path, and the one with a texture in it: an upload, the bind
+        // group made from it, and the crop the frame asks for. Four texels — red, green,
+        // blue, white — drawn into a window twice as wide as it is tall, which is the
+        // shape of the texture too, so nothing is cropped and each texel owns a quarter.
+        let Some(mut gpu) = device() else {
+            return;
+        };
+        let texels: Vec<u8> = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [255, 255, 255, 255],
+        ]
+        .concat();
+        gpu.set_picture(Some(Picture {
+            width: 2,
+            height: 2,
+            pixels: &texels,
+        }));
+
+        let mut frame = Frame::new();
+        frame.clear = [0.0, 0.0, 0.0, 1.0];
+        frame.backdrop = Some(Backdrop::Picture { opacity: 1.0 });
+        let pixels = render(&mut gpu, &frame);
+
+        // Bilinear sampling at the corners of a texel's quarter reads that texel, so the
+        // four quarters are the four colours the texture was uploaded with.
+        assert_pixel(&pixels, (8, 8), [255, 0, 0, 255]);
+        assert_pixel(&pixels, (56, 8), [0, 255, 0, 255]);
+        assert_pixel(&pixels, (8, 56), [0, 0, 255, 255]);
+        assert_pixel(&pixels, (56, 56), [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn a_picture_at_half_opacity_is_halfway_to_the_ground_under_it() {
+        // The frame's opacity, and the premultiplied blend it goes through. Half of white
+        // over black in linear light is a quarter of the way up the encoded scale, not
+        // half of it — which is the difference between blending in the space the
+        // framebuffer is in and blending in the space it is written in.
+        let Some(mut gpu) = device() else {
+            return;
+        };
+        let texels = [255u8, 255, 255, 255].repeat(4);
+        gpu.set_picture(Some(Picture {
+            width: 2,
+            height: 2,
+            pixels: &texels,
+        }));
+
+        let mut frame = Frame::new();
+        frame.clear = [0.0, 0.0, 0.0, 1.0];
+        frame.backdrop = Some(Backdrop::Picture { opacity: 0.5 });
+        let pixels = render(&mut gpu, &frame);
+
+        assert_pixel(&pixels, (32, 32), [srgb(0.5), srgb(0.5), srgb(0.5), 255]);
+    }
+
+    #[test]
+    fn a_picture_backdrop_with_no_picture_leaves_the_clear_colour() {
+        // What a configuration naming a file that will not decode looks like. Not an
+        // error state and not a black window: the theme's ground, which is what the frame
+        // was cleared to, and what a background that failed to load should look like.
+        let Some(mut gpu) = device() else {
+            return;
+        };
+        gpu.set_picture(None);
+
+        let mut frame = Frame::new();
+        frame.clear = [0.25, 0.25, 0.25, 1.0];
+        frame.backdrop = Some(Backdrop::Picture { opacity: 1.0 });
+        let pixels = render(&mut gpu, &frame);
+
+        assert_pixel(&pixels, (32, 32), [srgb(0.25), srgb(0.25), srgb(0.25), 255]);
     }
 
     #[test]

@@ -38,6 +38,21 @@ pub const MAX_SIZE: f32 = zet_config::MAX_FONT_SIZE;
 const MIN_THICKNESS: u8 = zet_config::MIN_CURSOR_THICKNESS;
 const MAX_THICKNESS: u8 = zet_config::MAX_CURSOR_THICKNESS;
 
+/// The window opacities the panel offers, as whole percents.
+///
+/// The floor is the panel's and not the schema's, which accepts anything from nothing to
+/// all of it: a window at zero is a ghost, and the panel that would raise it again is
+/// drawn *in the window*, so a user who stepped down to it could not see the control that
+/// undoes it. Below twenty percent the terminal is unreadable anyway, so the range the
+/// stepper moves through is the range that leaves a window someone can still use, and the
+/// file still says what it says.
+///
+/// Whole percents, and stepped in them, so that going up and back down lands on the value
+/// it started from: adding a tenth at a time accumulates the error of a number that is not
+/// a tenth and drifts off the value the file was read with.
+const MIN_OPACITY: u32 = 20;
+const OPACITY_STEP: u32 = 10;
+
 /// Text scales, as the system's own slider offers them.
 ///
 /// `0.0` is "follow the system" and is not a percentage, which is why this is a table of
@@ -79,6 +94,8 @@ pub enum Id {
     ReduceMotion,
     /// Whether the system's forced-colours setting is honoured.
     ForcedColors,
+    /// How opaque the window is.
+    WindowOpacity,
     /// Where the tab strip lives.
     TabPosition,
     /// The grid's family.
@@ -192,6 +209,12 @@ pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
             follow(config.appearance.follow_forced_colors),
             Kind::Toggle,
         ),
+        setting(
+            Id::WindowOpacity,
+            "Window opacity",
+            format!("{}%", configured_opacity(config)),
+            Kind::Step,
+        ),
         Line::Heading("Tabs"),
         setting(
             Id::TabPosition,
@@ -300,6 +323,16 @@ pub fn adjust(config: &mut Config, id: Id, back: bool, families: &[String]) -> E
             config.appearance.follow_forced_colors = !config.appearance.follow_forced_colors;
             Effect::Changed
         }
+        Id::WindowOpacity => {
+            let percent = configured_opacity(config);
+            let next = if back {
+                percent.saturating_sub(OPACITY_STEP)
+            } else {
+                percent.saturating_add(OPACITY_STEP)
+            };
+            config.window.opacity = next.clamp(MIN_OPACITY, 100) as f32 / 100.0;
+            Effect::Changed
+        }
         Id::TabPosition => {
             config.tabs.position = config.tabs.position.flipped();
             Effect::Changed
@@ -378,6 +411,18 @@ fn configured_size(config: &Config) -> f32 {
         MAX_SIZE,
         zet_config::FontSettings::default().size,
     )
+}
+
+/// The window's opacity as a whole percent.
+///
+/// The row shows what the file says and the stepper moves from there, which is why this
+/// rounds rather than clamping to the range the panel offers: a file set to 0.05 by hand
+/// says 5%, and pressing the key that raises it goes to 20% — the first value the panel
+/// can offer above it — rather than jumping from a floor of its own making. The clamp is
+/// only here so that a number the file should not have, and the panel would draw as
+/// nonsense, still draws as something.
+fn configured_opacity(config: &Config) -> u32 {
+    (config.window.opacity * 100.0).round().clamp(0.0, 100.0) as u32
 }
 
 /// The next index in a ring, where `None` means "not in the list" and enters at the top.
@@ -531,7 +576,9 @@ mod tests {
         config.cursor.thickness = 3;
         config.cursor.blink = false;
         config.appearance.text_scale = 1.5;
+        config.window.opacity = 0.85;
         let lines = lines(&config, &parse_bindings(&config));
+        assert_eq!(at(&lines, Id::WindowOpacity), "85%");
         assert_eq!(at(&lines, Id::CursorShape), "Bar");
         assert_eq!(at(&lines, Id::CursorThickness), "3 px");
         assert_eq!(at(&lines, Id::CursorBlink), "Off");
@@ -608,6 +655,46 @@ mod tests {
             adjust(&mut config, Id::FontSize, true, &[]);
         }
         assert!((config.font.size - MIN_SIZE).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_opacity_stepper_stops_short_of_a_window_nobody_can_see() {
+        // The floor is the interesting end. A window at zero is invisible, and the panel
+        // that would raise it is drawn in the window: the value the stepper will not go
+        // below is what keeps the control reachable, which is a fact about the panel and
+        // not about the schema. The file may still say what it likes.
+        let mut config = config();
+        for _ in 0..20 {
+            adjust(&mut config, Id::WindowOpacity, true, &[]);
+        }
+        assert!((config.window.opacity - 0.2).abs() < f32::EPSILON);
+
+        // And from a value the file set below the floor, the way out is up.
+        config.window.opacity = 0.05;
+        adjust(&mut config, Id::WindowOpacity, false, &[]);
+        assert!((config.window.opacity - 0.2).abs() < f32::EPSILON);
+
+        for _ in 0..20 {
+            adjust(&mut config, Id::WindowOpacity, false, &[]);
+        }
+        assert!((config.window.opacity - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_opacity_stepper_lands_on_the_value_it_started_from() {
+        // Which is what whole percents are for. A tenth is not a tenth in binary, and a
+        // stepper that added one at a time would come back to 0.7999999 and write that
+        // into the file — a value that reads as a bug in the panel.
+        let mut config = config();
+        config.window.opacity = 0.9;
+        for _ in 0..3 {
+            adjust(&mut config, Id::WindowOpacity, true, &[]);
+        }
+        for _ in 0..3 {
+            adjust(&mut config, Id::WindowOpacity, false, &[]);
+        }
+        assert!((config.window.opacity - 0.9).abs() < f32::EPSILON);
+        assert_eq!(configured_opacity(&config), 90);
     }
 
     #[test]
@@ -733,6 +820,7 @@ mod tests {
             Id::TextScale,
             Id::ReduceMotion,
             Id::ForcedColors,
+            Id::WindowOpacity,
             Id::TabPosition,
             Id::Font,
             Id::FontSize,

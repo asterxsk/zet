@@ -59,9 +59,9 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 - **`zet-app` / `zet-ui` / `zet`** — the settings panel, which is the config file with a face on it.
   - `Ctrl+Shift+Comma` opens a 380px panel over the right edge of the grid. The terminal stays
     visible behind it and keeps updating: the preview is not a preview.
-  - Rows are Appearance (theme, text scale, reduce motion, forced colours), Tabs (position),
-    Terminal (font, size, cursor shape, blink, and thickness when the shape has one), and Keys
-    (one row per action). Every row writes straight through to `config.toml` as it changes, and
+  - Rows are Appearance (theme, text scale, reduce motion, forced colours, window opacity), Tabs
+    (position), Terminal (font, size, cursor shape, blink, and thickness when the shape has one),
+    and Keys (one row per action). Every row writes straight through to `config.toml` as it changes, and
     the file keeps its comments — `toml_edit` round-trips, so a note you wrote beside a setting
     survives being set from the panel.
   - Four controls: a choice steps through an enum, a stepper moves a number and stops at the
@@ -224,6 +224,21 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-render`** — every window with a gradient background stopped opening, and the unit tests for
+  the picture were passing while it did.
+  - The picture and the gradient draw in the same slot of the frame, and slot 0 has to hold a bind
+    group for whichever pipeline is set. Binding the atlas's group in that slot moved from the top
+    of `encode` into the picture's own branch, which left the gradient drawing with an empty slot —
+    a validation error the device raises at the draw rather than a picture that comes out wrong. The
+    failure was `The current set RenderPipeline with 'zet backdrop' label expects a BindGroup to be
+    set at index 0`, and it took a live run with a gradient config to find, because the arithmetic
+    the test suite covers was correct and only the draw was missing.
+  - The slot is now bound before the branch and again after it, and the branch that changes it puts
+    the atlas's group back. `crates/zet-render/src/gpu.rs` gained four offscreen tests over both
+    backdrop kinds for it: every column of a gradient against the same interpolation the shader
+    runs, every row of it to catch an axis with a flipped sign, the four quarters of an uploaded
+    texture, half opacity over black, and a picture backdrop with no picture in it. Reverting the
+    one line fails the first of them with the exact error above.
 - **`zet`** — `window.opacity`, `window.start-maximized`, and `window.remember-position` were parsed,
   validated, documented, and read by nothing at all.
   - The window section was written with the schema, and the three keys that need the window itself
