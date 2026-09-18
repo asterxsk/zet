@@ -26,12 +26,20 @@ use std::collections::HashMap;
 
 use unicode_width::UnicodeWidthChar;
 
-use crate::attrs::Attrs;
+use crate::attrs::{Attrs, UnderlineStyle};
 use crate::cell::Cell;
 use crate::color::{Color, ColorSpec, NamedColor};
 use crate::grid::{Grid, Pos};
 use crate::keyboard::{Apply, Keyboard, KeyboardFlags};
 use crate::parser::{Params, Perform, Private};
+
+/// The longest `DECRQSS` request that is read.
+///
+/// The requests are one or two bytes — `m`, `r`, ` q`, `"q` — and the cap is there so
+/// that a program sending a kilobyte of them into a string this terminal does not
+/// implement cannot make it grow. Anything past it is dropped rather than truncated:
+/// the request is a name, and half a name matches nothing.
+const MAX_REQUEST: usize = 8;
 
 /// How the terminal should report mouse events.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -191,6 +199,12 @@ pub struct Term {
     /// the protocol's state is a stack and not a value. The flags reach the encoder
     /// through [`Term::modes`], which is the only public door they leave by.
     keyboard: Keyboard,
+    /// Whether a `DECRQSS` is being read, and the request it carries.
+    ///
+    /// The request arrives as the DCS payload, which is bytes rather than characters,
+    /// so it is collected and answered when the string ends rather than on the way in.
+    waiting_for_request: bool,
+    request: Vec<u8>,
 }
 
 impl Term {
@@ -210,6 +224,8 @@ impl Term {
             links: Vec::new(),
             title: String::new(),
             keyboard: Keyboard::default(),
+            waiting_for_request: false,
+            request: Vec::new(),
         }
     }
 
@@ -803,6 +819,55 @@ impl Term {
         self.grid.set_erase_bg(self.pen.bg);
     }
 
+    /// The pen as the parameters of an SGR sequence, for a program that asked.
+    ///
+    /// The inverse of [`Self::apply_sgr`], and deliberately not a record of what the
+    /// program sent: it may have sent ten sequences since the one it is asking about,
+    /// one of them a reset and half of them no-ops, and the question is what the pen is
+    /// now. A pen with nothing set is `0`, which is the one reset that means all of it;
+    /// everything else is listed, and the colours are left out when they are the
+    /// theme's, because that is what `39` and `49` would say.
+    ///
+    /// `4:2` through `4:5` rather than `21`: the underline styles are four bits and two
+    /// spellings, and the one written is the one the style table names.
+    fn sgr_params(&self) -> String {
+        let attrs = self.pen.attrs;
+        let mut parts: Vec<String> = Vec::new();
+        for (bit, param) in [(Attrs::BOLD, "1"), (Attrs::DIM, "2"), (Attrs::ITALIC, "3")] {
+            if attrs.contains(bit) {
+                parts.push(param.to_owned());
+            }
+        }
+        match attrs.underline_style() {
+            UnderlineStyle::None => {}
+            UnderlineStyle::Single => parts.push("4".to_owned()),
+            UnderlineStyle::Double => parts.push("4:2".to_owned()),
+            UnderlineStyle::Curly => parts.push("4:3".to_owned()),
+            UnderlineStyle::Dotted => parts.push("4:4".to_owned()),
+            UnderlineStyle::Dashed => parts.push("4:5".to_owned()),
+        }
+        for (bit, param) in [
+            (Attrs::BLINK, "5"),
+            (Attrs::REVERSE, "7"),
+            (Attrs::HIDDEN, "8"),
+            (Attrs::STRIKETHROUGH, "9"),
+        ] {
+            if attrs.contains(bit) {
+                parts.push(param.to_owned());
+            }
+        }
+        if let Some(fg) = color_params(self.pen.fg, false) {
+            parts.push(fg);
+        }
+        if let Some(bg) = color_params(self.pen.bg, true) {
+            parts.push(bg);
+        }
+        if parts.is_empty() {
+            return "0".to_owned();
+        }
+        parts.join(";")
+    }
+
     // ---- responses -----------------------------------------------------------
 
     fn respond(&mut self, bytes: &[u8]) {
@@ -834,6 +899,31 @@ impl Term {
             self.pen.link = u16::try_from(self.links.len()).unwrap_or(u16::MAX);
         }
     }
+}
+
+/// One colour as SGR parameters, or `None` when it is the theme's.
+///
+/// The theme's own colours have no SGR parameters of their own beyond the ones that
+/// mean "the theme": `39` and `49`. Leaving them out of a reply says the same thing in
+/// fewer bytes, and it is what lets a pen with nothing set answer `0` rather than a
+/// list of resets.
+fn color_params(color: Color, background: bool) -> Option<String> {
+    Some(match color.spec() {
+        ColorSpec::Default => return None,
+        // The two ends of the palette have their own single parameters, which is what
+        // a program matching on what it sent will be looking for; the cube and the ramp
+        // have only the extended form.
+        ColorSpec::Indexed(index) if index < 8 => {
+            format!("{}", if background { 40 } else { 30 } + index)
+        }
+        ColorSpec::Indexed(index) if index < 16 => {
+            format!("{}", if background { 100 } else { 90 } + index - 8)
+        }
+        ColorSpec::Indexed(index) => {
+            format!("{};5;{index}", if background { 48 } else { 38 })
+        }
+        ColorSpec::Rgb(r, g, b) => format!("{};2;{r};{g};{b}", if background { 48 } else { 38 }),
+    })
 }
 
 /// The `i`th parameter as the byte the kitty flags are carried in.
@@ -1266,11 +1356,41 @@ impl Perform for Term {
         _private: Option<Private>,
         action: char,
     ) {
-        // `DECRQSS`: `DCS $ q Pt ST`. Answering the SGR query tells a program what the
-        // pen is without it having to guess from what it last sent.
-        if intermediates == b"$" && action == 'q' {
-            self.respond(b"\x1bP1$r0m\x1b\\");
+        // `DECRQSS`: `DCS $ q Pt ST`. The request is `Pt`, which arrives *after* this —
+        // the hook is called on the final byte `q` — so nothing is answered here. What
+        // is being asked for is not known until the payload has been read.
+        self.waiting_for_request = intermediates == b"$" && action == 'q';
+        // Every string starts by forgetting the last request. A string that is
+        // abandoned mid-payload never reaches the unhook that would have taken the
+        // buffer away, and what it left behind would be answered as the next one's
+        // question.
+        self.request.clear();
+    }
+
+    fn dcs_put(&mut self, byte: u8) {
+        if self.waiting_for_request && self.request.len() < MAX_REQUEST {
+            self.request.push(byte);
         }
+    }
+
+    fn dcs_unhook(&mut self) {
+        if !self.waiting_for_request {
+            return;
+        }
+        self.waiting_for_request = false;
+        let reply = match self.request.as_slice() {
+            // `DECRQSS $qm` asks what the pen is, and the answer is the pen rather than
+            // the sequence the program last sent: it may have sent ten of them since,
+            // one of them a reset, and half of them no-ops. A program that gets this
+            // stops guessing whether its colours survived a program it called.
+            b"m" => format!("\x1bP1$r{}m\x1b\\", self.sgr_params()),
+            // A request this terminal does not implement is answered as such — `DCS 0 $ r
+            // ST` is "the setting is invalid or not recognised" — because a program that
+            // gets no reply at all waits for one and reads the next thing it prints as
+            // the answer.
+            _ => "\x1bP0$r\x1b\\".to_owned(),
+        };
+        self.respond(reply.as_bytes());
     }
 }
 
@@ -2536,6 +2656,50 @@ mod tests {
         let mut t = open(10, 4);
         feed(&mut t, b"\x1bP$qm\x1b\\");
         assert_eq!(t.take_responses(), b"\x1bP1$r0m\x1b\\");
+    }
+
+    #[test]
+    fn the_sgr_answer_is_the_pen_and_not_a_reset() {
+        // The request is answered from the pen rather than with a fixed `0m`. A
+        // program asks this because it wants to know what survived the program it just
+        // called, and `0m` is the one answer that is wrong whenever the pen is not
+        // default — which is whenever the question is worth asking.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[1;4:3;38;2;10;20;30;48;5;200m");
+        feed(&mut t, b"\x1bP$qm\x1b\\");
+        assert_eq!(
+            t.take_responses(),
+            b"\x1bP1$r1;4:3;38;2;10;20;30;48;5;200m\x1b\\"
+        );
+
+        // The sixteen ANSI colours have single-parameter spellings of their own, and
+        // the answer uses them rather than the extended form the program may have sent.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1b[31;104m");
+        feed(&mut t, b"\x1bP$qm\x1b\\");
+        assert_eq!(t.take_responses(), b"\x1bP1$r31;104m\x1b\\");
+    }
+
+    #[test]
+    fn a_request_this_terminal_does_not_implement_is_answered_as_such() {
+        // Silence is not an option: a program that asked waits for the answer and
+        // reads whatever it prints next as one. `DCS 0 $ r ST` is what the protocol
+        // defines for a setting that is not recognised — and the reply must not be the
+        // SGR answer, which is what answering in the hook rather than at the end of the
+        // string produced for every request there was.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1bP$q q\x1b\\");
+        assert_eq!(t.take_responses(), b"\x1bP0$r\x1b\\");
+    }
+
+    #[test]
+    fn a_decrqss_that_is_never_terminated_does_not_answer_the_next_one() {
+        // A request abandoned mid-payload — the program died, the pty was reset — must
+        // not leave its bytes waiting to be answered as somebody else's question.
+        let mut t = open(10, 4);
+        feed(&mut t, b"\x1bP$qm");
+        feed(&mut t, b"\x1bP$q q\x1b\\");
+        assert_eq!(t.take_responses(), b"\x1bP0$r\x1b\\");
     }
 
     #[test]
