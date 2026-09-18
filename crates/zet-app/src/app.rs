@@ -344,9 +344,17 @@ impl App {
     }
 
     /// The size the grid font should be drawn at, including any keyboard nudge.
+    ///
+    /// The nudge is applied before the range is, so a nudge can never leave the range and
+    /// the size the panel shows is the size the grid is drawn at.
     #[must_use]
     pub fn font_size(&self) -> f32 {
-        (self.config.font.size + self.font_nudge).clamp(settings::MIN_SIZE, settings::MAX_SIZE)
+        zet_config::clamp_or(
+            self.config.font.size + self.font_nudge,
+            settings::MIN_SIZE,
+            settings::MAX_SIZE,
+            zet_config::FontSettings::default().size,
+        )
     }
 
     // ---------------------------------------------------------------------------
@@ -660,11 +668,13 @@ impl App {
                 Vec::new()
             }
             Action::FontLarger => {
-                self.font_nudge = (self.font_nudge + 1.0).min(72.0 - self.config.font.size);
+                self.font_nudge =
+                    (self.font_nudge + 1.0).min(settings::MAX_SIZE - self.config.font.size);
                 Vec::new()
             }
             Action::FontSmaller => {
-                self.font_nudge = (self.font_nudge - 1.0).max(4.0 - self.config.font.size);
+                self.font_nudge =
+                    (self.font_nudge - 1.0).max(settings::MIN_SIZE - self.config.font.size);
                 Vec::new()
             }
             Action::FontReset => {
@@ -1319,6 +1329,26 @@ mod tests {
             let _ = app.key(&key(Key::Minus, Modifiers::CTRL));
         }
         assert!((app.font_size() - 4.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_font_size_that_is_not_a_number_is_still_a_size() {
+        // `nan` is a float TOML can spell, so `size = nan` is a file a user can write.
+        // It is reported as out of range and it passes through `f32::clamp` unchanged —
+        // NaN is not below the range, it is not above it, and clamp has no answer for
+        // it but itself. From here it multiplies into the text scale and the font
+        // loader refuses the face, so one line of the configuration is a terminal that
+        // will not open, in a version whose own documentation says a bad file never
+        // stops the app from starting.
+        let mut app = app();
+        app.config.font.size = f32::NAN;
+        let size = app.font_size();
+        assert!(
+            size.is_finite(),
+            "a NaN size reached the font loader: {size}"
+        );
+        assert!((settings::MIN_SIZE..=settings::MAX_SIZE).contains(&size));
+        assert!((size - 13.0).abs() < f32::EPSILON, "{size}");
     }
 
     #[test]

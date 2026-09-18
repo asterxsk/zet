@@ -204,7 +204,7 @@ pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
         setting(
             Id::FontSize,
             "Size",
-            format!("{} pt", config.font.size.round()),
+            format!("{} pt", configured_size(config).round()),
             Kind::Step,
         ),
         setting(
@@ -312,7 +312,7 @@ pub fn adjust(config: &mut Config, id: Id, back: bool, families: &[String]) -> E
         }
         Id::FontSize => {
             config.font.size =
-                (config.font.size + if back { -1.0 } else { 1.0 }).clamp(MIN_SIZE, MAX_SIZE);
+                (configured_size(config) + if back { -1.0 } else { 1.0 }).clamp(MIN_SIZE, MAX_SIZE);
             Effect::Changed
         }
         Id::CursorShape => {
@@ -350,6 +350,21 @@ pub fn bind(config: &mut Config, action: Action, chord: Chord) {
     let text = chord.to_string();
     config.keys.retain(|_, bound| *bound != text);
     config.keys.insert(action.name().to_owned(), text);
+}
+
+/// The configured font size, brought into the range the panel offers.
+///
+/// The panel is one of the two readers of the file's size, and the file's can be
+/// anything: below the range, above it, or not a number at all. Reading the size the
+/// grid is actually drawn at is what stops the row showing "NaN pt" and, worse, writing
+/// the NaN back the next time either arrow is pressed.
+fn configured_size(config: &Config) -> f32 {
+    zet_config::clamp_or(
+        config.font.size,
+        MIN_SIZE,
+        MAX_SIZE,
+        zet_config::FontSettings::default().size,
+    )
 }
 
 /// The next index in a ring, where `None` means "not in the list" and enters at the top.

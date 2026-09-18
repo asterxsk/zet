@@ -1349,7 +1349,17 @@ fn next_focus(rows: usize, here: Option<usize>, forward: bool) -> Option<usize> 
 fn text_scale(config: &Config, system: f32) -> f32 {
     match config.appearance.text_scale {
         0.0 => system,
-        scale => scale,
+        // The scale multiplies the font size, and a size that is not a number reaches
+        // the font loader as one and is refused there — so a config the schema has
+        // already reported as out of range would still be a window that never opened.
+        // The fallback is the system's scale, which is what the file asked for when it
+        // wrote the `0.0` above.
+        scale => zet_config::clamp_or(
+            scale,
+            zet_config::MIN_TEXT_SCALE,
+            zet_config::MAX_TEXT_SCALE,
+            system,
+        ),
     }
 }
 
