@@ -179,6 +179,15 @@ pub const RAIL_CELL_FLOOR: f32 = 24.0;
 /// The width of the settings panel.
 pub const PANEL_WIDTH: f32 = 380.0;
 
+/// How long the settings panel takes to slide in.
+///
+/// Milliseconds for the same reason [`TRAVEL_MS`] is: DESIGN.md says "180ms", and this is
+/// the one other transition the document asks for.
+pub const PANEL_SLIDE_MS: f32 = 180.0;
+
+/// The same span in the seconds [`Chrome::set_time`](crate::Chrome::set_time) counts in.
+pub const PANEL_SLIDE: f32 = PANEL_SLIDE_MS / 1000.0;
+
 /// The height of a row of a menu.
 pub const MENU_ROW: f32 = 28.0;
 

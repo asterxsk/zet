@@ -583,7 +583,9 @@ pub(crate) fn indicator(
         .find(|cell| Some(cell.index) == input.active)?;
     let destination = bar_rect(strip.position, cell.rect);
     let rect = match travel {
-        Some(travel) => travel.from.lerp(destination, progress(now - travel.start)),
+        Some(travel) => travel
+            .from
+            .lerp(destination, progress(now - travel.start, TRAVEL)),
         None => destination,
     };
     Some((rect, palette.signal))
@@ -619,17 +621,19 @@ pub(crate) fn hover_preview(
     Some(bar_rect(strip.position, cell.rect))
 }
 
-/// How far through its travel the indicator is, from zero to one, after `elapsed`
-/// seconds.
+/// How far through a transition of `over` seconds this is, from zero to one, after
+/// `elapsed` seconds.
 ///
-/// Exponential ease-out, which is the curve DESIGN.md names for it: most of the distance
-/// goes in the first third of the time and the rest settles rather than stopping.
-pub(crate) fn progress(elapsed: f32) -> f32 {
+/// Exponential ease-out, which is the curve DESIGN.md names for the indicator's travel:
+/// most of the distance goes in the first third of the time and the rest settles rather
+/// than stopping. The panel's slide is the same curve over a different span, so the span
+/// is the caller's and the shape is this function's.
+pub(crate) fn progress(elapsed: f32, over: f32) -> f32 {
     if elapsed <= 0.0 {
         0.0
-    } else if elapsed >= TRAVEL {
+    } else if elapsed >= over {
         1.0
     } else {
-        1.0 - 2f32.powf(-10.0 * elapsed / TRAVEL)
+        1.0 - 2f32.powf(-10.0 * elapsed / over)
     }
 }

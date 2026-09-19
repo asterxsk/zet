@@ -296,14 +296,21 @@ pub(crate) fn panel(
     input: &ChromeInput<'_>,
     top: f32,
     bottom: f32,
+    arrival: f32,
 ) -> Panel {
     let palette = *input.palette;
     // Narrower than 380 pixels of window means the panel is the window. Letting it hang
     // off the left edge would put the heading of a section nobody can read behind the
     // rail.
     let width = PANEL_WIDTH.min(input.size.width);
+    // The slide is a translation of the whole panel rather than a widening of it: the
+    // right edge is the window's and stays there, and what arrives is the left edge. The
+    // controls are laid out from the rectangle below, so they travel with it — a panel
+    // whose surface slid in over controls that were already in place would be worse than
+    // no motion at all.
+    let arrived = arrival.clamp(0.0, 1.0);
     let rect = Rect::new(
-        input.size.width - width,
+        input.size.width - width * arrived,
         top,
         width,
         (input.size.height - top - bottom).max(0.0),

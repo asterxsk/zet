@@ -19,7 +19,8 @@ use zet_render::{Frame, Placement, Quad};
 
 use crate::fonts::GlyphSource;
 use crate::geometry::{
-    MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, RAIL_WIDTH, ROW_HEIGHT, menu_rect, menu_width,
+    MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, PANEL_SLIDE, PANEL_WIDTH, RAIL_WIDTH, ROW_HEIGHT,
+    menu_rect, menu_width,
 };
 use crate::{
     Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, MenuLine, PickerLine, Rect, Row,
@@ -1459,6 +1460,160 @@ fn a_row_scrolled_half_off_the_list_is_not_drawn_over_the_chrome_above_it() {
             panel.y
         );
     }
+}
+
+// ---------------------------------------------------------------------------------
+// The panel's arrival
+// ---------------------------------------------------------------------------------
+
+/// The rectangle of the settings panel the last layout published.
+fn panel_rect_of(chrome: &Chrome) -> Rect {
+    chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Settings(rect) => Some(*rect),
+            _ => None,
+        })
+        .expect("the panel is open")
+}
+
+/// A chrome that has drawn one frame with the panel shut, so that the next frame with it
+/// open is the frame it opens on rather than the first time the chrome has ever been asked.
+fn panel_chrome(palette: &Palette, tabs: &[TabInfo], size: Size) -> Chrome {
+    let mut chrome = chrome();
+    let shut = input(palette, tabs, size);
+    draw(&mut chrome, &shut);
+    chrome
+}
+
+/// The panel slides in from the right edge over the 180ms DESIGN.md gives it.
+///
+/// The measurement is the panel's own left edge, because that is the edge that moves: the
+/// right edge is the window's and stays there, which is what makes this a slide rather
+/// than a grow. A panel that appeared at full width on the frame it opened would satisfy
+/// every other test in this file.
+#[test]
+fn the_panel_slides_in_over_the_time_the_document_gives_it() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let tabs = tabs(&[1]);
+    let size = window();
+    let mut chrome = panel_chrome(&palette, &tabs, size);
+    let mut open = input(&palette, &tabs, size);
+    open.settings_open = true;
+    open.settings = &lines;
+
+    // The frame it opens on: the whole panel is off the window, because it starts at the
+    // right edge and slides leftward into place.
+    let _ = draw(&mut chrome, &open);
+    assert!(
+        (panel_rect_of(&chrome).x - size.width).abs() < f32::EPSILON,
+        "the panel was on the window on the frame it opened"
+    );
+    // Nothing of it is clickable either: the regions come from the same rectangle, so a
+    // panel that is off the window cannot be pressed through.
+    assert_eq!(chrome.hit(size.width - 20.0, 300.0), Hit::None);
+
+    // Halfway: on the window, and not yet in place.
+    chrome.set_time(PANEL_SLIDE / 2.0);
+    draw(&mut chrome, &open);
+    let midway = panel_rect_of(&chrome);
+    assert!(
+        midway.x > size.width - PANEL_WIDTH && midway.x < size.width,
+        "halfway through the slide the panel is at {}, which is neither off the window nor in place",
+        midway.x
+    );
+
+    // Arrived, and it stays arrived however long the caller waits.
+    chrome.set_time(PANEL_SLIDE);
+    draw(&mut chrome, &open);
+    let settled = panel_rect_of(&chrome);
+    assert!(
+        (settled.right() - size.width).abs() < f32::EPSILON
+            && (settled.width - PANEL_WIDTH).abs() < f32::EPSILON,
+        "the panel did not reach the right edge: {settled:?}"
+    );
+    chrome.set_time(PANEL_SLIDE * 20.0);
+    draw(&mut chrome, &open);
+    assert_eq!(
+        panel_rect_of(&chrome),
+        settled,
+        "the panel kept moving after it arrived"
+    );
+}
+
+/// Reduce motion means the panel is simply there, on the frame it opens.
+///
+/// The document's rule for the whole app: "Everything still works, nothing moves." A panel
+/// that slid under reduce motion would be the one transition the setting did not reach.
+#[test]
+fn reduce_motion_puts_the_panel_in_place_on_the_frame_it_opens() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let tabs = tabs(&[1]);
+    let size = window();
+    let mut chrome = panel_chrome(&palette, &tabs, size);
+    let mut open = input(&palette, &tabs, size);
+    open.settings_open = true;
+    open.settings = &lines;
+    open.reduce_motion = true;
+
+    draw(&mut chrome, &open);
+    let rect = panel_rect_of(&chrome);
+    assert!(
+        (rect.right() - size.width).abs() < f32::EPSILON
+            && (rect.width - PANEL_WIDTH).abs() < f32::EPSILON,
+        "reduce motion still slid the panel: {rect:?}"
+    );
+}
+
+/// Closing the panel is instant, and opening it again slides from the edge once more.
+///
+/// A slide *out* would be a panel that is still on the window after the app has stopped
+/// drawing it as open, so every control in it would take a click for the length of the
+/// animation. The second opening is the one that says the state was reset rather than
+/// left arrived.
+#[test]
+fn closing_the_panel_is_instant_and_reopening_slides_again() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let tabs = tabs(&[1]);
+    let size = window();
+    let mut chrome = panel_chrome(&palette, &tabs, size);
+    let mut open = input(&palette, &tabs, size);
+    open.settings_open = true;
+    open.settings = &lines;
+
+    // The frame it opens on, and then the frame its slide is over: the slide starts on the
+    // first of those, so the clock being past 180ms already makes no difference to it.
+    draw(&mut chrome, &open);
+    chrome.set_time(PANEL_SLIDE);
+    draw(&mut chrome, &open);
+    assert!(
+        (panel_rect_of(&chrome).right() - size.width).abs() < f32::EPSILON,
+        "the panel never arrived"
+    );
+
+    // Shut: on the frame the caller stops offering it, it is gone.
+    let shut = input(&palette, &tabs, size);
+    chrome.set_time(PANEL_SLIDE * 2.0);
+    draw(&mut chrome, &shut);
+    assert!(
+        !chrome
+            .regions()
+            .iter()
+            .any(|region| matches!(region, crate::Region::Settings(_))),
+        "the panel left a region behind after it closed"
+    );
+
+    // Open again, on a later frame, and the slide starts over from the edge.
+    chrome.set_time(PANEL_SLIDE * 3.0);
+    draw(&mut chrome, &open);
+    assert!(
+        (panel_rect_of(&chrome).x - size.width).abs() < f32::EPSILON,
+        "a panel opened a second time did not slide: it was already in place"
+    );
 }
 
 /// A section heading is drawn in upper case whatever case it was written in.

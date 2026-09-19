@@ -292,27 +292,39 @@ and this is the change that makes zet feel denser than Windows Terminal.
 
 ## Motion
 
-Exactly one authored moment.
+Two authored moments, and both of them carry an answer that the frame they land on
+cannot.
 
 **The active indicator travels.** When the active tab changes, the 2px bar moves
 from the old tab to the new one over 140ms on an exponential ease-out curve, and the
 two indices cross-fade their ink weight over the same duration. The strip itself
 does not move, resize, or reflow. One line travels; nothing else reacts.
 
+**The settings panel slides in.** Over 180ms, on the same curve, from the right edge
+it is anchored to. It arrives from off the window and translates rather than growing
+or fading in place: a surface that widens reads as the terminal being resized, and
+one that fades reads as the terminal having changed, and neither is what happened.
+What the slide says is that this came from the edge and can go back to it.
+
 Everything else is instant:
 
 - Theme changes apply in one frame with no crossfade. A crossfade would show an
   intermediate theme, which is a worse lie than a hard cut.
-- The settings panel slides in over 180ms. That is a spatial change, not decoration,
-  and it needs the duration to stay legible.
+- Closing the panel. It goes on the frame the app stops considering it open. A slide
+  out would leave a panel drawn — and therefore hit-testable, because a region and a
+  surface are one rectangle — for the length of the animation, and every control in
+  it would take a click meant for the terminal behind it.
 - Tab open and close: the new tab appears already at full size. No scale-in, no
   slide. A tab that animates into existence delays input by exactly as long as the
   animation, which in a terminal is a real cost.
-- Reduce motion, read live from the system: the indicator jumps, the panel appears
-  instantly, cursor blink stops. Everything still works, nothing moves.
+- Reduce motion, read live from the system: the indicator jumps, the panel is simply
+  there on the frame it opens, cursor blink stops. Everything still works, nothing
+  moves.
 
-The bar travels because that motion carries the answer to "where am I now." No other
-transition in the app is load-bearing, so no other transition exists.
+The bar travels because that motion carries the answer to "where am I now," and the
+panel slides because it is a change of place rather than a change of state. Both are
+answers about space. No other transition in the app is load-bearing, so no other
+transition exists.
 
 ## Settings
 

@@ -533,6 +533,18 @@ pub struct Chrome {
     /// `Ctrl+Tab` and watching one bar move, and holding it down and watching a bar
     /// snap backwards on every step.
     indicator: Option<Rect>,
+    /// When the settings panel started sliding in, while a slide is in flight.
+    ///
+    /// `None` once it has arrived, which is the state the panel spends almost all of its
+    /// life in: the slide is a fifth of a second and the panel is open for minutes.
+    panel_slide: Option<f32>,
+    /// Whether the panel was open on the frame before this one.
+    ///
+    /// `None` until the chrome has drawn once. A panel that is already open the first time
+    /// the chrome is asked about it did not open — there is nothing to slide it in from,
+    /// and drawing it off the window would be the panel missing for a fifth of a second on
+    /// a window that started with it up.
+    panel_was_open: Option<bool>,
     scroll: ScrollState,
     /// The scrollbar's track and thumb as of the last layout, for the one caller that
     /// has to turn a drag into a position.
@@ -582,6 +594,8 @@ impl Chrome {
             active: None,
             travel: None,
             indicator: None,
+            panel_slide: None,
+            panel_was_open: None,
             scroll: ScrollState::default(),
             scrollbar: None,
             layout: Layout::default(),
@@ -715,12 +729,17 @@ impl Chrome {
         };
 
         // The indicator's motion is settled before anything is drawn, because the
-        // indicator is what reads it.
+        // indicator is what reads it. The panel's is settled here for the same reason: the
+        // frame the panel opens on is the frame its slide starts, and only this call
+        // knows which frame that was.
         self.retarget(input, &strip_plan);
-        let fade = self
-            .travel
-            .as_ref()
-            .map(|travel| (travel.from_index, strip::progress(self.now - travel.start)));
+        self.retarget_panel(input.settings_open);
+        let fade = self.travel.as_ref().map(|travel| {
+            (
+                travel.from_index,
+                strip::progress(self.now - travel.start, crate::geometry::TRAVEL),
+            )
+        });
 
         strip::draw(paint, &strip_plan, input, fade);
         if let Some((rect, color)) =
@@ -764,9 +783,10 @@ impl Chrome {
         top: f32,
         bottom: f32,
     ) -> Overdrawn {
+        let arrival = self.panel_arrival(input);
         let panel = input
             .settings_open
-            .then(|| overlays::panel(paint, input, top, bottom));
+            .then(|| overlays::panel(paint, input, top, bottom, arrival));
         if bottom > 0.0 {
             overlays::find_bar(paint, input, bottom);
         }
@@ -871,6 +891,47 @@ impl Chrome {
             }
             self.regions.push(Region::Settings(panel.rect));
         }
+    }
+
+    /// Notice the panel opening, and start its slide.
+    ///
+    /// A slide is a transition and a transition needs two states, so this is the frame the
+    /// panel goes from shut to open and not the first frame it is seen open. That is the
+    /// difference between a panel that slides in and a window that starts with its panel
+    /// off the right edge and drags it in.
+    ///
+    /// Closing starts nothing. A slide *out* would leave the panel drawn — and therefore
+    /// hit-testable, since the regions come from the same rectangle — for the length of the
+    /// animation after the app had stopped considering it open, and every control in it
+    /// would take a click that the user meant for whatever was behind it.
+    fn retarget_panel(&mut self, open: bool) {
+        let was = self.panel_was_open.replace(open);
+        match (was, open) {
+            (Some(false), true) => self.panel_slide = Some(self.now),
+            // Open on this frame and on the one before it: a slide in flight is left
+            // alone, and one that has arrived is over.
+            (Some(true), true) => {
+                if self
+                    .panel_slide
+                    .is_some_and(|start| self.now - start >= crate::geometry::PANEL_SLIDE)
+                {
+                    self.panel_slide = None;
+                }
+            }
+            // Shut, or on the first frame the chrome has ever drawn. There is no
+            // transition to be in the middle of either way.
+            (None, _) | (_, false) => self.panel_slide = None,
+        }
+    }
+
+    /// How far the panel has slid in: zero off the window, one in place.
+    fn panel_arrival(&self, input: &ChromeInput<'_>) -> f32 {
+        if input.reduce_motion {
+            return 1.0;
+        }
+        self.panel_slide.map_or(1.0, |start| {
+            strip::progress(self.now - start, crate::geometry::PANEL_SLIDE)
+        })
     }
 
     /// Notice a change of active tab, and start the indicator moving if it is one.
