@@ -94,8 +94,9 @@ zet is done for v1 when all of these hold:
    appear as launchable profiles, discovered without being hand-configured.
 3. Claude Code, vim, and htop each run full-screen with no visible flicker, correct
    colors, working mouse input, and correct behavior on window resize.
-4. Tabs work horizontally and vertically, are numbered from #1 in creation order,
-   and the entire tab strip is absent when zero terminals are open.
+4. Tabs work horizontally and vertically, are numbered from #1 with no gaps — closing
+   one renumbers the rest — and the entire tab strip is absent when zero terminals are
+   open.
 5. A theme change repaints in a single frame with no intermediate state visible.
 6. The config file round-trips: editing it by hand changes the app, and changing the
    app rewrites the file without losing comments.

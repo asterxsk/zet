@@ -256,7 +256,8 @@ pub enum SettingPart {
 
 /// One tab, as the strip needs to know it.
 pub struct TabInfo {
-    /// The tab's number. Creation order, never renumbered on close.
+    /// The tab's number: its place in the strip, from one, with no gaps. Closing a tab
+    /// renumbers the ones behind it, and this is the new number.
     pub index: u32,
     /// The tab's own title: what the program set with `OSC 0`/`OSC 2`, or the profile's
     /// name when it set nothing.

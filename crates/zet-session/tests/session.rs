@@ -380,7 +380,7 @@ fn output_does_not_move_a_view_that_is_scrolled_back() {
 }
 
 #[test]
-fn tabs_are_numbered_from_one_and_a_number_is_never_reused() {
+fn tabs_are_numbered_from_one_and_the_numbers_close_up_behind_a_closed_tab() {
     let mut sessions = Sessions::new();
     assert!(sessions.is_empty());
     assert_eq!(sessions.active(), None);
@@ -397,20 +397,29 @@ fn tabs_are_numbered_from_one_and_a_number_is_never_reused() {
     sessions
         .close(1)
         .expect("closing the first tab should work");
-    assert_eq!(sessions.numbers(), vec![2]);
+    assert_eq!(
+        sessions.numbers(),
+        vec![1],
+        "the tab that was #2 is #1 now, so the strip has no gap in it"
+    );
+    assert_eq!(
+        sessions.active(),
+        Some(1),
+        "and the tab on screen is still the tab on screen"
+    );
 
     let third = sessions
         .open(&cmd(&["/k"]), 80, 24, None, noop())
         .expect("the third session should start");
-    assert_eq!(third, 3, "#1 must not be handed out again");
+    assert_eq!(third, 2, "the numbers run 1..=N, so the new tab is #2");
 
     assert!(
-        sessions.close(1).is_err(),
-        "closing a tab that is already gone has to be an error"
+        sessions.close(3).is_err(),
+        "closing a number no tab is shown under has to be an error"
     );
 
     assert_eq!(sessions.iter().count(), 2);
-    assert!(sessions.get(1).is_none());
+    assert!(sessions.get(3).is_none());
     assert!(sessions.get_mut(2).is_some());
 }
 
@@ -430,9 +439,15 @@ fn reap_removes_a_session_whose_child_has_exited_and_keeps_the_rest() {
         std::thread::sleep(Duration::from_millis(20));
     }
 
+    assert_eq!((ended, running), (1, 2), "the two tabs opened as #1 and #2");
+    // The number the tab *was* shown under, which is the one the host is holding: the tab
+    // behind it is renumbered by the reap, so what was #2 is #1 from here on.
     assert_eq!(sessions.reap(), vec![ended]);
-    assert_eq!(sessions.numbers(), vec![running]);
-    assert!(sessions.get(running).is_some());
+    assert_eq!(sessions.numbers(), vec![1]);
+    assert!(
+        sessions.get(1).is_some(),
+        "the survivor took the number the tab that went left behind"
+    );
     assert_eq!(sessions.reap(), Vec::<u32>::new(), "nothing left to reap");
 }
 

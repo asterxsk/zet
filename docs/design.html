@@ -247,9 +247,12 @@
         <li>The index renders as <code>#</code> at 70% of the number's size, then the number. The
         <code>#</code> is part of the mark, not a prefix that disappears. It is what makes the strip
         read as a set of numbered channels.</li>
-        <li>Numbering is creation order, never renumbered on close. Close #2 of three and the
-        remaining tabs are still #1 and #3. A number identifies a session, and shuffling numbers
-        under the user is worse than a gap.</li>
+        <li>Numbering is by position, and closes up behind a tab that goes. Close #2 of three and
+        the remaining tabs are #1 and #2, and the next tab opened is #3. A number is where a tab
+        sits and nothing else, because the strip is the one place it is read and a gap there is
+        indistinguishable from a tab that failed to open. The tab on screen keeps the mark across
+        a close: it moves down a number with everything else rather than the user being handed a
+        different terminal.</li>
         <li>Single digit up to #9, then #10 and beyond. Tab width grows to fit.</li>
         <li>The name is what the program set with <code>OSC 0</code>/<code>OSC 2</code>, or the
         profile's name when it set nothing. It is one weight lighter than the number, so the row

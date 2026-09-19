@@ -309,7 +309,7 @@ impl App {
         &self.sessions
     }
 
-    /// The tab numbers, in creation order.
+    /// The tab numbers, in the order the strip shows them: `1..=N`, with no gaps.
     #[must_use]
     pub fn tab_numbers(&self) -> Vec<u32> {
         self.sessions.numbers()

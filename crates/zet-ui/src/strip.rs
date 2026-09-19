@@ -3,7 +3,7 @@
 //!
 //! Both positions of the strip are planned here, because they are one layout seen from
 //! two directions rather than two layouts. What a tab *is* does not change — a number
-//! in creation order, a cell of a certain width, an indicator on the edge the strip runs
+//! counting from one, a cell of a certain width, an indicator on the edge the strip runs
 //! along — and only the axis does. Keeping them together is what makes "the strip is the
 //! same in both positions" a fact about the code rather than a claim about it.
 
