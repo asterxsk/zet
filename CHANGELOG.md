@@ -14,6 +14,29 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Added
 
+- **`zet-app`** — rows in the settings panel for the seven configuration keys that had none, so
+  that a setting the file accepts is a setting the panel can reach.
+  - `window.background` is a `Choice` that steps solid → gradient and back. `image` is in the list
+    only while the file already names a picture, because the path is the half of that setting the
+    four control kinds DESIGN.md allows cannot type: a panel that offered the kind without a path
+    would write a configuration that is broken the moment it is clicked, and the row reporting it
+    afterwards would be reporting a mistake the user did not make. A picture is therefore set in
+    the file and shown here, and stepping away from it is a change the panel is allowed to make.
+  - `window.image.opacity` and `window.gradient.angle` are steppers that appear under the row that
+    chose the kind, the same way the cursor's thickness appears under the cursor's shape. The angle
+    moves in fifteenths of a circle and stops at 345°: a stepper stops at its ends rather than
+    wrapping, so 360 would be a value the row could show and never reach again. A gradient the panel
+    creates is seeded with the theme's own background and selection colours, because a background is
+    the theme's and a panel that invented a pair of colours could produce a terminal disagreeing
+    with its own palette.
+  - `window.remember-position`, `window.start-maximized` and `tabs.open-default-without-asking` are
+    toggles, and the window's opacity moved from the row it was sharing to one of its own beside
+    them.
+  - Twenty-nine tests, over the values the panel writes rather than over the drawing: every choice
+    row is stepped from every value it offers in both directions and checked to land on a value the
+    file accepts, the steppers are driven to both ends, and the kinds the background row offers are
+    checked to be the ones the panel can write whole. What a click on a picture's kind does is the
+    case with a wrong answer that looks right, so it is the one written first.
 - **`zet-app`** — `cargo bench -p zet-app --bench latency`, because PRODUCT.md promised the latency
   numbers were "measured rather than assumed" and nothing anywhere measured one.
   - Three numbers, all of them zet's side of the line: cold start from `App::load` to the first
@@ -305,6 +328,36 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-session` / `zet-ui`** — a tab's number was the number it was opened with, so closing one
+  left a hole in the strip and no way to close it.
+  - The numbers were an identifier that happened to be printed: `Session` carried the number it was
+    opened with, the strip drew that number, and closing a tab removed it and left the rest alone.
+    Close `#1` on a two-tab window and `#2` went on calling itself `#2`, under a strip whose first
+    tab was the second one — which is the shape of a bug that only shows up after the user has
+    already done the thing, and then the number that would have told them has gone.
+  - A tab's number is now its position in the list plus one. `Sessions` holds the tabs in a plain
+    ordered container and answers the numbers from it, so there is no third place for the strip, the
+    session list and the painter to disagree: the number is derived rather than stored, and closing
+    a tab renumbers the rest because there is nothing to renumber.
+  - The active tab follows the hole. Closing the tab that was active leaves the last tab active
+    rather than nothing — `checked_sub` on the new length, because a window with no active tab is a
+    window with no keyboard — and closing a tab below the active one shifts the active number down
+    so the same tab stays active, which is the whole of what the user meant by clicking it.
+  - `reap` answers the numbers the exited tabs held rather than how many went, because the caller
+    closing them is a caller doing it by number. The unit is generic over the tab and holds no
+    terminal at all, which is what makes the twenty-five tests over it possible without a pty.
+- **`zet-pty`** — a new tab opened Windows PowerShell 5.1 on a machine whose PowerShell 7 was
+  installed.
+  - Profiles were collected from the registry and from `PATH` and then de-duplicated, and the order
+    they came out in was the order they went in: this machine's PowerShell 7 is a Store install, so
+    it is only ever on `PATH`, and every `PATH` entry was appended after the registry's Windows
+    PowerShell and `cmd`. The profile the tab opened with was therefore never the one that had been
+    found — it was the first one found by a search that had already decided the answer.
+  - `pwsh` now sorts before `powershell`, which sorts before `cmd`, and everything else keeps the
+    order it was found in. The rank is a plain function of the profile's id, so the ordering is
+    tested with a synthetic list rather than with whatever this machine happens to have, and the
+    machine-level case is tested too — a test that asks for PowerShell 7 by name and is skipped
+    rather than failed where the machine has none.
 - **`zet`** — `window.opacity` changed once and then never again.
   - A window is faded by setting `WS_EX_LAYERED` and an alpha together, and the function that did
     it returned early when the extended style already matched what was wanted. The style is not the

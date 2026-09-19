@@ -92,6 +92,42 @@
 
       <h3>Added</h3>
 
+      <h4>zet-app — rows in the settings panel for the seven keys that had none</h4>
+
+      <p>DESIGN.md's panel is a row per setting, and seven keys the configuration file accepts had
+      no row: the background and the two numbers belonging to its kinds, and three switches about
+      the window and the tabs. A setting the file accepts is a setting the panel reaches, so the
+      gap was the panel's and not the schema's.</p>
+
+      <ul>
+        <li><code>window.background</code> is a choice that steps solid → gradient and back.
+        <code>image</code> is in the list only while the file already names a picture, because the
+        path is the half of that setting the four control kinds DESIGN.md allows cannot type: a
+        panel that offered the kind without a path would write a configuration that is broken the
+        moment it is clicked, and the row reporting it afterwards would be reporting a mistake the
+        user did not make. A picture is set in the file and shown here, and stepping away from it is
+        a change the panel is allowed to make.</li>
+
+        <li><code>window.image.opacity</code> and <code>window.gradient.angle</code> are steppers
+        that appear under the row that chose the kind, the way the cursor's thickness appears under
+        the cursor's shape. The angle moves in fifteenths of a circle and stops at 345°: a stepper
+        stops at its ends rather than wrapping, so 360 would be a value the row could show and never
+        reach again. A gradient the panel creates is seeded with the theme's own background and
+        selection colours, because a background is the theme's and a panel that invented a pair of
+        colours could produce a terminal disagreeing with its own palette.</li>
+
+        <li><code>window.remember-position</code>, <code>window.start-maximized</code> and
+        <code>tabs.open-default-without-asking</code> are toggles, and the window's opacity moved
+        from the row it was sharing to one of its own beside them.</li>
+
+        <li>Twenty-nine tests over the values the panel writes rather than over the drawing: every
+        choice row is stepped from every value it offers in both directions and checked to land on a
+        value the file accepts, the steppers are driven to both ends, and the kinds the background
+        row offers are checked to be the ones the panel can write whole. What a click on a picture's
+        kind does is the case with a wrong answer that looks right, so it is the one written
+        first.</li>
+      </ul>
+
       <h4>zet-app — <code>cargo bench -p zet-app --bench latency</code>, because the numbers were
       promised as measured</h4>
 
@@ -447,6 +483,57 @@
       anything to turn off: the only request zet can make is one you typed.</p>
 
       <h3>Fixed</h3>
+
+      <h4>zet-session / zet-ui — a tab's number was the number it was opened with</h4>
+
+      <p>Closing a tab left a hole in the strip and no way to close it. Closing <code>#1</code> on a
+      two-tab window left <code>#2</code> calling itself <code>#2</code>, under a strip whose first
+      tab was the second one.</p>
+
+      <ul>
+        <li>The numbers were an identifier that happened to be printed: <code>Session</code> carried
+        the number it was opened with, the strip drew that number, and closing a tab removed it and
+        left the rest alone. That is the shape of a bug that only shows up after the user has already
+        done the thing, and then the number that would have told them has gone.</li>
+
+        <li>A tab's number is now its position in the list plus one. <code>Sessions</code> holds the
+        tabs in a plain ordered container and answers the numbers from it, so there is no third place
+        for the strip, the session list and the painter to disagree: the number is derived rather
+        than stored, and closing a tab renumbers the rest because there is nothing to
+        renumber.</li>
+
+        <li>The active tab follows the hole. Closing the tab that was active leaves the last tab
+        active rather than nothing — <code>checked_sub</code> on the new length, because a window
+        with no active tab is a window with no keyboard — and closing a tab below the active one
+        shifts the active number down so the same tab stays active, which is the whole of what the
+        user meant by clicking it.</li>
+
+        <li><code>reap</code> answers the numbers the exited tabs held rather than how many went,
+        because the caller closing them is a caller doing it by number. The unit is generic over the
+        tab and holds no terminal at all, which is what makes the twenty-five tests over it possible
+        without a pty.</li>
+      </ul>
+
+      <h4>zet-pty — a new tab opened Windows PowerShell 5.1 on a machine whose PowerShell 7 was
+      installed</h4>
+
+      <p>Profiles were collected from the registry and from <code>PATH</code> and then de-duplicated,
+      and the order they came out in was the order they went in. This machine's PowerShell 7 is a
+      Store install, so it is only ever on <code>PATH</code>, and every <code>PATH</code> entry was
+      appended after the registry's Windows PowerShell and <code>cmd</code>.</p>
+
+      <ul>
+        <li>The profile the tab opened with was therefore never the one that had been found — it was
+        the first one found by a search that had already decided the answer.</li>
+
+        <li><code>pwsh</code> now sorts before <code>powershell</code>, which sorts before
+        <code>cmd</code>, and everything else keeps the order it was found in.</li>
+
+        <li>The rank is a plain function of the profile's id, so the ordering is tested with a
+        synthetic list rather than with whatever this machine happens to have, and the machine-level
+        case is tested too — a test that asks for PowerShell 7 by name and is skipped rather than
+        failed where the machine has none.</li>
+      </ul>
 
       <h4>zet — <code>window.opacity</code> changed once and then never again</h4>
 
