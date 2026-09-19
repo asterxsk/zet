@@ -360,7 +360,12 @@ pub(crate) fn panel(
             if visible(block, rect) {
                 let style = TextStyle::new(HEADING_SIZE, Weight::MEDIUM, palette.ink)
                     .tracking(HEADING_TRACKING);
-                paint.centered(setting.text, heading_box, style);
+                // Upper case here rather than in the caller's literal, because DESIGN.md
+                // fixes it as part of what a heading *is* — "12px uppercase with a
+                // hairline under it" — beside the size and the tracking that are already
+                // applied at this line and for the same reason. The app owns the words;
+                // the panel owns how a heading is set.
+                paint.centered(&setting.text.to_uppercase(), heading_box, style);
                 paint.fill(rule, palette.hairline);
             }
             y += height;

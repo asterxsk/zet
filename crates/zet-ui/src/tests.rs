@@ -18,7 +18,9 @@ use zet_font::{GlyphSpec, Metrics, Weight};
 use zet_render::{Frame, Placement, Quad};
 
 use crate::fonts::GlyphSource;
-use crate::geometry::{MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, ROW_HEIGHT, menu_rect, menu_width};
+use crate::geometry::{
+    MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, RAIL_WIDTH, ROW_HEIGHT, menu_rect, menu_width,
+};
 use crate::{
     Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, MenuLine, PickerLine, Rect, Row,
     ScrollState, Scrollbar, SettingLine, SettingPart, Size, TabInfo, thumb_offset,
@@ -650,6 +652,49 @@ fn zero_tabs_removes_the_row() {
             && (0.0..40.0).contains(&(y + h - 1.0));
         assert!(inside, "{:?} is not one of the caption marks", quad.rect);
     }
+}
+
+/// A vertical window with no tabs has no rail either.
+///
+/// "The strip is simply absent" is written about the row, and it is true of the rail for
+/// the same reason: both are the strip's surface, and there is no strip. The layout already
+/// gives the grid the whole window when there is no row to put a rail beside, so a rail
+/// painted anyway is a 48px band of empty surface with a hairline through it, drawn over
+/// the terminal's first column — the one part of the screen the shell is writing to.
+#[test]
+fn zero_tabs_removes_the_rail_too() {
+    let palette = Palette::instrument();
+    let none: Vec<TabInfo> = Vec::new();
+    let mut chrome = rail_chrome();
+    let size = window();
+    let drawn = draw(&mut chrome, &input(&palette, &none, size));
+
+    assert!(
+        drawn.layout.left.abs() < f32::EPSILON,
+        "the grid has the full width back, so there is no column for a rail to be in"
+    );
+    for quad in &drawn.frame.quads {
+        let [x, y, w, h] = quad.rect;
+        assert!(
+            x >= RAIL_WIDTH,
+            "{:?} ({}x{} at {x},{y}) is drawn over the terminal's first column",
+            quad.rect,
+            w,
+            h
+        );
+    }
+}
+
+/// A chrome whose tabs live in a rail on the left, which is the position the rail's own
+/// rules are about.
+fn rail_chrome() -> Chrome {
+    Chrome::new(
+        &TabSettings {
+            position: TabPosition::Left,
+            ..TabSettings::default()
+        },
+        &WindowSettings::default(),
+    )
 }
 
 // ---------------------------------------------------------------------------------
@@ -1414,6 +1459,50 @@ fn a_row_scrolled_half_off_the_list_is_not_drawn_over_the_chrome_above_it() {
             panel.y
         );
     }
+}
+
+/// A section heading is drawn in upper case whatever case it was written in.
+///
+/// DESIGN.md fixes a heading as "12px uppercase with a hairline under it", and the size,
+/// the tracking, the weight and the rule are all the panel's. The case is the same kind of
+/// property and belongs in the same place: the app owns the words, and "upper case" is a
+/// treatment the panel gives a heading rather than a spelling the configuration has.
+///
+/// The third assertion is the one that matters as much as the first two. Upper-casing
+/// everything would satisfy "the heading is upper case" and would shout every row label in
+/// the panel, so a test that only looked for the heading would not notice.
+#[test]
+fn a_section_heading_is_drawn_upper_case() {
+    let palette = Palette::instrument();
+    let lines = vec![
+        SettingLine {
+            text: "Appearance",
+            row: Row::Heading,
+            value: "",
+        },
+        SettingLine {
+            text: "Reduce motion",
+            row: Row::Control(Control::Toggle),
+            value: "Off",
+        },
+    ];
+    let (_chrome, drawn) = open_panel(&palette, &lines);
+    let text = all_text(&drawn.frame);
+
+    assert!(
+        text.contains("APPEARANCE"),
+        "the heading was not drawn in upper case: {text:?}"
+    );
+    assert!(
+        !text.contains("Appearance"),
+        "the heading kept the case it was written in: {text:?}"
+    );
+    // Without its space: a space draws no glyph, so the frame's text runs the words of a
+    // label together and the assertion can only be about the letters.
+    assert!(
+        text.contains("Reduce"),
+        "a row label was upper-cased along with the headings: {text:?}"
+    );
 }
 
 #[test]

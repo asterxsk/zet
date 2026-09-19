@@ -66,7 +66,9 @@ fn main() {
 fn cold_start() {
     let started = Instant::now();
     let mut app = App::load(Arc::new(NoopWaker)).expect("this machine has a shell");
+    let loaded = started.elapsed();
     let _ = app.open_tab(COLS, ROWS).expect("the default shell starts");
+    let spawned = started.elapsed();
     let deadline = Instant::now() + PATIENCE;
     while !something_is_on_screen(&app) {
         app.pump();
@@ -87,6 +89,15 @@ fn cold_start() {
     println!(
         "cold start to first prompt  {:>8.1} ms   ({name})",
         millis(started.elapsed())
+    );
+    // The split, because a cold start is mostly the shell's and a single number cannot say
+    // how much of it is zet's. What is left after the pty is spawned is the shell starting
+    // and printing, which zet waits for and cannot make faster.
+    println!(
+        "  zet: config and discovery {:>7.1} ms   pty spawned at {:>7.1} ms   the shell: {:>7.1} ms",
+        millis(loaded),
+        millis(spawned),
+        millis(started.elapsed().saturating_sub(spawned))
     );
 }
 

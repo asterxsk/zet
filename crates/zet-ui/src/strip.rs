@@ -383,7 +383,11 @@ pub(crate) fn draw(
 ) {
     let palette = *input.palette;
 
-    if strip.position == TabPosition::Left {
+    // Guarded by `strip.row` as well as the position, because a rail without a row is a
+    // rail with no cells in it: the layout already hands the grid the whole window in that
+    // case, so this would otherwise be 48px of empty surface drawn over the first column
+    // the shell is writing to. "The strip is simply absent" is about the whole strip.
+    if strip.row && strip.position == TabPosition::Left {
         let rail = Rect::new(
             0.0,
             ROW_HEIGHT,
