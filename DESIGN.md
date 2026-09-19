@@ -211,6 +211,56 @@ state it would appear in is unreachable: `close-tab` quits when the last tab clo
 so a window with no terminals is a window that is on its way out. An empty state for
 a state nobody can reach is a line nobody reads.
 
+### The tab menu
+
+A right-click on a tab opens a menu of what can be done to it. It is the mouse's way
+to the chords, and it is the only menu in the window: a terminal is a place where the
+program owns most of the pixels, and the strip is the part that is ours.
+
+```
+                              +---------------------+
+                              |  New tab            |
+                              |  New window         |
+                              |  Close tab          |
+                              |  Close other tabs   |
+                              +---------------------+
+```
+
+- Four items, in that order: new tab, new window, close tab, close other tabs. `Close
+  other tabs` is offered only when the window holds more than one tab. An item that
+  would do nothing is an item that teaches the user the menu does not work, which is
+  the same reason the thickness row appears only beside a shape that has one.
+- Closing is last of the three that are always there, because it is the one that takes
+  something away and a menu whose destructive item sits in the middle is a menu where a
+  mis-aimed click lands on it.
+- The menu is `surface-raised`, a `hairline` border, 28px rows, 16px of padding above,
+  below, and at each side, and 120px of minimum width. It is the panel's own surface
+  and the panel's own border, one level smaller — a menu is the panel's language shrunk
+  to the size of the question it is asking.
+- Hover fills the row in `hairline`, the same fill the panel gives the half of a control
+  a click will take and for the same reason: with no glyphs to read, the fill is what
+  says what the pointer is about to do.
+- Width comes from measuring the items, not from a constant, so renaming one moves the
+  rectangle and the floor is only there for a menu of one short word.
+- Placement: it opens with its top-left corner at the pointer and **flips** rather than
+  clamps. Too near the right edge it moves left until it fits; too near the bottom it
+  opens upward. Clamping would pin it to the edge with the pointer somewhere in the
+  middle of it, which for a menu means the item under the pointer is not the one that
+  was aimed at. A menu wider or taller than the window is pinned to the corner, since
+  there is no side left to flip to.
+- It is drawn over everything, caption buttons included, and it takes the click:
+  a press inside it is answered by the menu and never by what it covers. It covers the
+  caption buttons only when it was opened under them.
+- The next press anywhere else — on another tab, on the terminal, on a caption button —
+  is what dismisses it. No timeout, no click-to-toggle, no fade. A menu that faded
+  would be a menu where the click during the fade lands on the window underneath.
+- `Escape` closes it and is the menu's key for as long as it is open. It is the one
+  key the menu takes: everything else still goes to the shell, for the reason the panel
+  gives.
+- The menu belongs to the tab it was opened on, and it goes away when that tab does —
+  including when a tab is closed from somewhere else, and when the program on it exits.
+  A menu still offering `Close tab` for a tab that is gone is a menu that lies.
+
 ## Cursor
 
 The cursor is the one element that belongs to both planes, so it follows the theme's

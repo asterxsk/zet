@@ -14,6 +14,35 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Added
 
+- **`zet-ui` / `zet-app` / `zet`** — a right-click on a tab, which the window used to swallow.
+  DESIGN.md gains a section for it, because a menu that is the only one in the window is a
+  decision about the window and not about one gesture.
+  - Four items: new tab, new window, close tab, and — only when the window holds more than one —
+    close other tabs. An item that would do nothing is an item that teaches the user the menu does
+    not work, which is the argument the panel's thickness row is already built on, and it is why
+    the list is a function of the tab count rather than of the tab.
+  - Where it goes is decided in `zet-ui::geometry` from the pointer and the window, and it is a
+    flip rather than a clamp: too near the right edge it moves left, too near the bottom it opens
+    upward. Clamping would pin it to the edge with the pointer somewhere in the middle of it, and
+    the item under the pointer would then not be the one that was aimed at. A menu wider or taller
+    than the window is pinned to the corner instead, because there is no side left to flip to. Its
+    width comes from measuring the labels, with a 120px floor, so renaming an item moves the
+    rectangle rather than leaving a constant behind.
+  - It is drawn last and hit-tested first. `Region::MenuItem` and `Region::Menu` are pushed ahead
+    of everything else the frame made hittable, so a menu opened over the caption buttons or over a
+    settings control takes the click; the region comment says which of the two orders is the paint
+    order and which is the hit order, because they are the same list read in opposite directions.
+    A click anywhere else is the click that dismisses it — the crate says where the menu is and the
+    host decides that it is not drawn next frame.
+  - The app puts the menu away on every path that would leave it pointing at a tab that is not
+    there: a tab opened, a tab closed, an exit reaped, and opening a tab menu while one is already
+    open. `Close other tabs` activates the tab the menu was about first and then closes the rest
+    from the highest number down, because closing renumbers by position and a walk that went
+    upward would skip every second tab.
+  - Twenty-two tests, none of them over the pixels: eleven in `zet-ui` for the placement
+    arithmetic and the hit-testing of a menu against the panel, the caption buttons, and the
+    terminal under it; three over the item list; and eight over the app, including that closing
+    the others leaves exactly one tab and that it is the one the menu was opened on.
 - **`zet-app`** — rows in the settings panel for the seven configuration keys that had none, so
   that a setting the file accepts is a setting the panel can reach.
   - `window.background` is a `Choice` that steps solid → gradient and back. `image` is in the list

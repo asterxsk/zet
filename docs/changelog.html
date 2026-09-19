@@ -92,6 +92,42 @@
 
       <h3>Added</h3>
 
+      <h4>zet-ui / zet-app / zet — a right-click on a tab</h4>
+
+      <p>A right-click on a tab went nowhere: closing one was a chord, and the only mouse target in
+      the strip was the <code>+</code> at the end of the run. The menu is drawn by the chrome,
+      placed by the geometry beside it, and answered by the app, which is the same division every
+      other piece of the window is already built on. <code>DESIGN.md</code> gains a section fixing
+      the items, the placement rule, and what dismisses it.</p>
+
+      <ul>
+        <li>Four items: new tab, new window, close tab, and — only when the window holds more than
+        one — close other tabs. An item that would do nothing is an item that teaches the user the
+        menu does not work, which is the argument the panel's thickness row is already built on.</li>
+
+        <li>Where it goes is decided from the pointer and the window, and it is a flip rather than a
+        clamp: too near the right edge it moves left, too near the bottom it opens upward. Clamping
+        would pin it to the edge with the pointer somewhere in the middle of it, and the item under
+        the pointer would then not be the one that was aimed at. A menu wider or taller than the
+        window is pinned to the corner instead, because there is no side left to flip to. Its width
+        comes from measuring the labels, with a 120px floor, so renaming an item moves the rectangle
+        rather than leaving a constant behind.</li>
+
+        <li>It is drawn last and hit-tested first, so a menu opened over the caption buttons or over
+        a settings control takes the click. A click anywhere else is the click that dismisses it:
+        the crate says where the menu is, and the host decides that it is not drawn next frame.</li>
+
+        <li>The app puts the menu away on every path that would leave it pointing at a tab that is
+        not there — a tab opened, a tab closed, an exit reaped, a second right-click while one is
+        open. <code>Close other tabs</code> activates the tab the menu was about first and then
+        closes the rest from the highest number down, because closing renumbers by position and a
+        walk that went upward would skip every second tab.</li>
+
+        <li>Twenty-two tests, none of them over the pixels: eleven in <code>zet-ui</code> for the
+        placement arithmetic and the hit-testing of a menu against the panel, the caption buttons
+        and the terminal under it; three over the item list; and eight over the app.</li>
+      </ul>
+
       <h4>zet-app — rows in the settings panel for the seven keys that had none</h4>
 
       <p>DESIGN.md's panel is a row per setting, and seven keys the configuration file accepts had
