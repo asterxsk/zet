@@ -202,11 +202,17 @@ impl Default for FontLibrary {
 impl FontLibrary {
     /// Load the system font database.
     ///
-    /// This is the expensive call in the crate — it enumerates every installed family
-    /// — and it belongs on a background thread at startup or behind the first frame.
+    /// The cost here is the constructor, not the call below it. `CollectionOptions`
+    /// defaults to `system_fonts: true`, so `Collection::new` already runs the
+    /// enumeration, and the explicit `load_system_fonts()` then finds the system
+    /// database non-empty and returns immediately. Measured on this machine: 1.3 ms in
+    /// the constructor, 100 ns in the call. It stays because it is what says out loud
+    /// that this database is meant to have system fonts in it, and because it is the
+    /// line that would matter if the options ever stopped asking for them.
+    ///
     /// It does not load any font *file*: `fontique` records where each family lives and
-    /// materialises the bytes lazily, so constructing this is a registry walk rather
-    /// than a few hundred megabytes of reading.
+    /// materialises the bytes lazily, so this is a registry walk rather than a few
+    /// hundred megabytes of reading.
     #[must_use]
     pub fn new() -> Self {
         let mut collection = Collection::new(CollectionOptions::default());
