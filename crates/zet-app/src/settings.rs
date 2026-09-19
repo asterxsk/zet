@@ -14,7 +14,7 @@
 //! action, and it is *captured* rather than clicked: the caller is told to wait for a
 //! chord and hands it back through [`App::bind`].
 
-use zet_config::{Config, CursorShape, Diagnostic, Severity};
+use zet_config::{Background, Config, CursorShape, Diagnostic, Severity};
 use zet_input::Chord;
 
 use crate::action::Action;
@@ -52,6 +52,31 @@ const MAX_THICKNESS: u8 = zet_config::MAX_CURSOR_THICKNESS;
 /// a tenth and drifts off the value the file was read with.
 const MIN_OPACITY: u32 = 20;
 const OPACITY_STEP: u32 = 10;
+
+/// The opacity floor for a background picture, and the step the row moves in.
+///
+/// Lower than the window's, because the two are different questions: a window at nothing
+/// takes the terminal with it, while a picture at nothing leaves the theme's own ground
+/// behind it — which is a setting someone might want for a moment and would not want to be
+/// unable to leave. Ten percent rather than none for the same reason the window has a floor
+/// at all: the row that would raise it is drawn over the thing it is behind.
+const MIN_IMAGE_OPACITY: u32 = 10;
+const IMAGE_OPACITY_STEP: u32 = 10;
+
+/// The angles the gradient row moves through, in degrees clockwise from pointing right.
+///
+/// A stepper rather than a list of compass names, because the renderer takes a number and
+/// DESIGN.md gives a `Step` to a number. Fifteen degrees is a sixteenth of the circle: fine
+/// enough that a gradient can be pointed where it looks right, coarse enough that getting
+/// from one side to the other is a handful of clicks rather than a scroll.
+const ANGLE_STEP: f32 = 15.0;
+
+/// The largest angle the row will step to.
+///
+/// Short of a full turn on purpose. A stepper stops at its ends rather than wrapping, so an
+/// angle of 360 would be a value the row could show and never reach again; 345 is the last
+/// one before the direction it started from.
+const MAX_ANGLE: f32 = 345.0;
 
 /// Text scales, as the system's own slider offers them.
 ///
@@ -96,8 +121,24 @@ pub enum Id {
     ForcedColors,
     /// How opaque the window is.
     WindowOpacity,
+    /// What is painted behind the grid.
+    Background,
+    /// How much of a background picture shows.
+    ///
+    /// A row of its own rather than a second half of the background row, because it is a
+    /// second number: the kind and how much of it there is are two settings that the
+    /// control the panel has can each carry, and one of them is a picture.
+    ImageOpacity,
+    /// Which way a background gradient runs.
+    GradientAngle,
+    /// Whether the window remembers where it was.
+    RememberPosition,
+    /// Whether the window starts maximized.
+    StartMaximized,
     /// Where the tab strip lives.
     TabPosition,
+    /// Whether a new tab opens the default profile without asking.
+    OpenWithoutAsking,
     /// The grid's family.
     Font,
     /// The grid's size, in points.
@@ -228,11 +269,6 @@ pub fn problems(diagnostics: &[Diagnostic]) -> Vec<Line> {
     lines
 }
 
-/// The rows, read out of a configuration.
-///
-/// The font row's *value* is the family in the file and needs nothing else; the list of
-/// families it can be stepped through is only needed when it is clicked, which is why
-/// [`adjust`] takes it and this does not.
 /// The Theme row, labelled with whether the palette is zet's own.
 ///
 /// PRODUCT.md's seventh criterion promises it — imported palettes "ship unmodified so they
@@ -265,6 +301,16 @@ fn theme_row(config: &Config) -> Line {
 /// [`adjust`] takes it and this does not.
 #[must_use]
 pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
+    let mut lines = appearance_rows(config);
+    lines.extend(tabs_rows(config));
+    lines.extend(terminal_rows(config));
+    lines.extend(binding_rows(bindings));
+    lines
+}
+
+/// The Appearance section: what the window is painted with, and how it reads.
+#[must_use]
+fn appearance_rows(config: &Config) -> Vec<Line> {
     let mut lines = vec![
         Line::Heading("Appearance"),
         theme_row(config),
@@ -287,11 +333,58 @@ pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
             Kind::Toggle,
         ),
         setting(
-            Id::WindowOpacity,
-            "Window opacity",
-            format!("{}%", configured_opacity(config)),
-            Kind::Step,
+            Id::Background,
+            "Background",
+            title_case(kind_word(&config.window.background)),
+            Kind::Choice,
         ),
+    ];
+
+    // The row that belongs to the kind the file is in, directly under the row that chooses
+    // it: a picture's opacity and a gradient's angle are numbers about the thing named a
+    // line above, and a row that appeared at the end of the list would be a row about
+    // something the user has scrolled away from. The same rule as the cursor's thickness.
+    match &config.window.background {
+        Background::Image { opacity, .. } => lines.push(setting(
+            Id::ImageOpacity,
+            "Image opacity",
+            format!("{}%", configured_image_opacity(*opacity)),
+            Kind::Step,
+        )),
+        Background::Gradient { angle, .. } => lines.push(setting(
+            Id::GradientAngle,
+            "Angle",
+            format!("{}°", configured_angle(*angle).round()),
+            Kind::Step,
+        )),
+        Background::Solid => {}
+    }
+
+    lines.push(setting(
+        Id::WindowOpacity,
+        "Window opacity",
+        format!("{}%", configured_opacity(config)),
+        Kind::Step,
+    ));
+    lines.push(setting(
+        Id::RememberPosition,
+        "Remember position",
+        on_off(config.window.remember_position),
+        Kind::Toggle,
+    ));
+    lines.push(setting(
+        Id::StartMaximized,
+        "Start maximized",
+        on_off(config.window.start_maximized),
+        Kind::Toggle,
+    ));
+    lines
+}
+
+/// The Tabs section: where the strip lives, and what a new tab does.
+#[must_use]
+fn tabs_rows(config: &Config) -> Vec<Line> {
+    vec![
         Line::Heading("Tabs"),
         setting(
             Id::TabPosition,
@@ -299,6 +392,19 @@ pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
             title_case(config.tabs.position.as_str()),
             Kind::Choice,
         ),
+        setting(
+            Id::OpenWithoutAsking,
+            "Open without asking",
+            on_off(config.tabs.open_default_without_asking),
+            Kind::Toggle,
+        ),
+    ]
+}
+
+/// The Terminal section: the grid's own type and cursor.
+#[must_use]
+fn terminal_rows(config: &Config) -> Vec<Line> {
+    let mut lines = vec![
         Line::Heading("Terminal"),
         setting(Id::Font, "Font", config.font.family.clone(), Kind::Choice),
         setting(
@@ -336,6 +442,13 @@ pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
         ));
     }
 
+    lines
+}
+
+/// The Keys section: one row per action, reading the chord it is bound to.
+#[must_use]
+fn binding_rows(bindings: &[(Chord, Action)]) -> Vec<Line> {
+    let mut lines = Vec::with_capacity(Action::ALL.len() + 1);
     lines.push(Line::Heading("Keys"));
     for action in Action::ALL {
         lines.push(Line::Setting(Setting {
@@ -348,7 +461,6 @@ pub fn lines(config: &Config, bindings: &[(Chord, Action)]) -> Vec<Line> {
             kind: Kind::Chord,
         }));
     }
-
     lines
 }
 
@@ -410,6 +522,34 @@ pub fn adjust(config: &mut Config, id: Id, back: bool, families: &[String]) -> E
             config.window.opacity = next.clamp(MIN_OPACITY, 100) as f32 / 100.0;
             Effect::Changed
         }
+        Id::Background => {
+            let kinds = background_kinds(config);
+            let at = kinds
+                .iter()
+                .position(|kind| *kind == kind_word(&config.window.background));
+            let wanted = background_for(kinds[step(kinds.len(), at, back)], config);
+            config.window.background = wanted;
+            Effect::Changed
+        }
+        // The two rows that belong to a kind of background, and so can be clicked while the
+        // file is in the other one: the row is drawn only while its kind is set, but a click
+        // already in flight when the row above it changes the kind lands here, and a
+        // `Effect::None` is the honest answer to a click on a background that has no opacity
+        // to step.
+        Id::ImageOpacity => step_image_opacity(config, back).unwrap_or(Effect::None),
+        Id::GradientAngle => step_gradient_angle(config, back).unwrap_or(Effect::None),
+        Id::RememberPosition => {
+            config.window.remember_position = !config.window.remember_position;
+            Effect::Changed
+        }
+        Id::StartMaximized => {
+            config.window.start_maximized = !config.window.start_maximized;
+            Effect::Changed
+        }
+        Id::OpenWithoutAsking => {
+            config.tabs.open_default_without_asking = !config.tabs.open_default_without_asking;
+            Effect::Changed
+        }
         Id::TabPosition => {
             config.tabs.position = config.tabs.position.flipped();
             Effect::Changed
@@ -444,6 +584,39 @@ pub fn adjust(config: &mut Config, id: Id, back: bool, families: &[String]) -> E
         }
         Id::Binding(action) => Effect::Capture(action),
     }
+}
+
+/// Move a picture's transparency one step, `None` if the background is not a picture.
+///
+/// Stepped in whole percents for the same reason the window's is: going up and back down
+/// lands on the value it started from rather than beside it.
+#[must_use]
+fn step_image_opacity(config: &mut Config, back: bool) -> Option<Effect> {
+    let Background::Image { opacity, .. } = &mut config.window.background else {
+        return None;
+    };
+    let percent = configured_image_opacity(*opacity);
+    let next = if back {
+        percent.saturating_sub(IMAGE_OPACITY_STEP)
+    } else {
+        percent.saturating_add(IMAGE_OPACITY_STEP)
+    };
+    *opacity = next.clamp(MIN_IMAGE_OPACITY, 100) as f32 / 100.0;
+    Some(Effect::Changed)
+}
+
+/// Point a gradient one step round, `None` if the background is not a gradient.
+///
+/// The end of the range is a stop and not a wrap: [`MAX_ANGLE`] is where the stepper gives
+/// up rather than turning over into the direction it began at.
+#[must_use]
+fn step_gradient_angle(config: &mut Config, back: bool) -> Option<Effect> {
+    let Background::Gradient { angle, .. } = &mut config.window.background else {
+        return None;
+    };
+    let step = if back { -ANGLE_STEP } else { ANGLE_STEP };
+    *angle = zet_config::clamp_or(configured_angle(*angle) + step, 0.0, MAX_ANGLE, 0.0);
+    Some(Effect::Changed)
 }
 
 /// Bind a chord to an action.
@@ -510,6 +683,90 @@ fn configured_size(config: &Config) -> f32 {
 /// nonsense, still draws as something.
 fn configured_opacity(config: &Config) -> u32 {
     (config.window.opacity * 100.0).round().clamp(0.0, 100.0) as u32
+}
+
+/// The word the configuration file uses for a kind of background.
+fn kind_word(background: &Background) -> &'static str {
+    match background {
+        Background::Solid => "solid",
+        Background::Image { .. } => "image",
+        Background::Gradient { .. } => "gradient",
+    }
+}
+
+/// The kinds a click on the background row steps through.
+///
+/// `solid` and `gradient` are always in the list: the panel can write both of them whole.
+/// `image` is in it only while the file already names a picture, because the path is the
+/// half of that setting the four controls cannot type — a panel that offered the kind
+/// without a path would write a configuration that is broken the moment it is clicked, and
+/// the row that reported it afterwards would be reporting a mistake the user did not make
+/// and cannot fix from where they are standing. A picture is therefore set in the file and
+/// shown here, and stepping away from it is a change the panel is allowed to make.
+///
+/// The current kind is put first so that neither half of the control can land back on
+/// `image`: the two halves are the two kinds the panel can author, whichever kind the file
+/// is in.
+fn background_kinds(config: &Config) -> &'static [&'static str] {
+    if matches!(config.window.background, Background::Image { .. }) {
+        &["image", "solid", "gradient"]
+    } else {
+        &["solid", "gradient"]
+    }
+}
+
+/// The background a named kind means.
+fn background_for(kind: &str, config: &Config) -> Background {
+    match kind {
+        "gradient" => seeded_gradient(config),
+        // Only ever reached when the file is already in it, since that is the one way
+        // `image` gets into the list: this is the picture that is already there, kept as it
+        // is rather than reconstructed without the path it is made of.
+        "image" => config.window.background.clone(),
+        _ => Background::Solid,
+    }
+}
+
+/// A gradient made of the theme's own colours.
+///
+/// The two stops are the half of a gradient the panel cannot pick — there is no control
+/// that chooses a colour in the four DESIGN.md allows — so this is what they are until the
+/// file says otherwise, and the file's pair is what the row goes on showing. They come from
+/// the theme because a background is the theme's: a panel that invented a pair of colours
+/// could produce a terminal disagreeing with its own palette, and the fix would be a trip
+/// into the file the panel exists to save the user from.
+///
+/// The pair is the colour the grid paints by default and the colour it paints a selection
+/// with, which are the theme's two answers to "behind the text" and "behind the text, but
+/// somewhere the user is looking". Ninety degrees, because a wash that runs top to bottom
+/// reads as a background where one that runs across reads as a decoration.
+fn seeded_gradient(config: &Config) -> Background {
+    let theme = zet_config::by_slug(&config.theme).unwrap_or_else(zet_config::default_theme);
+    Background::Gradient {
+        from: theme.background,
+        to: theme.selection,
+        angle: 90.0,
+    }
+}
+
+/// A gradient's angle as a direction, in the range the row shows.
+///
+/// Turned back into the circle rather than clamped, because an angle is a direction and not
+/// a quantity: a file set to 700 degrees points the way 340 points, and a row reading `700°`
+/// would be showing a number the stepper could never produce again. A number that is not a
+/// number — `nan` is a float TOML can spell — reads as zero, which is the one direction a
+/// value with no direction can be said to have.
+fn configured_angle(angle: f32) -> f32 {
+    zet_config::clamp_or(angle.rem_euclid(360.0), 0.0, 360.0, 0.0)
+}
+
+/// A background picture's opacity as a whole percent, as the file has it.
+///
+/// Shown rather than brought into the range the row steps through, for the same reason as
+/// the window's: a file set to five percent says five percent, and the first press of the
+/// key that raises it goes to the floor rather than to a floor of the panel's own making.
+fn configured_image_opacity(opacity: f32) -> u32 {
+    (opacity * 100.0).round().clamp(0.0, 100.0) as u32
 }
 
 /// The next index in a ring, where `None` means "not in the list" and enters at the top.
@@ -1026,6 +1283,240 @@ mod tests {
     }
 
     #[test]
+    fn the_switches_the_panel_shows_are_the_switches_the_file_gets() {
+        // The panel's promise is that it is a view over the file, and a field with no row
+        // is a field the user can only reach by hand. That is the right answer for a value
+        // that is a path — the four controls cannot type one — and the wrong answer for a
+        // switch, which is the one kind of setting the controls are exactly shaped for.
+        let mut config = config();
+        config.window.remember_position = false;
+        config.window.start_maximized = true;
+        config.tabs.open_default_without_asking = false;
+        let rows = lines(&config, &parse_bindings(&config));
+        assert_eq!(at(&rows, Id::RememberPosition), "Off");
+        assert_eq!(at(&rows, Id::StartMaximized), "On");
+        assert_eq!(at(&rows, Id::OpenWithoutAsking), "Off");
+
+        let before = (
+            config.window.remember_position,
+            config.window.start_maximized,
+            config.tabs.open_default_without_asking,
+        );
+        for id in [
+            Id::RememberPosition,
+            Id::StartMaximized,
+            Id::OpenWithoutAsking,
+        ] {
+            assert_eq!(adjust(&mut config, id, false, &[]), Effect::Changed);
+        }
+        assert_eq!(
+            (
+                config.window.remember_position,
+                config.window.start_maximized,
+                config.tabs.open_default_without_asking,
+            ),
+            (!before.0, !before.1, !before.2),
+            "every switch moved, and moved the way the file would show it"
+        );
+    }
+
+    #[test]
+    fn a_toggle_has_no_direction() {
+        let mut config = config();
+        let before = config.window.start_maximized;
+        adjust(&mut config, Id::StartMaximized, false, &[]);
+        assert_ne!(config.window.start_maximized, before);
+        adjust(&mut config, Id::StartMaximized, true, &[]);
+        assert_eq!(config.window.start_maximized, before);
+    }
+
+    #[test]
+    fn a_picture_the_file_names_is_a_row_the_panel_shows_and_can_step_away_from() {
+        // The panel cannot type a path, so it does not offer the kind — but a file that
+        // names one is a file the panel has to describe, and stepping away from it is a
+        // change the panel is allowed to make.
+        let mut config = config();
+        config.window.background = Background::Image {
+            path: "Z:/pictures/terminal.png".into(),
+            opacity: 0.5,
+        };
+        let shown = lines(&config, &parse_bindings(&config));
+        assert_eq!(at(&shown, Id::Background), "Image");
+        assert_eq!(at(&shown, Id::ImageOpacity), "50%");
+
+        assert_eq!(
+            adjust(&mut config, Id::Background, false, &[]),
+            Effect::Changed
+        );
+        assert_eq!(
+            config.window.background,
+            Background::Solid,
+            "forward from a picture is the flat ground the theme paints"
+        );
+        let after = lines(&config, &parse_bindings(&config));
+        assert!(
+            !after.iter().any(|line| line.id() == Some(Id::ImageOpacity)),
+            "the row about a picture goes with the picture"
+        );
+    }
+
+    #[test]
+    fn the_kinds_the_background_row_offers_are_the_ones_the_panel_can_write_whole() {
+        // Every value the row can step to has to be a configuration the loader will not
+        // complain about on the next start. `Image` needs a path, a path is not one of the
+        // four controls, and a panel that offered the kind anyway would write a file whose
+        // one problem row is a problem the user did not cause — and cannot fix from where
+        // they are standing.
+        let mut config = config();
+        for _ in 0..6 {
+            adjust(&mut config, Id::Background, false, &[]);
+            assert!(
+                !matches!(config.window.background, Background::Image { .. }),
+                "the panel wrote a picture it cannot name: {:?}",
+                config.window.background
+            );
+        }
+    }
+
+    #[test]
+    fn a_gradient_the_panel_makes_is_made_of_the_themes_own_colours() {
+        // A gradient is a background, and a background is the theme's. The panel seeds the
+        // two stops from the theme the file names rather than inventing a pair of colours,
+        // so clicking the row cannot produce a terminal that disagrees with its own theme.
+        // The pair is a starting point rather than a decision: both are the file's to
+        // change, and a hand-written pair is what the row will show.
+        let mut config = config();
+        config.theme = "nord".into();
+        assert_eq!(
+            adjust(&mut config, Id::Background, false, &[]),
+            Effect::Changed
+        );
+        let theme = zet_config::by_slug("nord").expect("zet ships nord");
+        assert_eq!(
+            config.window.background,
+            Background::Gradient {
+                from: theme.background,
+                to: theme.selection,
+                angle: 90.0
+            }
+        );
+    }
+
+    #[test]
+    fn stepping_back_from_the_flat_ground_reaches_the_gradient_and_not_the_other_way_round() {
+        let mut config = config();
+        adjust(&mut config, Id::Background, true, &[]);
+        assert!(matches!(
+            config.window.background,
+            Background::Gradient { .. }
+        ));
+        adjust(&mut config, Id::Background, false, &[]);
+        assert_eq!(
+            config.window.background,
+            Background::Solid,
+            "and back again"
+        );
+    }
+
+    #[test]
+    fn a_row_that_belongs_to_one_kind_is_not_drawn_for_another() {
+        let mut config = config();
+        let solid = lines(&config, &parse_bindings(&config));
+        assert_eq!(at(&solid, Id::Background), "Solid");
+        for id in [Id::ImageOpacity, Id::GradientAngle] {
+            assert!(
+                !solid.iter().any(|line| line.id() == Some(id)),
+                "{id:?} is about a kind the file is not in"
+            );
+        }
+
+        config.window.background = Background::Gradient {
+            from: zet_config::Rgb::new(0, 0, 0),
+            to: zet_config::Rgb::new(255, 255, 255),
+            angle: 90.0,
+        };
+        let gradient = lines(&config, &parse_bindings(&config));
+        assert_eq!(at(&gradient, Id::Background), "Gradient");
+        assert_eq!(at(&gradient, Id::GradientAngle), "90°");
+        assert!(
+            !gradient
+                .iter()
+                .any(|line| line.id() == Some(Id::ImageOpacity))
+        );
+    }
+
+    #[test]
+    fn the_angle_stepper_stops_at_its_ends_rather_than_wrapping() {
+        let mut config = config();
+        adjust(&mut config, Id::Background, false, &[]);
+        for _ in 0..40 {
+            adjust(&mut config, Id::GradientAngle, false, &[]);
+        }
+        let Background::Gradient { angle, .. } = config.window.background else {
+            panic!("the row exists, so the background is a gradient");
+        };
+        assert!((angle - MAX_ANGLE).abs() < f32::EPSILON, "got {angle}");
+
+        for _ in 0..40 {
+            adjust(&mut config, Id::GradientAngle, true, &[]);
+        }
+        let Background::Gradient { angle, .. } = config.window.background else {
+            panic!("the row exists, so the background is a gradient");
+        };
+        assert!(angle.abs() < f32::EPSILON, "got {angle}");
+    }
+
+    #[test]
+    fn an_angle_the_file_could_not_have_written_is_still_a_row_that_can_be_stepped() {
+        // The file is hand-editable and a number in it can be anything, `nan` included —
+        // TOML spells it. A row that read `NaN°` and whose stepper then wrote the NaN back
+        // is a row the user cannot get out of.
+        let mut config = config();
+        config.window.background = Background::Gradient {
+            from: zet_config::Rgb::new(0, 0, 0),
+            to: zet_config::Rgb::new(255, 255, 255),
+            angle: f32::NAN,
+        };
+        let rows = lines(&config, &parse_bindings(&config));
+        assert_eq!(at(&rows, Id::GradientAngle), "0°");
+        adjust(&mut config, Id::GradientAngle, false, &[]);
+        let Background::Gradient { angle, .. } = config.window.background else {
+            panic!("the row exists, so the background is a gradient");
+        };
+        assert!(
+            angle.is_finite(),
+            "the stepper wrote a number back: {angle}"
+        );
+    }
+
+    #[test]
+    fn the_picture_opacity_stepper_stops_short_of_a_picture_nobody_can_see() {
+        // The same floor as the window's, for the same reason: a picture at nothing is a
+        // picture the user cannot find again, and the row that would raise it is drawn over
+        // the terminal the picture is behind.
+        let mut config = config();
+        config.window.background = Background::Image {
+            path: "Z:/pictures/terminal.png".into(),
+            opacity: 0.5,
+        };
+        for _ in 0..30 {
+            adjust(&mut config, Id::ImageOpacity, true, &[]);
+        }
+        let Background::Image { opacity, .. } = config.window.background else {
+            panic!("the row exists, so the background is a picture");
+        };
+        assert!((opacity - MIN_IMAGE_OPACITY as f32 / 100.0).abs() < f32::EPSILON);
+
+        for _ in 0..30 {
+            adjust(&mut config, Id::ImageOpacity, false, &[]);
+        }
+        let Background::Image { opacity, .. } = config.window.background else {
+            panic!("the row exists, so the background is a picture");
+        };
+        assert!((opacity - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn every_id_has_a_row_that_can_be_found_again() {
         // The panel is clicked by identity. An id with no row is a setting the user
         // cannot reach, and a row whose id is missing is a click that goes nowhere.
@@ -1044,6 +1535,10 @@ mod tests {
             Id::CursorShape,
             Id::CursorBlink,
             Id::CursorThickness,
+            Id::Background,
+            Id::RememberPosition,
+            Id::StartMaximized,
+            Id::OpenWithoutAsking,
         ] {
             assert!(
                 lines.iter().any(|line| line.id() == Some(id)),
