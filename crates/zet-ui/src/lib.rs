@@ -136,6 +136,11 @@ pub struct ChromeInput<'a> {
     /// one `Option` rather than a flag and a value: two things saying whether a popover is
     /// open is one thing that can disagree with the other.
     pub picker: Option<PickerLine<'a>>,
+    /// The context menu that is open, or `None` when none is.
+    ///
+    /// One `Option` for the reason the picker and the find bar are: whether a menu is up
+    /// is this and nothing else, so there is no flag to keep in step with it.
+    pub menu: Option<MenuLine<'a>>,
     /// The text in the titlebar's name slot, which the app name goes in.
     pub window_title: &'a str,
     /// The whole window's size in logical pixels.
@@ -194,6 +199,25 @@ pub struct PickerLine<'a> {
     pub profiles: &'a [&'a str],
     /// Which row the question is on.
     pub at: usize,
+}
+
+/// What a context menu is offering.
+///
+/// The items and where the pointer was, and nothing else. What each item *does* is the
+/// app's business — a menu is a list of words to press, and a popover that knew what
+/// closing a tab meant would be a second copy of the app living next to the painter.
+pub struct MenuLine<'a> {
+    /// The items, in the order they are drawn and in the order a click is answered in.
+    ///
+    /// The caller's order is the menu's, for the same reason the picker's is: the row a
+    /// user presses is the row the app acts on.
+    pub items: &'a [&'a str],
+    /// Where the pointer was when the menu was asked for, in logical pixels.
+    ///
+    /// The pointer rather than the menu, because this is a hint about where the menu
+    /// belongs: [`geometry::menu_rect`](crate::geometry::menu_rect) is what decides where
+    /// it fits, and it answers from this point and the window's size alone.
+    pub at: (f32, f32),
 }
 
 /// One line of the settings panel: a section heading, a problem, or a setting.
@@ -334,6 +358,13 @@ pub enum Hit {
     /// popover with holes in it is a popover where clicking the padding types into the
     /// shell, which is the one thing the user was not doing.
     Picker,
+    /// A row of an open context menu, by that row's index into [`MenuLine::items`].
+    MenuItem(usize),
+    /// A context menu is open and the point is inside it, but not on a row.
+    ///
+    /// The surface takes the click for the reason the panel's and the picker's do: a
+    /// popover with holes in it is one where a click in the padding reaches the shell.
+    Menu,
     /// The scrollbar.
     Scrollbar(Scrollbar),
     /// Nothing the chrome owns.
@@ -440,6 +471,11 @@ enum Region {
         rect: Rect,
     },
     Picker(Rect),
+    MenuItem {
+        row: usize,
+        rect: Rect,
+    },
+    Menu(Rect),
     Scrollbar {
         track: Rect,
         thumb: Rect,
@@ -461,6 +497,8 @@ impl Region {
             }),
             Self::Profile { row, rect } if rect.contains(x, y) => Some(Hit::Profile(*row)),
             Self::Picker(rect) if rect.contains(x, y) => Some(Hit::Picker),
+            Self::MenuItem { row, rect } if rect.contains(x, y) => Some(Hit::MenuItem(*row)),
+            Self::Menu(rect) if rect.contains(x, y) => Some(Hit::Menu),
             Self::Scrollbar { track, thumb } if track.contains(x, y) => {
                 Some(Hit::Scrollbar(if thumb.contains(x, y) {
                     Scrollbar::Thumb
@@ -511,6 +549,20 @@ pub struct Chrome {
     /// same reason a frame is: this runs sixty times a second.
     quads: Vec<Quad>,
     glyphs: Vec<GlyphQuad>,
+}
+
+/// Everything one frame drew over the terminal, in the order it was drawn.
+///
+/// Gathered up because the region list is this same list read backwards: whatever is drawn
+/// last is what a click lands on, so the two are one fact about the frame and not two. A
+/// frame that kept them apart would be a frame where every overlay has to be named twice,
+/// once where it is painted and once where it is hit, and the two would agree only for as
+/// long as nobody edited one of them.
+struct Overdrawn {
+    menu: Option<overlays::Menu>,
+    popover: Option<overlays::Popover>,
+    panel: Option<overlays::Panel>,
+    scroll: Option<(Rect, Rect)>,
 }
 
 impl Chrome {
@@ -683,10 +735,38 @@ impl Chrome {
             paint.fill(rect, input.palette.signal_dim);
         }
 
+        let over = self.overdraw(input, paint, &strip_plan, left, top, bottom);
+        let settings_scroll = over.panel.as_ref().map_or(0.0, |panel| panel.scroll);
+
+        self.publish(&strip_plan, &over);
+
+        let grid = Rect::between(left, top, size.width, size.height - bottom);
+        self.layout = Layout {
+            top,
+            left,
+            bottom,
+            grid,
+            settings_scroll,
+        };
+        self.layout
+    }
+
+    /// Draw the panel, the popover, the scrollbar, the captions, and the menu, in that order.
+    ///
+    /// The order is the whole content of this function, so it is written down rather than
+    /// left to whatever a reader infers from six consecutive calls.
+    fn overdraw(
+        &mut self,
+        input: &ChromeInput<'_>,
+        paint: &mut paint::Painter<'_>,
+        strip_plan: &strip::Strip,
+        left: f32,
+        top: f32,
+        bottom: f32,
+    ) -> Overdrawn {
         let panel = input
             .settings_open
             .then(|| overlays::panel(paint, input, top, bottom));
-        let settings_scroll = panel.as_ref().map_or(0.0, |panel| panel.scroll);
         if bottom > 0.0 {
             overlays::find_bar(paint, input, bottom);
         }
@@ -700,11 +780,32 @@ impl Chrome {
             .map(|picker| overlays::profile_picker(paint, input, picker, left, top, bottom));
         let scroll = overlays::scrollbar(paint, input, top, bottom, self.scroll);
 
-        // Last, because these are the window's own controls and nothing in zet may cover
-        // them: with no tabs there is no row, and they are the only thing left on the
-        // window that can be clicked.
-        strip::captions(paint, &strip_plan, input);
+        // Last but the menu, because these are the window's own controls and nothing in zet
+        // may cover them: with no tabs there is no row, and they are the only thing left on
+        // the window that can be clicked.
+        strip::captions(paint, strip_plan, input);
 
+        // After the captions, which is the one thing in the crate drawn over them, and the
+        // exception is the argument: a menu is not chrome, it is a thing the user has just
+        // asked for and is still holding open, and it is placed against the pointer rather
+        // than against the frame. It covers the caption buttons only when it was opened
+        // under them, and the next click — on a caption button or anywhere else — is what
+        // dismisses it, which is the rule every menu on the system follows.
+        let menu = input
+            .menu
+            .as_ref()
+            .map(|menu| overlays::context_menu(paint, input, menu));
+
+        Overdrawn {
+            menu,
+            popover,
+            panel,
+            scroll,
+        }
+    }
+
+    /// Publish what the frame made hittable, from the front of the window backwards.
+    fn publish(&mut self, strip_plan: &strip::Strip, over: &Overdrawn) {
         for (caption, rect) in &strip_plan.captions {
             self.regions.push(Region::Caption {
                 caption: *caption,
@@ -734,11 +835,24 @@ impl Chrome {
         // right edge, so it is what a click there has to land on. Then the popover, which
         // is drawn over the panel and under the scrollbar. Then the panel, its controls
         // before the surface that holds them for the same reason again one level down.
-        self.scrollbar = scroll;
-        if let Some((track, thumb)) = scroll {
+        // The menu first of all, because it was drawn last of all: it is the thing the
+        // user is interacting with right now, so it is the thing a click lands on. A click
+        // anywhere else is the click that closes it, which the caller does by not offering
+        // a menu next frame — this crate only says where the menu is.
+        if let Some(menu) = &over.menu {
+            for (row, rect) in &menu.rows {
+                self.regions.push(Region::MenuItem {
+                    row: *row,
+                    rect: *rect,
+                });
+            }
+            self.regions.push(Region::Menu(menu.rect));
+        }
+        self.scrollbar = over.scroll;
+        if let Some((track, thumb)) = over.scroll {
             self.regions.push(Region::Scrollbar { track, thumb });
         }
-        if let Some(popover) = &popover {
+        if let Some(popover) = &over.popover {
             for (row, rect) in &popover.rows {
                 self.regions.push(Region::Profile {
                     row: *row,
@@ -747,7 +861,7 @@ impl Chrome {
             }
             self.regions.push(Region::Picker(popover.rect));
         }
-        if let Some(panel) = &panel {
+        if let Some(panel) = &over.panel {
             for (line, part, rect) in &panel.controls {
                 self.regions.push(Region::Setting {
                     line: *line,
@@ -757,16 +871,6 @@ impl Chrome {
             }
             self.regions.push(Region::Settings(panel.rect));
         }
-
-        let grid = Rect::between(left, top, size.width, size.height - bottom);
-        self.layout = Layout {
-            top,
-            left,
-            bottom,
-            grid,
-            settings_scroll,
-        };
-        self.layout
     }
 
     /// Notice a change of active tab, and start the indicator moving if it is one.

@@ -28,6 +28,7 @@ use zet_vt::{Modes, Pos};
 use crate::action::Action;
 use crate::find::Find;
 use crate::hold::Hold;
+use crate::menu;
 use crate::picker::Picker;
 use crate::settings;
 use crate::text::selection_text;
@@ -173,8 +174,25 @@ pub struct App {
     find: Find,
     /// The profile picker: whether a new tab is asking which shell to open.
     pick: Picker,
+    /// The context menu a right-click on a tab opened, if one is up.
+    menu: Option<TabMenu>,
     /// The hold a program has asked for on the frame while it repaints.
     hold: Hold,
+}
+
+/// The context menu that is open on a tab.
+///
+/// A tab number and the point it was asked for at, and no list of items: the items are
+/// [`menu::items`] of the tab count, read fresh while the menu is up. What makes that safe
+/// is that the menu is put away by every change to the tab set — see [`App::open_tab_with`],
+/// [`App::close_tab`] and [`App::reap`] — so the count it was drawn with is the count it is
+/// answered against. A number would otherwise be a position that moves.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TabMenu {
+    /// The tab it is about, by the number the strip draws.
+    pub tab: u32,
+    /// Where the pointer was when it was asked for, in logical pixels.
+    pub at: (f32, f32),
 }
 
 impl App {
@@ -220,6 +238,7 @@ impl App {
             families: Vec::new(),
             find: Find::default(),
             pick: Picker::default(),
+            menu: None,
             hold: Hold::default(),
         })
     }
@@ -534,6 +553,88 @@ impl App {
         }
     }
 
+    /// Open the context menu on a tab, at the point the pointer was.
+    ///
+    /// A tab that is not open opens nothing. The caller hit-tests a strip it drew, and the
+    /// tab that was under the pointer can have gone between that frame and this call — a
+    /// shell that exited, a chord that closed one — so the number is checked here rather
+    /// than trusted, and the menu that would have been about a tab nobody has is not made.
+    pub fn open_tab_menu(&mut self, tab: u32, at: (f32, f32)) {
+        if self.sessions.get(tab).is_some() {
+            self.menu = Some(TabMenu { tab, at });
+        }
+    }
+
+    /// The context menu that is open, if one is.
+    #[must_use]
+    pub const fn tab_menu(&self) -> Option<TabMenu> {
+        self.menu
+    }
+
+    /// The items the open menu offers, or nothing when no menu is up.
+    ///
+    /// Read from the live tab count every time rather than remembered when the menu was
+    /// opened, because the two cannot then disagree: there is one list, and it is this
+    /// one, and [`App::tab_menu_choose`] answers from the same call.
+    #[must_use]
+    pub fn tab_menu_items(&self) -> Vec<menu::Item> {
+        if self.menu.is_none() {
+            return Vec::new();
+        }
+        menu::items(self.sessions.len())
+    }
+
+    /// Put the context menu away.
+    pub const fn close_tab_menu(&mut self) {
+        self.menu = None;
+    }
+
+    /// Press an item of the open menu, by its place in [`App::tab_menu_items`].
+    ///
+    /// The menu goes away either way, because a click is an answer: a place that was not
+    /// offered — a click resolved against a list that has since changed — is answered by
+    /// the menu closing and nothing else happening.
+    pub fn tab_menu_choose(&mut self, at: usize) -> Vec<Command> {
+        let Some(open) = self.menu else {
+            return Vec::new();
+        };
+        // Read before the menu is taken, because what the menu offers is read off the
+        // open menu being up.
+        let item = self.tab_menu_items().get(at).copied();
+        self.menu = None;
+        // The tab is checked again here for the reason it is checked on the way in, and
+        // this is the check that matters: acting on a number that has moved would close
+        // the wrong terminal.
+        let (Some(item), true) = (item, self.sessions.get(open.tab).is_some()) else {
+            return Vec::new();
+        };
+        let (cols, rows) = self.grid_size();
+        match item.action {
+            menu::Action::NewTab => self.new_tab(cols, rows),
+            menu::Action::NewWindow => vec![Command::NewWindow],
+            menu::Action::Close => match self.close_tab(open.tab) {
+                // The tab the menu was about was the last one, which is the window's last
+                // tab: the same answer `close-tab` gives, for the same reason.
+                Ok(true) => vec![Command::Quit],
+                _ => Vec::new(),
+            },
+            menu::Action::CloseOthers => {
+                // The tab the menu is about stays, and is the one the user is left with:
+                // they aimed at it, so it is what they meant to keep.
+                self.activate(open.tab);
+                // From the top down, because closing renumbers what is below: taking #1
+                // first would make the number that was #3 into #2, and the walk would then
+                // close the wrong one — or find nothing where it was looking.
+                for number in self.sessions.numbers().into_iter().rev() {
+                    if number != open.tab {
+                        let _ = self.close_tab(number);
+                    }
+                }
+                Vec::new()
+            }
+        }
+    }
+
     /// A key aimed at the profile picker, and whether it took it.
     ///
     /// The caller asks this before [`App::key`], the way it asks [`App::find_key`], so an
@@ -606,6 +707,9 @@ impl App {
             Arc::clone(&self.waker),
         )?;
         self.blink.restart(Instant::now(), false);
+        // A menu that is up offers an item per how many tabs there are, so a tab opening
+        // moves every item below it. The menu goes rather than shifting under the pointer.
+        self.menu = None;
         Ok(number)
     }
 
@@ -620,6 +724,10 @@ impl App {
         let was_active = self.sessions.active() == Some(number);
         let result = self.sessions.close(number);
         self.drag = None;
+        // A tab's number is its position, so a tab closing moves the tab a menu is about.
+        // The menu goes rather than being re-aimed: what it was opened on is not what it
+        // would be about now.
+        self.menu = None;
         if was_active {
             // Closing the tab that was showing is a tab switch, whether or not the user
             // asked for one: the strip slides another tab into the gap, and the match
@@ -663,6 +771,11 @@ impl App {
             // shell that exits saying nothing does not, and the tab going is on its own
             // enough to leave the matches sitting over a different terminal.
             self.find.touch();
+        }
+        // The third door that changes the tab set, and the one nobody asked for: a shell
+        // that exits moves the numbers of every tab above it just as a close does.
+        if !reaped.is_empty() {
+            self.menu = None;
         }
         reaped
     }
@@ -2362,5 +2475,165 @@ mod tests {
         // can only half see hides the half they were following.
         let found = match_at((10, 0), (40, 0));
         assert_eq!(reveal_row(found, 0, 10), Some(10));
+    }
+
+    /// Where an action sits in the menu that is open.
+    ///
+    /// Found by action rather than written as a number, so a test that presses the fourth
+    /// item does not become a test that presses whatever is fourth after an item is added.
+    fn item_at(app: &App, action: menu::Action) -> usize {
+        app.tab_menu_items()
+            .iter()
+            .position(|item| item.action == action)
+            .expect("the menu offers this")
+    }
+
+    /// Two tabs, so a menu has a choice about which it is for.
+    fn two_tabs() -> App {
+        let mut app = app();
+        app.new_tab(80, 24);
+        app.new_tab(80, 24);
+        assert_eq!(app.tab_numbers(), vec![1, 2]);
+        app
+    }
+
+    #[test]
+    fn the_menu_a_right_click_opens_is_about_the_tab_it_was_opened_on() {
+        let mut app = two_tabs();
+
+        app.open_tab_menu(2, (400.0, 20.0));
+
+        let menu = app.tab_menu().expect("the menu is open");
+        assert_eq!(menu.tab, 2);
+        assert_eq!(menu.at, (400.0, 20.0));
+        let labels: Vec<&str> = app
+            .tab_menu_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert_eq!(
+            labels,
+            ["New tab", "New window", "Close tab", "Close other tabs"]
+        );
+    }
+
+    /// A right-click that was not on a tab opens nothing.
+    ///
+    /// The number is checked rather than trusted: the caller hit-tests a strip it drew,
+    /// and the tab that was under the pointer can have gone in between.
+    #[test]
+    fn a_menu_about_a_tab_that_is_not_open_is_no_menu() {
+        let mut app = two_tabs();
+
+        app.open_tab_menu(7, (400.0, 20.0));
+
+        assert!(
+            app.tab_menu().is_none(),
+            "there is no #7 for it to be about"
+        );
+    }
+
+    /// Closing a tab puts the menu away, because what the menu is about has moved.
+    ///
+    /// A tab's number is its position: close #1 of two and the tab this menu was opened on
+    /// is #1 now, so a menu that stayed up would close the wrong terminal.
+    #[test]
+    fn closing_a_tab_puts_the_menu_away() {
+        let mut app = two_tabs();
+        app.open_tab_menu(2, (10.0, 20.0));
+        assert!(app.tab_menu().is_some());
+
+        let _ = app.close_tab(1);
+
+        assert!(app.tab_menu().is_none(), "the tab it was about is #1 now");
+    }
+
+    /// Opening a tab puts the menu away, because the list the menu offers has changed.
+    ///
+    /// The item is answered by its place in the list, and the list depends on how many
+    /// tabs there are: a tab opening while the menu is up would move every item below it.
+    #[test]
+    fn opening_a_tab_puts_the_menu_away() {
+        let mut app = app();
+        app.new_tab(80, 24);
+        app.open_tab_menu(1, (10.0, 20.0));
+        assert_eq!(app.tab_menu_items().len(), 3, "no others to close yet");
+
+        app.new_tab(80, 24);
+
+        assert!(
+            app.tab_menu().is_none(),
+            "the menu now offers an item it was not drawn with"
+        );
+    }
+
+    /// Closing the other tabs leaves the one the menu was about, and showing.
+    #[test]
+    fn closing_the_others_leaves_the_tab_the_menu_was_about() {
+        let mut app = app();
+        app.new_tab(80, 24);
+        app.new_tab(80, 24);
+        app.new_tab(80, 24);
+        app.activate(3);
+        app.open_tab_menu(2, (10.0, 20.0));
+        let at = item_at(&app, menu::Action::CloseOthers);
+
+        let commands = app.tab_menu_choose(at);
+
+        assert!(commands.is_empty(), "the window still has a tab");
+        assert_eq!(app.tab_numbers(), vec![1], "the two others went");
+        assert_eq!(
+            app.active_number(),
+            Some(1),
+            "and what is left is the one the menu was about, not the one that was showing"
+        );
+        assert!(app.tab_menu().is_none(), "and the menu is away");
+    }
+
+    /// Closing the tab a menu is about from that menu is closing the window's last one.
+    #[test]
+    fn closing_the_only_tab_from_its_menu_asks_the_window_to_go() {
+        let mut app = app();
+        app.new_tab(80, 24);
+        app.open_tab_menu(1, (10.0, 20.0));
+        let at = item_at(&app, menu::Action::Close);
+
+        let commands = app.tab_menu_choose(at);
+
+        assert_eq!(commands, vec![Command::Quit]);
+        assert!(app.sessions().is_empty());
+    }
+
+    /// An item that was not offered does nothing, and the menu goes away anyway.
+    ///
+    /// The index comes from a click, and a click is answered against the list that was
+    /// drawn: with one tab open there is no fourth row, so the fourth place is nowhere.
+    #[test]
+    fn a_place_the_menu_did_not_offer_does_nothing() {
+        let mut app = app();
+        app.new_tab(80, 24);
+        app.open_tab_menu(1, (10.0, 20.0));
+
+        let commands = app.tab_menu_choose(3);
+
+        assert!(commands.is_empty());
+        assert_eq!(app.tab_numbers(), vec![1], "nothing happened to the tab");
+        assert!(app.tab_menu().is_none(), "and the menu is away");
+    }
+
+    #[test]
+    fn opening_a_new_window_from_the_menu_asks_for_one() {
+        let mut app = two_tabs();
+        app.open_tab_menu(2, (10.0, 20.0));
+        let at = item_at(&app, menu::Action::NewWindow);
+
+        let commands = app.tab_menu_choose(at);
+
+        assert_eq!(commands, vec![Command::NewWindow]);
+        assert_eq!(
+            app.tab_numbers(),
+            vec![1, 2],
+            "and nothing happened to the tabs"
+        );
     }
 }

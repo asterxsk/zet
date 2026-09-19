@@ -179,6 +179,68 @@ pub const RAIL_CELL_FLOOR: f32 = 24.0;
 /// The width of the settings panel.
 pub const PANEL_WIDTH: f32 = 380.0;
 
+/// The height of a row of a menu.
+pub const MENU_ROW: f32 = 28.0;
+
+/// The space either side of a menu's items, and above the first and below the last.
+pub const MENU_PAD: f32 = 16.0;
+
+/// The narrowest a menu gets, however short its items are.
+///
+/// A menu sized exactly to a two-word item is a sliver, and a sliver reads as a tooltip
+/// with something wrong with it rather than as a list to choose from.
+pub const MENU_MIN_WIDTH: f32 = 120.0;
+
+/// How wide a menu is for the items it holds.
+///
+/// Measured rather than fixed, so that a menu is as wide as what is in it: the items are
+/// words of whatever length the actions have, and a width chosen here would be a second
+/// place that has to be right about all of them. `measure` is how wide one item draws,
+/// which is the font's business and not this function's.
+#[must_use]
+pub fn menu_width(items: &[&str], mut measure: impl FnMut(&str) -> f32) -> f32 {
+    let widest = items
+        .iter()
+        .map(|item| measure(item))
+        .fold(0.0_f32, f32::max);
+    (widest + 2.0 * MENU_PAD).max(MENU_MIN_WIDTH)
+}
+
+/// Where a menu of `rows` items goes when it is opened at a point.
+///
+/// The point is where the pointer was, which is a hint about where the menu belongs and
+/// not a fact about where it fits. When there is no room below, it opens upward with its
+/// bottom edge at the pointer; when there is no room to the right, it opens leftward the
+/// same way. Clamping instead would pin the menu against the window's edge with the
+/// pointer somewhere in the middle of it, which for a menu means the item under the
+/// pointer is not the one that was aimed at.
+///
+/// A menu larger than the window has nowhere to flip to, and is narrowed or shortened to
+/// the window and pinned to the top-left corner. A caller that offers more items than the
+/// window is tall has a menu whose bottom rows cannot be reached, which is the one case
+/// this function cannot answer for: the answer is to offer fewer items.
+#[must_use]
+pub fn menu_rect(at: (f32, f32), width: f32, rows: usize, window: Size) -> Rect {
+    let width = width.min(window.width);
+    let height = (MENU_ROW * rows as f32 + 2.0 * MENU_PAD).min(window.height);
+    let x = if at.0 + width > window.width {
+        at.0 - width
+    } else {
+        at.0
+    };
+    let y = if at.1 + height > window.height {
+        at.1 - height
+    } else {
+        at.1
+    };
+    Rect::new(
+        x.max(0.0).min(window.width - width),
+        y.max(0.0).min(window.height - height),
+        width,
+        height,
+    )
+}
+
 /// The height of the find bar.
 pub const FIND_BAR_HEIGHT: f32 = 32.0;
 

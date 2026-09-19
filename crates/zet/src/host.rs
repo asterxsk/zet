@@ -713,6 +713,16 @@ impl Host {
                 .filter(|line| lines.get(*line).is_some_and(|line| line.kind().is_some()))
         });
 
+        // The menu's words, alive for as long as `ChromeInput` borrows them. The items are
+        // rebuilt from the tab count every frame by the same call the chooser answers from,
+        // so the row under the pointer and the thing that happens cannot part company.
+        let menu_items = self.app.tab_menu_items();
+        let menu_words: Vec<&str> = menu_items.iter().map(|item| item.label).collect();
+        let menu = self.app.tab_menu().map(|menu| zet_ui::MenuLine {
+            items: &menu_words,
+            at: menu.at,
+        });
+
         let input = ChromeInput {
             palette: &self.palette,
             tabs: &tabs,
@@ -723,6 +733,7 @@ impl Host {
             settings_focus: focused,
             find: finding.line,
             picker,
+            menu,
             window_title: APP_NAME,
             size: Size {
                 width: width as f32,
@@ -1008,6 +1019,13 @@ impl Host {
             return;
         }
 
+        // An open menu's one key. Before the picker, because a menu is the thing the user
+        // opened most recently and the thing drawn over everything else.
+        if self.menu_key(&translated) {
+            self.redraw();
+            return;
+        }
+
         // The profile picker's four keys, while it is asking. Before the find bar,
         // because a question about a new tab is the thing on top and the thing the user
         // has just opened, and a `Down` that scrolled a find result instead of moving the
@@ -1074,6 +1092,26 @@ impl Host {
             window.request_redraw();
         }
         self.carry_out(loop_, commands);
+    }
+
+    /// A key aimed at an open context menu, and whether the menu took it.
+    ///
+    /// `Escape`, and nothing else. Every action a menu offers is on a chord — that is what
+    /// PRODUCT.md's "fully keyboard-operable" is paid for with, and it is why a menu is a
+    /// mouse affordance rather than a keyboard one — so the only key the menu itself needs
+    /// is the one that puts it away. Arrow keys are deliberately not named here: they
+    /// reach the shell, where they are history and cursor movement, and a menu that took
+    /// them would be a menu that made the terminal behind it stop working while it was up.
+    fn menu_key(&mut self, event: &KeyEvent) -> bool {
+        if event.kind == KeyKind::Release
+            || event.key != Key::Escape
+            || !event.mods.is_empty()
+            || self.app.tab_menu().is_none()
+        {
+            return false;
+        }
+        self.app.close_tab_menu();
+        true
     }
 
     /// A key aimed at the settings panel, and whether the panel took it.
@@ -1290,6 +1328,21 @@ impl Host {
             }
             match button {
                 WinitButton::Left => {
+                    // A click on an open menu is the menu's, wherever it lands: one that
+                    // takes an item does that and nothing else, and one anywhere else is
+                    // the click that puts the menu away. That is what every menu on the
+                    // system does, and it is the reason a menu can be opened over the
+                    // thing it is about without the first click doing two things at once.
+                    if self.app.tab_menu().is_some() {
+                        if let Hit::MenuItem(row) = self.chrome.hit(x as f32, y as f32) {
+                            let commands = self.app.tab_menu_choose(row);
+                            self.carry_out(loop_, commands);
+                        } else {
+                            self.app.close_tab_menu();
+                        }
+                        window.request_redraw();
+                        return;
+                    }
                     if self.chrome_press(x, y, loop_) {
                         return;
                     }
@@ -1314,6 +1367,22 @@ impl Host {
                         // thing on screen has changed even though the drag has not
                         // started yet.
                         window.request_redraw();
+                    }
+                }
+                WinitButton::Right => {
+                    // The tab strip's context menu, and only on a tab: a right-click
+                    // anywhere else is the program's, which is what a program that asks
+                    // for mouse reporting expects. An open menu anywhere goes first, so
+                    // that a right-click is one of the things that dismisses it.
+                    if self.app.tab_menu().is_some() {
+                        self.app.close_tab_menu();
+                        window.request_redraw();
+                        return;
+                    }
+                    if let Hit::Tab(number) = self.chrome.hit(x as f32, y as f32) {
+                        self.app.open_tab_menu(number, (x as f32, y as f32));
+                        window.request_redraw();
+                        return;
                     }
                 }
                 WinitButton::Middle => {
@@ -1451,7 +1520,14 @@ impl Host {
             // rather than passed on: the terminal behind it stays visible, which
             // DESIGN.md gives as the reason the panel exists at all, but a click on a
             // surface is a click on the surface and not on what shows through it.
-            Hit::Settings => true,
+            //
+            // A menu row and a menu's own surface are swallowed for the same reason and are
+            // not reachable from here anyway: the press that lands on a menu is answered
+            // before this is ever asked, in the left-button arm, because a menu takes the
+            // whole click rather than sharing it with what it covers. The arms are here
+            // because a `Hit` has to be answered somewhere, and answering "the menu's" with
+            // "not the chrome's" would hand a click on a menu to the terminal underneath it.
+            Hit::Settings | Hit::MenuItem(_) | Hit::Menu => true,
             Hit::None => false,
         };
         // Asked once, here, rather than in each arm that happens to change something.

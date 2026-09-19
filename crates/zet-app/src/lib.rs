@@ -47,6 +47,7 @@ pub mod action;
 pub mod app;
 pub mod find;
 pub mod hold;
+pub mod menu;
 pub mod picker;
 pub mod settings;
 pub mod text;

@@ -18,9 +18,9 @@ use zet_font::{GlyphSpec, Metrics, Weight};
 use zet_render::{Frame, Placement, Quad};
 
 use crate::fonts::GlyphSource;
-use crate::geometry::ROW_HEIGHT;
+use crate::geometry::{MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, ROW_HEIGHT, menu_rect, menu_width};
 use crate::{
-    Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, PickerLine, Rect, Row,
+    Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, MenuLine, PickerLine, Rect, Row,
     ScrollState, Scrollbar, SettingLine, SettingPart, Size, TabInfo, thumb_offset,
 };
 
@@ -166,6 +166,7 @@ fn input<'a>(palette: &'a Palette, tabs: &'a [TabInfo], size: Size) -> ChromeInp
         settings_focus: None,
         find: None,
         picker: None,
+        menu: None,
         window_title: "zet",
         size,
         scale: 1.0,
@@ -2737,5 +2738,264 @@ fn the_popover_stays_inside_a_window_too_short_to_hold_it() {
     assert!(
         rows.len() < profiles.len(),
         "a window this short cannot have shown every shell"
+    );
+}
+
+/// A menu opens under the pointer when there is room for it there.
+#[test]
+fn a_menu_opens_from_the_point_it_was_asked_for() {
+    let window = Size {
+        width: 800.0,
+        height: 600.0,
+    };
+    let rect = menu_rect((100.0, 100.0), 160.0, 3, window);
+    assert_eq!(
+        rect,
+        Rect::new(100.0, 100.0, 160.0, 3.0 * MENU_ROW + 2.0 * MENU_PAD)
+    );
+}
+
+/// Asked for too near the right edge, it moves left rather than hanging off.
+///
+/// A menu half outside the window is a menu whose items cannot be read or clicked, and
+/// the point it was asked for is a hint about where it goes rather than a fact about it.
+#[test]
+fn a_menu_at_the_right_edge_moves_left_until_it_fits() {
+    let window = Size {
+        width: 800.0,
+        height: 600.0,
+    };
+    let rect = menu_rect((790.0, 100.0), 160.0, 3, window);
+    assert!(
+        (rect.right() - 790.0).abs() < f32::EPSILON,
+        "it moved to the other side of the pointer"
+    );
+    assert_eq!(
+        rect,
+        Rect::new(630.0, 100.0, 160.0, 3.0 * MENU_ROW + 2.0 * MENU_PAD),
+        "which is its width back from there"
+    );
+}
+
+/// Asked for too near the bottom, it opens upward from the pointer.
+///
+/// Clamping would pin it to the bottom edge with the pointer somewhere in the middle of
+/// it, which for a menu means the item under the pointer is not the one that was aimed
+/// at. Flipping keeps the whole menu on screen and keeps it next to the thing it is
+/// about.
+#[test]
+fn a_menu_at_the_bottom_edge_opens_upward_from_the_pointer() {
+    let window = Size {
+        width: 800.0,
+        height: 600.0,
+    };
+    let rect = menu_rect((100.0, 590.0), 160.0, 3, window);
+    assert_eq!(
+        rect,
+        Rect::new(
+            100.0,
+            590.0 - 3.0 * MENU_ROW - 2.0 * MENU_PAD,
+            160.0,
+            3.0 * MENU_ROW + 2.0 * MENU_PAD
+        ),
+        "it opened upward, so its bottom edge is where the pointer is"
+    );
+}
+
+/// A menu taller or wider than the window is pinned rather than pushed off the far side.
+#[test]
+fn a_menu_bigger_than_the_window_is_pinned_to_the_corner() {
+    let window = Size {
+        width: 200.0,
+        height: 80.0,
+    };
+    let rect = menu_rect((150.0, 70.0), 260.0, 10, window);
+    assert_eq!(
+        rect,
+        Rect::new(0.0, 0.0, 200.0, 80.0),
+        "pinned to the corner: a menu is never wider or taller than the window"
+    );
+}
+
+/// A point outside the window still puts the menu inside it.
+#[test]
+fn a_point_outside_the_window_puts_the_menu_at_the_edge() {
+    let window = Size {
+        width: 800.0,
+        height: 600.0,
+    };
+    let rect = menu_rect((-20.0, -5.0), 160.0, 3, window);
+    assert_eq!(
+        rect,
+        Rect::new(0.0, 0.0, 160.0, 3.0 * MENU_ROW + 2.0 * MENU_PAD)
+    );
+}
+
+/// A menu is as wide as its widest item, and never narrower than the floor.
+#[test]
+fn a_menu_is_as_wide_as_its_widest_item() {
+    let measure = |text: &str| text.len() as f32 * 8.0;
+    assert!(
+        (menu_width(&["New tab", "Close others"], measure) - (12.0 * 8.0 + 2.0 * MENU_PAD)).abs()
+            < f32::EPSILON,
+        "the widest item plus the padding on both sides"
+    );
+    assert!(
+        (menu_width(&["Go"], measure) - MENU_MIN_WIDTH).abs() < f32::EPSILON,
+        "a one-word menu is not a sliver"
+    );
+    assert!(
+        (menu_width(&[], measure) - MENU_MIN_WIDTH).abs() < f32::EPSILON,
+        "nor is an empty one, which never happens and still has a floor"
+    );
+}
+
+/// The rectangle the open menu published.
+fn menu_rect_of(chrome: &Chrome) -> Rect {
+    chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Menu(rect) => Some(*rect),
+            _ => None,
+        })
+        .expect("a menu was open")
+}
+
+/// Draw a chrome with a menu open at a point, and hand back the layout.
+fn open_menu_at(palette: &Palette, tabs: &[TabInfo], items: &[&str], at: (f32, f32)) -> Chrome {
+    let size = window();
+    let mut chrome = chrome();
+    let mut base = input(palette, tabs, size);
+    base.menu = Some(MenuLine { items, at });
+    draw(&mut chrome, &base);
+    chrome
+}
+
+/// A click on a menu row is answered with that row, and the row under the pointer is the
+/// one the menu filled.
+#[test]
+fn a_menu_answers_a_click_with_the_row_that_was_pressed() {
+    let palette = Palette::instrument();
+    let items = ["New tab", "New window", "Close", "Close others"];
+    let tabs = tabs(&[1, 2]);
+    let chrome = open_menu_at(&palette, &tabs, &items, (200.0, 100.0));
+
+    // The first row is one padding below the top of the menu, and half a row past that.
+    let first = MENU_PAD + MENU_ROW / 2.0;
+    assert_eq!(
+        chrome.hit(200.0 + MENU_PAD, 100.0 + first),
+        Hit::MenuItem(0)
+    );
+    assert_eq!(
+        chrome.hit(200.0 + MENU_PAD, 100.0 + first + MENU_ROW),
+        Hit::MenuItem(1)
+    );
+    assert_eq!(
+        chrome.hit(200.0 + MENU_PAD, 100.0 + first + 3.0 * MENU_ROW),
+        Hit::MenuItem(3)
+    );
+}
+
+/// The menu's own padding takes the click rather than passing it to the shell behind.
+#[test]
+fn a_click_on_a_menu_s_padding_is_the_menu_s() {
+    let palette = Palette::instrument();
+    let items = ["New tab", "Close"];
+    let tabs = tabs(&[1, 2]);
+    let chrome = open_menu_at(&palette, &tabs, &items, (200.0, 100.0));
+
+    assert_eq!(chrome.hit(200.0 + 2.0, 100.0 + 2.0), Hit::Menu);
+    assert_eq!(
+        chrome.hit(200.0 + MENU_PAD, 100.0 + MENU_PAD + 2.0 * MENU_ROW + 2.0),
+        Hit::Menu,
+        "below the last row is still the menu"
+    );
+}
+
+/// A point outside an open menu is not the menu's, so the click reaches what is under it.
+#[test]
+fn a_click_outside_an_open_menu_goes_to_what_is_under_it() {
+    let palette = Palette::instrument();
+    let items = ["New tab", "Close"];
+    let tabs = tabs(&[1, 2]);
+    let chrome = open_menu_at(&palette, &tabs, &items, (200.0, 100.0));
+
+    let rect = menu_rect_of(&chrome);
+    assert_eq!(
+        chrome.hit(rect.right() + 4.0, rect.y + 4.0),
+        Hit::None,
+        "to the right of it is the grid"
+    );
+    assert_eq!(
+        chrome.hit(rect.x + 4.0, rect.bottom() + 4.0),
+        Hit::None,
+        "and below it too"
+    );
+}
+
+/// An open menu is what a click on it lands on, even where the settings panel is behind it.
+///
+/// The menu is drawn after everything and hit-tested before everything. The click that
+/// dismisses a menu has to be the click that does not also press what was underneath it,
+/// or dismissing the menu and setting an option would be one gesture — which is the same
+/// rule the panel and the picker follow, one level further up.
+#[test]
+fn an_open_menu_wins_the_point_it_covers() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let mut base = input(&palette, &tabs, window());
+    base.settings_open = true;
+    base.settings = &lines;
+    // Where a control is has to be drawn to be known, so the panel is drawn once without
+    // the menu to find one, and again with the menu opened on top of it.
+    draw(&mut chrome, &base);
+    let (x, y) = control_rect(&chrome, 1).center();
+    base.menu = Some(MenuLine {
+        items: &["Close"],
+        at: (x, y),
+    });
+    draw(&mut chrome, &base);
+
+    let rect = menu_rect_of(&chrome);
+    let control = control_rect(&chrome, 1);
+    // The menu flipped leftward, so its right edge is the pointer and the pointer is the
+    // control's centre: the two overlap over the control's left half rather than on that
+    // exact point, and a point in the overlap is what the test needs.
+    let (x, y) = (control.x + 2.0, control.center().1);
+    assert!(
+        rect.contains(x, y) && control.contains(x, y),
+        "the menu has to cover part of a panel control for this to be a test"
+    );
+    assert_eq!(
+        chrome.hit(x, y),
+        Hit::Menu,
+        "the menu is what is there now, not the control it was opened over"
+    );
+}
+
+/// A menu is measured from its items: a longer one is wider, and the floor still holds.
+#[test]
+fn a_menu_is_as_wide_as_what_is_in_it() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let short = open_menu_at(&palette, &tabs, &["Close"], (100.0, 100.0));
+    let long = open_menu_at(
+        &palette,
+        &tabs,
+        &["Close every other tab and start again"],
+        (100.0, 100.0),
+    );
+
+    assert_eq!(
+        menu_rect_of(&short),
+        Rect::new(100.0, 100.0, MENU_MIN_WIDTH, MENU_ROW + 2.0 * MENU_PAD),
+        "a one-word menu is the floor and no narrower"
+    );
+    assert!(
+        menu_rect_of(&long).width > menu_rect_of(&short).width,
+        "a longer item makes a wider menu"
     );
 }

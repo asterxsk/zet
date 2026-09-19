@@ -15,7 +15,8 @@ use crate::ScrollState;
 use crate::SettingLine;
 use crate::SettingPart;
 use crate::geometry::{
-    FIND_BAR_HEIGHT, PANEL_WIDTH, Rect, SCROLLBAR, SCROLLBAR_HOVER, SCROLLBAR_MIN_THUMB,
+    FIND_BAR_HEIGHT, MENU_PAD, MENU_ROW, PANEL_WIDTH, Rect, SCROLLBAR, SCROLLBAR_HOVER,
+    SCROLLBAR_MIN_THUMB,
 };
 use crate::paint::{Painter, TextStyle};
 
@@ -193,6 +194,76 @@ pub(crate) fn profile_picker(
     }
 
     Popover { rect, rows }
+}
+
+/// What a menu drew, so the caller can hit-test it.
+pub(crate) struct Menu {
+    /// The menu itself, which takes a click on its padding rather than passing it on.
+    pub rect: Rect,
+    /// Every row that was drawn, and the item it offers.
+    pub rows: Vec<(usize, Rect)>,
+}
+
+/// Draw a context menu and answer where it went.
+///
+/// The same surface as the picker — `surface-raised` behind a hairline — opened at the
+/// pointer rather than pinned to a corner, because a menu is about the thing under the
+/// pointer and a menu somewhere else is a menu the user has to look for. Where it goes
+/// when there is no room is [`menu_rect`]'s decision, which is a plain function of the
+/// numbers and is tested as one.
+///
+/// The row under the pointer is filled. That is the panel's rule rather than the picker's:
+/// a control in the panel fills the half a click will take, and a menu row is one control
+/// whose whole face is the target, so the fill is the whole row. The lamp the picker uses
+/// would be wrong here — the picker's lamp says which of several rows is *chosen*, and in a
+/// menu nothing is chosen until it is clicked.
+///
+/// Nothing is dimmed or disabled. An item that cannot be done is not offered at all: a
+/// menu of greyed-out words is a menu that shows the user everything they cannot have, and
+/// the caller is the only thing that knows which those are.
+pub(crate) fn context_menu(
+    paint: &mut Painter<'_>,
+    input: &ChromeInput<'_>,
+    menu: &crate::MenuLine<'_>,
+) -> Menu {
+    let palette = *input.palette;
+    let width =
+        crate::geometry::menu_width(menu.items, |item| paint.width(item, item_style(&palette)));
+    let rect = crate::geometry::menu_rect(menu.at, width, menu.items.len(), input.size);
+    paint.fill(rect, palette.surface_raised);
+    border(paint, rect, palette.hairline);
+
+    let mut rows = Vec::with_capacity(menu.items.len());
+    let mut y = rect.y + MENU_PAD;
+    for (at, item) in menu.items.iter().enumerate() {
+        let row = Rect::new(rect.x, y, rect.width, MENU_ROW);
+        if input.pointer.is_some_and(|(x, y)| row.contains(x, y)) {
+            paint.fill(row, palette.hairline);
+        }
+        // The label is given the menu less its padding, so a long item is cut by the
+        // painter rather than running under the hairline — which cannot happen while the
+        // width is measured from the items, and is what keeps it true if it ever is not.
+        let text = Rect::new(
+            row.x + MENU_PAD,
+            row.y,
+            (row.width - 2.0 * MENU_PAD).max(0.0),
+            row.height,
+        );
+        paint.centered(item, text, item_style(&palette));
+        rows.push((at, row));
+        y += MENU_ROW;
+    }
+
+    Menu { rect, rows }
+}
+
+/// How a menu's items are set.
+///
+/// The panel's label size and `ink`, because a menu is a list of words to read and press
+/// rather than a value to read off: the picker's dimmer `ink-mid` is for rows that are
+/// being chosen between, and every row of a menu is a thing the user can have.
+fn item_style(palette: &zet_config::Palette) -> TextStyle {
+    TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink)
 }
 
 /// What the panel drew, so the caller can hit-test it and keep its scroll honest.
