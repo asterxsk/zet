@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Install — zet</title>
-<meta name="description" content="There is no installer for zet yet. Build the binary from source.">
+<meta name="description" content="Download the installer, or build zet from source.">
 <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
@@ -28,7 +28,7 @@
     </a>
     <span class="topbar__meta">
       <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
-      <span class="ver">v0.1.0</span>
+      <span class="ver">v0.1.2</span>
     </span>
   </div>
 </header>
@@ -70,17 +70,18 @@
     <article class="doc">
       <p class="eyebrow">Start</p>
       <h1>Install</h1>
-      <p class="lede">There is no published installer and no published download. zet is built from
-      source, either as a bare binary or through the installer script in <code>packaging/</code>.</p>
+      <p class="lede">Download the installer from the
+      <a href="https://github.com/asterxsk/zet/releases/latest">latest release</a>, or build zet from
+      source — either as a bare binary or through the installer script in
+      <code>packaging/</code>.</p>
 
       <div class="callout">
-        <span class="callout__label">Nothing is published</span>
-        <p><code>packaging/zet.iss</code> builds a per-user installer, and it has never been shipped.
-        <code>.github/workflows/release.yml</code> publishes two artifacts when a <code>v*</code> tag
-        is pushed — the bare binary and the installer — with a <code>SHA256SUMS</code> digest beside
-        them, but no such tag has been pushed: the changelog's first release is still marked
-        unreleased, and the repository has no releases. Neither the installer nor the binary is
-        code-signed, so SmartScreen warns on first run whichever way you get it.</p>
+        <span class="callout__label">Neither artifact is code-signed</span>
+        <p>Every release carries two artifacts and a <code>SHA256SUMS</code> digest beside them:
+        <code>zet-&lt;version&gt;-x86_64-pc-windows-msvc.exe</code>, which is the terminal and nothing
+        else, and <code>zet-&lt;version&gt;-setup.exe</code>, which is the per-user installer built by
+        <code>packaging/zet.iss</code>. Neither is Authenticode-signed, so SmartScreen warns on first
+        run whichever way you get it. The digest file is the thing to check against.</p>
       </div>
 
       <h2>Requirements</h2>
@@ -139,11 +140,12 @@ zet --version                 <span class="c"># print the version</span></code><
       <h2>The installer</h2>
 
       <p><code>packaging/zet.iss</code> is an <a href="https://jrsoftware.org/isinfo.php">Inno
-      Setup</a> script, and it has never been published. To build it by hand you need Inno Setup 6.3
-      or newer on <code>PATH</code> as <code>ISCC.exe</code>:</p>
+      Setup</a> script. Every release is built by running it, and the installer it produces is the
+      one linked at the top of this page. To build it by hand you need Inno Setup 6.3 or newer on
+      <code>PATH</code> as <code>ISCC.exe</code>:</p>
 
 <pre><code>cargo build --release -p zet
-ISCC.exe /DVersion=0.1.0 /O"dist" packaging\zet.iss</code></pre>
+ISCC.exe /DVersion=0.1.2 /O"dist" /F"zet-0.1.2-setup" packaging\zet.iss</code></pre>
 
       <p><code>/DVersion</code> must be the version <code>Cargo.toml</code> carries. The release
       workflow passes the tag it is releasing, having already checked that the two agree.</p>
@@ -236,7 +238,7 @@ ISCC.exe /DVersion=0.1.0 /O"dist" packaging\zet.iss</code></pre>
 
 <footer class="footer">
   <div class="footer__inner">
-    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>zet documentation. The binary is <span class="ver">v0.1.2</span> and pre-alpha.</span>
     <span>
       <a href="https://github.com/asterxsk/zet">GitHub</a> ·
       <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or

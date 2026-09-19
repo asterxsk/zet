@@ -34,7 +34,7 @@ By hand, with Inno Setup 6.3 or newer on `PATH` as `ISCC.exe`:
 
 ```sh
 cargo build --release -p zet
-ISCC.exe /DVersion=0.2.0 /O"dist" packaging\zet.iss
+ISCC.exe /DVersion=0.1.2 /O"dist" /F"zet-0.1.2-setup" packaging\zet.iss
 ```
 
 `/DVersion` must be the version `Cargo.toml` carries. The release workflow passes the
@@ -149,8 +149,9 @@ uses most.
 
 ## What this does not do
 
-- **There is no published installer.** `zet.iss` builds one; no release has shipped it.
+- **The installer is not the update path.** Every release publishes it, and
+  `zet --update` does not use it: the updater replaces the running `zet.exe` in place,
+  so nothing runs the setup except a person. The installer is for the first install and
+  for uninstalling.
 - **No code signing.** The installer and the binary are unsigned, so SmartScreen warns
   on first run. `README.md` and `SECURITY.md` say what that costs you.
-- **No automatic update path through the installer.** `zet-update` is written but not
-  wired to the binary, so nothing runs the setup except a person.

@@ -9,11 +9,41 @@ counts as a breaking change in a terminal, is in
 
 ## [Unreleased]
 
+Nothing yet. The next release's changes go here.
+
 Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compatibility; see
 [Versioning](README.md#versioning).
 
+## [0.1.2] — 2026-09-19
+
+The first release since 0.1.0. It is the window finishing itself: a tab's context menu, the
+settings panel's arrival, and a set of places where the code and the design document had
+drifted apart without either of them saying so.
+
 ### Added
 
+- **`zet-ui`** — the settings panel slides in from the right edge over 180ms, which DESIGN.md had
+  asked for since the panel was first drawn and which the panel did not do.
+  - It arrives by translating rather than by growing or fading in place. A surface that widens reads
+    as the terminal being resized and one that fades reads as the terminal having changed, and
+    neither is what happened. The right edge is the window's and stays there, so the edge that
+    arrives is the left one — and the controls are laid out from the rectangle that moves, because a
+    surface that slid in over controls already in place would be worse than no motion at all.
+  - The slide starts on the frame the panel goes from shut to open, not on the first frame it is seen
+    open: a transition needs two states, and a window that started with its panel up would otherwise
+    drag it in from off the right edge. Closing starts nothing. A slide *out* would leave the panel
+    drawn, and therefore hit-testable, for the length of the animation, and every control in it
+    would take a click meant for the terminal behind it.
+  - Reduce motion puts it in place on the frame it opens, which is what the document already said the
+    setting does — and which was true before this only because there was no slide for the setting to
+    reach.
+  - `strip::progress` takes the span as well as the elapsed time now. It was always a function of
+    both and simply had the indicator's 140ms baked in; the panel's 180ms is the same curve over a
+    different span.
+  - DESIGN.md's Motion section is no longer at war with itself. It listed the slide among the things
+    that are instant and then said no other transition existed. It now names two authored moments
+    and says what each is for: the bar travels because it answers "where am I now", and the panel
+    slides because it is a change of place rather than a change of state.
 - **`zet-ui` / `zet-app` / `zet`** — a right-click on a tab, which the window used to swallow.
   DESIGN.md gains a section for it, because a menu that is the only one in the window is a
   decision about the window and not about one gesture.
@@ -357,6 +387,27 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
 
 ### Fixed
 
+- **`zet-ui`** — a vertical window with no tabs drew its rail, and section headings were drawn in
+  whatever case the app spelled them in.
+  - The rail is the vertical strip's surface, and "the strip is simply absent" is written about the
+    whole strip. The layout already hands the grid the entire window once there is no row to put a
+    rail beside, so the rail was 48px of empty surface with a hairline through it, painted over the
+    first column of the terminal the shell is writing to. The guard was on the strip's position and
+    not on whether there was a strip at all.
+  - A heading is "12px uppercase with a hairline under it" and the size, the tracking, the weight and
+    the rule were all the panel's while the case was left to the app's string, so a heading the app
+    wrote as `Appearance` was drawn as `Appearance`. The case is a treatment the panel gives a
+    heading, not a spelling the configuration has. The test that holds it down also asserts that the
+    row labels were left alone: a blanket upper-case would satisfy the heading and shout the panel.
+- **`zet-app`** — the latency benchmark's cold start was one number where the interesting question
+  is whose number it is.
+  - It prints the split now: the config and discovery, the moment the pty was spawned, and what the
+    shell took after that. On the machine this was measured on, a cold start is 955ms of which zet's
+    own share is 100ms — and 90ms of that 100 is `wsl.exe --list --verbose`.
+  - The recorded 253ms from 0.1.0 is not reproducible for any shell on that machine today: `pwsh 7`
+    starts in 430ms before it reads a profile, and Windows PowerShell 5.1 in 1049ms. Criterion 1's
+    300ms is therefore not a statement about zet, and the split is what says so. It is left in the
+    document as it stands rather than quietly restated — see PRODUCT.md.
 - **`zet-session` / `zet-ui`** — a tab's number was the number it was opened with, so closing one
   left a hole in the strip and no way to close it.
   - The numbers were an identifier that happened to be printed: `Session` carried the number it was
@@ -914,7 +965,7 @@ Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compa
     and how long the entry that was found is, rather than each working it out from the directory's
     own length.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-09-19
 
 The first release, and the first point at which an archive is published. Not yet usable as a
 daily driver.
@@ -1002,5 +1053,6 @@ daily driver.
 - Update checks verify a `SHA256SUMS` digest before an archive is applied. Archives are not
   Authenticode-signed; see [SECURITY.md](SECURITY.md).
 
-[Unreleased]: https://github.com/asterxsk/zet/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/asterxsk/zet/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/asterxsk/zet/compare/v0.1.0...v0.1.2
 [0.1.0]: https://github.com/asterxsk/zet/releases/tag/v0.1.0

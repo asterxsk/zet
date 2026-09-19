@@ -28,7 +28,7 @@
     </a>
     <span class="topbar__meta">
       <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
-      <span class="ver">v0.1.0</span>
+      <span class="ver">v0.1.2</span>
     </span>
   </div>
 </header>
@@ -83,14 +83,57 @@
       bracketed paste are standards; they change when the standards change. What counts as breaking
       here is a keybinding that stops working or starts doing something else, a configuration key
       that is renamed, moved, or removed, a theme file format change, and any change to
-      <code>zet-update</code>'s public API, which is published as a library.</p>
+      <code>zet-update</code>'s public API, which is written as a library even though it is not
+      published as one.</p>
 
       <h2>Unreleased</h2>
+
+      <p>Nothing yet. The next release's changes go here.</p>
 
       <p>Until 1.0.0 ships, each release is a <code>0.x</code> minor and any of them may break
       compatibility.</p>
 
+      <h2>0.1.2 — 2026-09-19</h2>
+
+      <p>The first release since 0.1.0. It is the window finishing itself: a tab's context menu, the
+      settings panel's arrival, and a set of places where the code and the design document had
+      drifted apart without either of them saying so.</p>
+
       <h3>Added</h3>
+
+      <h4>zet-ui — the settings panel slides in</h4>
+
+      <p>DESIGN.md had asked for the slide since the panel was first drawn and the panel appeared at
+      its final rectangle on every frame. The document was also at war with itself about it: the
+      slide was listed among the things that are instant, and the paragraph under the list said no
+      other transition existed.</p>
+
+      <ul>
+        <li>It arrives by translating rather than by growing or fading in place. A surface that
+        widens reads as the terminal being resized and one that fades reads as the terminal having
+        changed, and neither is what happened. The right edge is the window's and stays there, so the
+        edge that arrives is the left one — and the controls are laid out from the rectangle that
+        moves, because a surface that slid in over controls already in place would be worse than no
+        motion at all.</li>
+
+        <li>The slide starts on the frame the panel goes from shut to open, not on the first frame it
+        is seen open: a transition needs two states, and a window that started with its panel up
+        would otherwise drag it in from off the right edge. Closing starts nothing. A slide
+        <em>out</em> would leave the panel drawn, and therefore hit-testable, for the length of the
+        animation, and every control in it would take a click meant for the terminal behind it.</li>
+
+        <li>Reduce motion puts it in place on the frame it opens, which is what the document already
+        said the setting does — and which was true before this only because there was no slide for
+        the setting to reach.</li>
+
+        <li><code>strip::progress</code> takes the span as well as the elapsed time now. It was
+        always a function of both and simply had the indicator's 140ms baked in; the panel's 180ms is
+        the same curve over a different span.</li>
+
+        <li>DESIGN.md's Motion section now names two authored moments and says what each is for: the
+        bar travels because it answers "where am I now", and the panel slides because it is a change
+        of place rather than a change of state.</li>
+      </ul>
 
       <h4>zet-ui / zet-app / zet — a right-click on a tab</h4>
 
@@ -519,6 +562,42 @@
       anything to turn off: the only request zet can make is one you typed.</p>
 
       <h3>Fixed</h3>
+
+      <h4>zet-ui — the rail with no tabs, and the case of a heading</h4>
+
+      <p>A vertical window with no tabs drew its rail, and section headings were drawn in whatever
+      case the app spelled them in.</p>
+
+      <ul>
+        <li>The rail is the vertical strip's surface, and "the strip is simply absent" is written
+        about the whole strip. The layout already hands the grid the entire window once there is no
+        row to put a rail beside, so the rail was 48px of empty surface with a hairline through it,
+        painted over the first column of the terminal the shell is writing to. The guard was on the
+        strip's position and not on whether there was a strip at all.</li>
+
+        <li>A heading is "12px uppercase with a hairline under it" and the size, the tracking, the
+        weight and the rule were all the panel's while the case was left to the app's string, so a
+        heading the app wrote as <code>Appearance</code> was drawn as <code>Appearance</code>. The
+        case is a treatment the panel gives a heading, not a spelling the configuration has. The test
+        that holds it down also asserts that the row labels were left alone: a blanket upper-case
+        would satisfy the heading and shout the panel.</li>
+      </ul>
+
+      <h4>zet-app — the latency benchmark's cold start says whose number it is</h4>
+
+      <p>It was one number where the interesting question is whose number it is, so it prints the
+      split now: the config and discovery, the moment the pty was spawned, and what the shell took
+      after that.</p>
+
+      <ul>
+        <li>On the machine this was measured on, a cold start is 955ms of which zet's own share is
+        100ms — and 90ms of that 100 is <code>wsl.exe --list --verbose</code>.</li>
+
+        <li>The recorded 253ms from 0.1.0 is not reproducible for any shell on that machine today:
+        <code>pwsh 7</code> starts in 430ms before it reads a profile, and Windows PowerShell 5.1 in
+        1049ms. Criterion 1's 300ms is therefore not a statement about zet, and the split is what
+        says so.</li>
+      </ul>
 
       <h4>zet-session / zet-ui — a tab's number was the number it was opened with</h4>
 
@@ -1267,7 +1346,7 @@
       where the entry is now, and how long the entry that was found is, rather than each working it
       out from the directory's own length.</p>
 
-      <h2>0.1.0 — unreleased</h2>
+      <h2>0.1.0 — 2026-09-19</h2>
 
       <p>The first release, and the first point at which an archive is published. Not yet usable as a
       daily driver.</p>
@@ -1415,7 +1494,7 @@
 
 <footer class="footer">
   <div class="footer__inner">
-    <span>zet documentation. The binary is <span class="ver">v0.1.0</span> and pre-alpha.</span>
+    <span>zet documentation. The binary is <span class="ver">v0.1.2</span> and pre-alpha.</span>
     <span>
       <a href="https://github.com/asterxsk/zet">GitHub</a> ·
       <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or

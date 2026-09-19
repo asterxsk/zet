@@ -9,7 +9,9 @@ renderer.
 > keys` the one flag it does not implement. What is missing is the depth around that:
 > the update check exists as `zet --check-update` and `zet --update`, and never runs on launch —
 > nothing is planned to change that.
-> Nothing here is usable as a daily driver, and nothing here is worth installing.
+> It installs and runs as a daily driver for the person who wrote it, and pre-alpha is the
+> honest label for what that is worth to anyone else: expect the depth around the terminal to
+> move, and expect the configuration file to change under you.
 
 ## Why
 
@@ -34,8 +36,8 @@ The full product thinking is in [PRODUCT.md](PRODUCT.md); the design decisions a
 ## The crates
 
 The workspace is layered, and each crate is built on the ones above it in this list — except
-[`zet-update`](crates/zet-update), which stands alone and is the only crate here published as a
-library in its own right.
+[`zet-update`](crates/zet-update), which stands alone and is the only crate here structured as a
+library in its own right. None of them is on crates.io.
 
 | Crate | What it owns |
 |---|---|
@@ -89,8 +91,8 @@ terminal emits is not zet's API:
 - **Breaking.** A configuration key that is renamed, moved, or removed, or whose default
   changes in a way you would notice.
 - **Breaking.** A theme file format change.
-- **Breaking.** Any change to [`zet-update`](crates/zet-update)'s public API, which is published
-  as a library.
+- **Breaking.** Any change to [`zet-update`](crates/zet-update)'s public API, which is written as
+  a library even though it is not published as one.
 
 Every release is listed in [CHANGELOG.md](CHANGELOG.md), which is the authoritative record of
 what changed and which section of it is breaking.

@@ -53,8 +53,9 @@ impl Http {
     pub fn new(user_agent: &str) -> Self {
         let config = ureq::Agent::config_builder()
             .user_agent(user_agent)
-            // A check runs on launch. It must not be the reason a launch hangs, so the
-            // whole exchange is bounded rather than each step of it.
+            // Every check is a command a person typed and is waiting on, so the whole
+            // exchange is bounded rather than each step of it. A step-by-step bound adds
+            // up to a wait no one chose; one bound is the wait that was promised.
             .timeout_global(Some(Duration::from_secs(30)))
             .max_redirects(5)
             .build();
