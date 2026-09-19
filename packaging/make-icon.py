@@ -19,10 +19,16 @@ keeps the strokes from turning to grey mush in the sizes the taskbar actually us
 
     python packaging/make-icon.py            # writes zet.ico and zet.svg beside this file
     python packaging/make-icon.py --preview  # also writes a sheet of every size
+    python packaging/make-icon.py --docs docs  # also writes the docs site's icon set
 
 The SVG is emitted from the same numbers as the bitmap rather than drawn by hand, so
 the two cannot drift into being different marks. It is there for the places a `.ico`
 is no use — the documentation site, the README, anything that wants a scalable copy.
+
+`--docs` writes the four files the documentation site needs: a favicon, that same SVG,
+an opaque 180px touch icon, and the social card. They live in `docs/` and are committed,
+because GitHub Pages publishes that directory exactly as it is, with no build step to
+generate anything on the way out.
 
 The preview sheet goes to `D:\\Apps\\tmp\\zet\\` — never into the repository, because
 the only reason to look at it is to decide whether to change the numbers below.
@@ -101,8 +107,13 @@ SUPERSAMPLE = 8
 TMP = Path(r"D:\Apps\tmp\zet")
 
 
-def draw_mark(size: int) -> Image.Image:
-    """Render the mark at `size` pixels square, with an alpha channel."""
+def draw_mark(size: int, radius: float = TILE_RADIUS) -> Image.Image:
+    """Render the mark at `size` pixels square, with an alpha channel.
+
+    `radius` is the tile's corner radius in unit coordinates. The documentation site's
+    touch icon asks for `0`, because iOS masks that icon itself and a rounded tile
+    inside a rounded mask reads as a double border.
+    """
     scale = size * SUPERSAMPLE / UNIT
     canvas = Image.new("RGBA", (size * SUPERSAMPLE, size * SUPERSAMPLE), (0, 0, 0, 0))
     pen = ImageDraw.Draw(canvas)
@@ -112,7 +123,7 @@ def draw_mark(size: int) -> Image.Image:
 
     pen.rounded_rectangle(
         (0, 0, size * SUPERSAMPLE - 1, size * SUPERSAMPLE - 1),
-        radius=u(TILE_RADIUS),
+        radius=u(radius),
         fill=GROUND,
     )
 
@@ -223,6 +234,61 @@ def write_svg(path: Path) -> None:
     )
 
 
+# The sizes a browser actually asks a favicon for. Not `SIZES`: a 256px frame in a
+# favicon is sixty kilobytes of something nobody sees, and the browser picks from what
+# is offered rather than scaling one of them itself.
+FAVICON_SIZES = (16, 32, 48)
+
+# The social card. 1200x630 is the crop every unfurler uses, and the mark is centred at
+# a size that leaves the crop some ground on every side. There is no wordmark: the card
+# is the same rule as the icon, which is one lamp on a dark tile and nothing else.
+CARD = (1200, 630)
+CARD_MARK = 360
+
+TOUCH_ICON = 180
+
+
+def write_docs(directory: Path) -> None:
+    """Write the icon set the documentation site serves.
+
+    Everything here comes from the same geometry as `zet.ico`, for the same reason
+    `zet.svg` does: four copies of a mark are four marks, and only one of them gets
+    edited. The site has no build step — GitHub Pages publishes `docs/` exactly as it is
+    committed — so these are written into the repository and committed, not generated
+    during deployment.
+    """
+    assets = directory / "assets"
+    assets.mkdir(parents=True, exist_ok=True)
+
+    favicon = directory / "favicon.ico"
+    largest = draw_mark(FAVICON_SIZES[-1])
+    frames = [draw_mark(size) for size in FAVICON_SIZES[:-1]]
+    largest.save(
+        favicon,
+        format="ICO",
+        sizes=[(size, size) for size in FAVICON_SIZES],
+        append_images=frames,
+    )
+    print(f"wrote {favicon} ({favicon.stat().st_size} bytes, {len(FAVICON_SIZES)} sizes)")
+
+    vector = assets / "icon.svg"
+    write_svg(vector)
+    print(f"wrote {vector} ({vector.stat().st_size} bytes)")
+
+    # Square and opaque: iOS applies its own mask to a touch icon, and a transparent one
+    # is composited onto whatever the home screen happens to be showing.
+    touch = assets / f"icon-{TOUCH_ICON}.png"
+    draw_mark(TOUCH_ICON, radius=0).save(touch, format="PNG")
+    print(f"wrote {touch} ({touch.stat().st_size} bytes)")
+
+    card = assets / "og.png"
+    sheet = Image.new("RGBA", CARD, GROUND)
+    mark = draw_mark(CARD_MARK)
+    sheet.alpha_composite(mark, ((CARD[0] - mark.width) // 2, (CARD[1] - mark.height) // 2))
+    sheet.convert("RGB").save(card, format="PNG")
+    print(f"wrote {card} ({card.stat().st_size} bytes)")
+
+
 def write_preview(path: Path) -> None:
     """Write a sheet of every size, on a mid grey so both edges of the tile show."""
     marks = [draw_mark(size) for size in SIZES]
@@ -246,6 +312,12 @@ def main() -> None:
         action="store_true",
         help=r"also write a sheet of every size to D:\Apps\tmp\zet\icon-preview.png",
     )
+    parser.add_argument(
+        "--docs",
+        type=Path,
+        metavar="DIR",
+        help="also write the documentation site's icon set into DIR, which is `docs/`",
+    )
     arguments = parser.parse_args()
 
     target = Path(__file__).with_name("zet.ico")
@@ -255,6 +327,9 @@ def main() -> None:
     vector = Path(__file__).with_name("zet.svg")
     write_svg(vector)
     print(f"wrote {vector} ({vector.stat().st_size} bytes)")
+
+    if arguments.docs:
+        write_docs(arguments.docs)
 
     if arguments.preview:
         TMP.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Info — zet</title>
+<meta name="description" content="Why zet exists, what the eleven crates are, and what is deliberately not built yet.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<meta name="theme-color" content="#0a0b0d">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="zet">
+<meta property="og:title" content="Info — zet">
+<meta property="og:description" content="Why zet exists, what the eleven crates are, and what is deliberately not built yet.">
+<meta property="og:url" content="https://asterxsk.github.io/zet/info.html">
+<meta property="og:image" content="https://asterxsk.github.io/zet/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="topbar">
+  <div class="topbar__inner">
+    <a class="brand" href="index.html" aria-label="zet documentation">
+      <svg class="brand__mark" viewBox="0 0 22 16" aria-hidden="true" focusable="false">
+        <path d="M0.8 4.8 H6.8 L0.8 12 H6.8"></path>
+        <path d="M7.95 7.8 H15.05 A3.6 3.6 0 1 0 14.05 10.95"></path>
+        <path d="M18.7 2.6 V12"></path>
+        <path d="M16.9 5.2 H20.5"></path>
+      </svg>
+      <svg class="brand__hash" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+        <path d="M5.5 1.5 V14.5"></path>
+        <path d="M10.5 1.5 V14.5"></path>
+        <path d="M1.5 5.5 H14.5"></path>
+        <path d="M1.5 10.5 H14.5"></path>
+      </svg>
+    </a>
+    <span class="topbar__meta">
+      <span class="topbar__status"><span class="lamp" aria-hidden="true"></span>pre-alpha</span>
+      <span class="ver">v0.1.2</span>
+    </span>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="nav" aria-label="Documentation">
+    <div class="nav__section">
+      <p class="nav__label">Start</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="index.html">Overview</a></li>
+        <li><a class="nav__link" href="info.html" aria-current="page">Info</a></li>
+        <li><a class="nav__link" href="install.html">Install</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Using</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="configuration.html">Configuration</a></li>
+        <li><a class="nav__link" href="keybindings.html">Keybindings</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Reference</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="design.html">Design</a></li>
+        <li><a class="nav__link" href="architecture.html">Architecture</a></li>
+      </ul>
+    </div>
+    <div class="nav__section">
+      <p class="nav__label">Project</p>
+      <ul class="nav__list">
+        <li><a class="nav__link" href="changelog.html">Changelog</a></li>
+        <li><a class="nav__link" href="privacy.html">Privacy</a></li>
+        <li><a class="nav__link" href="security.html">Security</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main id="main" class="main">
+    <article class="doc">
+      <p class="eyebrow">Start</p>
+      <h1>Info</h1>
+      <p class="lede">Why zet exists, what the workspace is made of, and what is deliberately not
+      built yet.</p>
+
+      <h2>Why</h2>
+
+      <p>Windows terminals each make you give something up. Windows Terminal is good but its
+      rendering and configuration are Microsoft's to decide. Alacritty is fast but has no tabs and
+      no settings UI. WezTerm has everything and needs its own manual. None of them let you own the
+      part that matters.</p>
+
+      <p>There is also a correctness problem that only shows up when you live in a terminal.
+      Full-screen TUI programs flicker on every repaint unless the terminal honors synchronized
+      output. Alternate-screen apps leave artifacts on resize. Mouse reporting, truecolor, and
+      hyperlinks work in some terminals and half-work in others. You notice the first time you run
+      an agentic coding tool inside one.</p>
+
+      <p>zet owns its terminal engine end to end: the byte parser, the screen grid, the scrollback,
+      the reflow, the damage tracking, and the renderer. Nothing about the character pipeline is
+      borrowed. That is the point of the project, and the reason the rest of it exists.</p>
+
+      <h2>The crates</h2>
+
+      <p>The workspace is layered, and each crate is built on the ones above it in this list —
+      except <code>zet-update</code>, which stands alone. None of them is on crates.io, including
+      that one.</p>
+
+      <table>
+        <caption>Eleven crates, in dependency order</caption>
+        <thead>
+          <tr><th scope="col">Crate</th><th scope="col">What it owns</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="k">zet-vt</td><td>The terminal engine: parser, grid, scrollback, reflow, damage</td></tr>
+          <tr><td class="k">zet-pty</td><td>ConPTY sessions and shell profile discovery</td></tr>
+          <tr><td class="k">zet-config</td><td>TOML configuration, themes, the ANSI palette, hot reload</td></tr>
+          <tr><td class="k">zet-font</td><td>Font loading, rasterisation, the face chain and its fallback order</td></tr>
+          <tr><td class="k">zet-input</td><td>Key and mouse encoding, chords and keybindings</td></tr>
+          <tr><td class="k">zet-session</td><td>A session: a pty and a terminal with a read loop between them</td></tr>
+          <tr><td class="k">zet-render</td><td>The wgpu renderer: the glyph atlas, the grid and chrome pipelines</td></tr>
+          <tr><td class="k">zet-ui</td><td>The chrome's layout, and the embedded IBM Plex Sans it is drawn in</td></tr>
+          <tr><td class="k">zet-app</td><td>The application state machine: tabs, commands, themes, selection</td></tr>
+          <tr><td class="k">zet</td><td>The binary: the window, the event loop, and the frame host</td></tr>
+          <tr><td class="k">zet-update</td><td>Version identity, update checks, self-replacement</td></tr>
+        </tbody>
+      </table>
+
+      <p><a href="architecture.html">Architecture</a> describes how the layers fit together and what
+      each one is allowed to know.</p>
+
+      <h2>Not built yet</h2>
+
+      <p>The documentation states plainly what does not exist, because the status on the
+      <a href="index.html">overview</a> is the honest description of the code and a page that
+      rounded it up would be worse than no page.</p>
+
+      <ul>
+        <li>No update check on launch, and none is planned. <code>zet --check-update</code> reports whether a newer version exists and <code>zet --update</code> installs it, and those commands are the only things in zet that touch the network.</li>
+        <li>No <code>Report alternate keys</code>. The rest of the kitty keyboard protocol is there; this flag is dropped rather than echoed, because the host does not carry the physical key.</li>
+        <li>No library API. The crates are a workspace behind one binary, and none of them is published to crates.io; <code>zet-update</code> is structured as a standalone library but is not on the registry either.</li>
+        <li>No build for macOS or Linux. The pty layer is ConPTY, the window and clipboard layers are Win32, and the icon is compiled into the executable by a Windows resource compiler, so <code>cargo build</code> on either host fails at compile time. See <a href="install.html">Install</a>.</li>
+      </ul>
+    </article>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer__inner">
+    <span>zet documentation. The binary is <span class="ver">v0.1.2</span> and pre-alpha.</span>
+    <span>
+      <a href="https://github.com/asterxsk/zet">GitHub</a> ·
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-MIT">MIT</a> or
+      <a href="https://github.com/asterxsk/zet/blob/main/LICENSE-APACHE">Apache-2.0</a>
+    </span>
+  </div>
+</footer>
+</body>
+</html>

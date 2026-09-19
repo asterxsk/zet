@@ -1,15 +1,32 @@
 name: Release
 
 # Tag-driven: `git tag v0.2.0 && git push origin v0.2.0` is the whole release procedure.
+# There is no `workflow_dispatch`, because a manual run has no tag to name itself after and
+# `--verify-tag` would refuse it; re-running a failed release is `gh run rerun`.
 #
 # Two artifacts are published, and both are wanted. `zet-<version>-<target>.exe` is the
 # bare binary, which is what `zet-update` looks for by that exact suffix and replaces in
 # place. `zet-<version>-setup.exe` is the per-user installer from `packaging/`, which is
 # what a person downloads the first time.
+#
+# ONE TARGET BUILDS. The matrix below has a single row and the other two are written down
+# in the comment under it rather than as entries, because a job that exists and does
+# nothing shows a green tick that means nothing. zet is a Windows program by construction:
+#
+#   - `crates/zet-pty/src/lib.rs` gates `mod win` and the `Pty` re-export on
+#     `#[cfg(windows)]` and there is no `#[cfg(not(windows))]` anywhere in the workspace,
+#     so `zet-pty` has no pty to offer on a unix host at all. Its backend is ConPTY.
+#   - `crates/zet/src/platform.rs`, `clipboard.rs`, and `placement.rs` are Win32, and
+#     `windows-sys` is declared under `[target.'cfg(windows)'.dependencies]`, so on any
+#     other host those crates disappear and every symbol they provide goes unresolved.
+#   - `crates/zet/build.rs` compiles the icon and the version block into the executable
+#     with `winresource`, which is a Windows resource compiler.
+#
+# So `cargo build` on `macos-latest` or `ubuntu-latest` fails at compile time today. When
+# a port lands, adding its row to `strategy.matrix.include` is the whole change here.
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 # The default token is read-only. Publishing a release needs write, and nothing else here
 # needs anything at all.
@@ -20,26 +37,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release:
-    name: build and publish
+  version:
+    name: the tag and Cargo.toml agree
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.manifest.outputs.version }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          # `--verify-tag` has to be able to see the tag, and `--generate-notes` has to be
-          # able to see the one before it. A shallow checkout has neither.
-          fetch-depth: 0
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
 
       # The tag and the manifest are two places that both claim a version. If they
       # disagree, the release publishes a binary that reports a different version from the
       # one it was released under, and the updater then offers it forever: every launch
       # downloads the same archive, installs a binary that still calls itself old, and
       # asks again. Cheaper to refuse the tag.
-      - name: The tag and Cargo.toml agree on the version
+      - name: Read the version and check it against the tag
+        id: manifest
         shell: pwsh
         run: |
           $version = $null
@@ -61,6 +73,35 @@ jobs:
             throw "tag v$tag does not match the workspace version $version"
           }
           Write-Host "releasing $version"
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          # aarch64-apple-darwin (macos-latest) and x86_64-unknown-linux-gnu
+          # (ubuntu-latest) go here once there is a pty and a window that are not
+          # Windows. See the header of this file for the three things that block them.
+    # The signing secrets are read here rather than in each step's `if`, because the
+    # `secrets` context is not available to a step-level `if`. They are empty on a
+    # repository that has not set them, and every signing step below is skipped when they
+    # are — which is the state this repository is actually in, so the release stays
+    # unsigned and the documentation says so.
+    env:
+      SIGNING_PFX: ${{ secrets.WINDOWS_CODESIGN_PFX }}
+      SIGNING_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build --release --locked -p zet
@@ -68,43 +109,127 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          $version = '${{ github.ref_name }}'.TrimStart('v')
-          $target = 'x86_64-pc-windows-msvc'
-          $name = "zet-$version-$target.exe"
-          Copy-Item "target/release/zet.exe" $name
+          $version = '${{ needs.version.outputs.version }}'
+          $target = '${{ matrix.target }}'
+          New-Item -ItemType Directory -Force staging | Out-Null
+
+          $binary = "zet-$version-$target.exe"
+          Copy-Item "target/release/zet.exe" "staging/$binary"
 
           # The installer. Inno Setup is in the runner image; see packaging/README.md for
           # why it is built the way it is.
           ISCC.exe /Q "/DVersion=$version" /O"dist" /F"zet-$version-setup" packaging\zet.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
           $setup = "zet-$version-setup.exe"
-          Copy-Item "dist/$setup" $setup
+          Copy-Item "dist/$setup" "staging/$setup"
 
+      # Signs the binary and the installer, in that order, before anything is hashed.
+      # A digest taken before signing describes a file that is no longer the one being
+      # published, and the updater refuses a download whose SHA-256 does not match — so
+      # the order here is the difference between a release that installs and one that
+      # cannot.
+      - name: Sign
+        if: env.SIGNING_PFX != ''
+        shell: pwsh
+        run: |
+          $version = '${{ needs.version.outputs.version }}'
+          $target = '${{ matrix.target }}'
+          $pfx = Join-Path $env:RUNNER_TEMP 'zet-codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX))
+          try {
+            $files = @(
+              "staging/zet-$version-$target.exe",
+              "staging/zet-$version-setup.exe"
+            )
+            foreach ($file in $files) {
+              signtool sign /fd SHA256 /f $pfx /p $env:SIGNING_PASSWORD `
+                /tr http://timestamp.digicert.com /td SHA256 $file
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed on $file" }
+              signtool verify /pa $file
+              if ($LASTEXITCODE -ne 0) { throw "the signature on $file does not verify" }
+            }
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Say whether the artifacts are signed
+        shell: pwsh
+        run: |
+          if ($env:SIGNING_PFX -eq '') {
+            Write-Host '::notice::No signing certificate is configured, so this release is unsigned and SmartScreen will warn on first run. See SECURITY.md.'
+          } else {
+            Write-Host 'Signed with the configured certificate.'
+          }
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          $version = '${{ needs.version.outputs.version }}'
+          $target = '${{ matrix.target }}'
           # A digest per file, published beside them. The updater refuses an archive whose
           # SHA-256 does not match its line here, so a truncated or substituted download
           # never becomes the binary that runs.
-          $lines = @($name, $setup) | ForEach-Object {
-            "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLower())  $_"
+          $lines = @(
+            "zet-$version-$target.exe",
+            "zet-$version-setup.exe"
+          ) | ForEach-Object {
+            "$((Get-FileHash "staging/$_" -Algorithm SHA256).Hash.ToLower())  $_"
           }
-          [IO.File]::WriteAllText("$PWD/SHA256SUMS", ($lines -join "`n") + "`n")
-          Get-Content SHA256SUMS
+          [IO.File]::WriteAllText("$PWD/staging/SHA256SUMS", ($lines -join "`n") + "`n")
+          Get-Content staging/SHA256SUMS
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zet-${{ matrix.target }}
+          path: staging/*
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: [version, build]
+    runs-on: windows-latest
+    steps:
+      # `gh release create` reads the repository out of the checkout it is standing in,
+      # and `--verify-tag` needs the tag to be in it. `--generate-notes` needs the history
+      # back to the previous tag, which a shallow clone does not have.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: What will be published
+        shell: pwsh
+        run: Get-ChildItem artifacts | Format-Table Name, Length
+
+      # The release is the last step and it is the only one that cannot be undone by
+      # re-running a job: it is here so that a build that fails halfway leaves no
+      # half-populated release behind for the updater to find.
       - name: Publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $version = '${{ needs.version.outputs.version }}'
           # NOT `--prerelease`. The updater reads `/releases/latest`, which skips anything
           # GitHub marks as a pre-release, so marking a 0.x release that way would publish
           # a version no existing install could ever see.
           #
           # Named one by one rather than as a glob. `zet-*.exe` would work today and would
           # quietly start uploading whatever else happens to match tomorrow.
-          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $assets = @(
+            "artifacts/zet-$version-x86_64-pc-windows-msvc.exe",
+            "artifacts/zet-$version-setup.exe",
+            "artifacts/SHA256SUMS"
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path $asset)) { throw "missing $asset" }
+          }
           gh release create '${{ github.ref_name }}' `
             --title 'zet ${{ github.ref_name }}' `
             --generate-notes `
             --verify-tag `
-            "zet-$version-x86_64-pc-windows-msvc.exe" `
-            "zet-$version-setup.exe" `
-            SHA256SUMS
+            $assets

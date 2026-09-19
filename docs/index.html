@@ -6,6 +6,17 @@
 <title>zet — a terminal multiplexer for Windows</title>
 <meta name="description" content="zet is a terminal multiplexer for Windows, written in Rust, with its own VT engine and a GPU renderer.">
 <link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="favicon.ico" sizes="48x48">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/icon-180.png">
+<meta name="theme-color" content="#0a0b0d">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="zet">
+<meta property="og:title" content="zet — a terminal multiplexer for Windows">
+<meta property="og:description" content="zet is a terminal multiplexer for Windows, written in Rust, with its own VT engine and a GPU renderer.">
+<meta property="og:url" content="https://asterxsk.github.io/zet/">
+<meta property="og:image" content="https://asterxsk.github.io/zet/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -39,6 +50,7 @@
       <p class="nav__label">Start</p>
       <ul class="nav__list">
         <li><a class="nav__link" href="index.html" aria-current="page">Overview</a></li>
+        <li><a class="nav__link" href="info.html">Info</a></li>
         <li><a class="nav__link" href="install.html">Install</a></li>
       </ul>
     </div>
@@ -85,55 +97,16 @@
         honest label for what that is worth to anyone else.</p>
       </div>
 
-      <h2>Why</h2>
+      <h2>Every page</h2>
 
-      <p>Windows terminals each make you give something up. Windows Terminal is good but its
-      rendering and configuration are Microsoft's to decide. Alacritty is fast but has no tabs and
-      no settings UI. WezTerm has everything and needs its own manual. None of them let you own the
-      part that matters.</p>
-
-      <p>There is also a correctness problem that only shows up when you live in a terminal.
-      Full-screen TUI programs flicker on every repaint unless the terminal honors synchronized
-      output. Alternate-screen apps leave artifacts on resize. Mouse reporting, truecolor, and
-      hyperlinks work in some terminals and half-work in others. You notice the first time you run
-      an agentic coding tool inside one.</p>
-
-      <p>zet owns its terminal engine end to end: the byte parser, the screen grid, the scrollback,
-      the reflow, the damage tracking, and the renderer. Nothing about the character pipeline is
-      borrowed. That is the point of the project, and the reason the rest of it exists.</p>
-
-      <h2>The crates</h2>
-
-      <p>The workspace is layered, and each crate is built on the ones above it in this list —
-      except <code>zet-update</code>, which stands alone. None of them is on crates.io, including
-      that one.</p>
-
-      <table>
-        <caption>Eleven crates, in dependency order</caption>
-        <thead>
-          <tr><th scope="col">Crate</th><th scope="col">What it owns</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="k">zet-vt</td><td>The terminal engine: parser, grid, scrollback, reflow, damage</td></tr>
-          <tr><td class="k">zet-pty</td><td>ConPTY sessions and shell profile discovery</td></tr>
-          <tr><td class="k">zet-config</td><td>TOML configuration, themes, the ANSI palette, hot reload</td></tr>
-          <tr><td class="k">zet-font</td><td>Font loading, rasterisation, the face chain and its fallback order</td></tr>
-          <tr><td class="k">zet-input</td><td>Key and mouse encoding, chords and keybindings</td></tr>
-          <tr><td class="k">zet-session</td><td>A session: a pty and a terminal with a read loop between them</td></tr>
-          <tr><td class="k">zet-render</td><td>The wgpu renderer: the glyph atlas, the grid and chrome pipelines</td></tr>
-          <tr><td class="k">zet-ui</td><td>The chrome's layout, and the embedded IBM Plex Sans it is drawn in</td></tr>
-          <tr><td class="k">zet-app</td><td>The application state machine: tabs, commands, themes, selection</td></tr>
-          <tr><td class="k">zet</td><td>The binary: the window, the event loop, and the frame host</td></tr>
-          <tr><td class="k">zet-update</td><td>Version identity, update checks, self-replacement</td></tr>
-        </tbody>
-      </table>
-
-      <p><a href="architecture.html">Architecture</a> describes how the layers fit together and what
-      each one is allowed to know.</p>
-
-      <h2>Where to go next</h2>
+      <!-- Each card is its page's own `description` meta, word for word. A page whose
+           summary changes has two places to change, and this comment is the reminder. -->
 
       <div class="grid">
+        <a class="card" href="info.html">
+          <span class="card__title">Info</span>
+          <span class="card__body">Why zet exists, what the eleven crates are, and what is deliberately not built yet.</span>
+        </a>
         <a class="card" href="install.html">
           <span class="card__title">Install</span>
           <span class="card__body">Download the installer, or build the binary from source.</span>
@@ -150,26 +123,23 @@
           <span class="card__title">Design</span>
           <span class="card__body">Instrument: the palette, the type, and the rules that keep them honest.</span>
         </a>
+        <a class="card" href="architecture.html">
+          <span class="card__title">Architecture</span>
+          <span class="card__body">How the eleven crates are layered, and what each one is allowed to know.</span>
+        </a>
         <a class="card" href="changelog.html">
           <span class="card__title">Changelog</span>
-          <span class="card__body">What changed, newest first, and the first release.</span>
+          <span class="card__body">Notable changes to zet, newest first.</span>
+        </a>
+        <a class="card" href="privacy.html">
+          <span class="card__title">Privacy</span>
+          <span class="card__body">What zet sends, what it does not, and what it writes to your disk.</span>
         </a>
         <a class="card" href="security.html">
           <span class="card__title">Security</span>
-          <span class="card__body">How to report a vulnerability, and what is in scope.</span>
+          <span class="card__body">How to report a vulnerability in zet, what is in scope, and what release integrity means here.</span>
         </a>
       </div>
-
-      <h2>Not built yet</h2>
-
-      <p>The documentation states plainly what does not exist, because the status above is the
-      honest description of the code and a page that rounded it up would be worse than no page.</p>
-
-      <ul>
-        <li>No update check on launch, and none is planned. <code>zet --check-update</code> reports whether a newer version exists and <code>zet --update</code> installs it, and those commands are the only things in zet that touch the network.</li>
-        <li>No <code>Report alternate keys</code>. The rest of the kitty keyboard protocol is there; this flag is dropped rather than echoed, because the host does not carry the physical key.</li>
-        <li>No library API. The crates are a workspace behind one binary, and none of them is published to crates.io; <code>zet-update</code> is structured as a standalone library but is not on the registry either.</li>
-      </ul>
     </article>
   </main>
 </div>
