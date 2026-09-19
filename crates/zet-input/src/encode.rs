@@ -403,11 +403,49 @@ fn kitty_key(event: &KeyEvent, modes: &Modes) -> Option<Vec<u8>> {
         return None;
     }
 
-    Some(csi_u(
-        key_code(event.key)?,
-        p,
-        kitty_text(event, flags, all),
-    ))
+    let code = main_code(event)?;
+    // The alternate keys are a pure enhancement: they are written beside a key that is
+    // already being reported as an escape code, and a key the legacy encoding still
+    // sends as text keeps its text even when the flag is set. That is why this is a
+    // gate on `escaped` and not a fifth reason to escape.
+    let alt = if escaped && flags.contains(KeyboardFlags::ALTERNATE_KEYS) {
+        alternate_keys(event, code)
+    } else {
+        (None, None)
+    };
+
+    Some(csi_u(code, alt, p, kitty_text(event, flags, all)))
+}
+
+/// The code point the key is named by on the wire.
+///
+/// The protocol names a key by the one the current layout produces with no modifiers,
+/// so the unshifted key the host carried is preferred; without it the shift is taken
+/// back off the produced character by the US pairing, which is exact on a US layout
+/// and an approximation on any other. Everything the protocol numbers itself instead —
+/// Escape, the function keys, the locks — is named by [`key_code`] alone.
+fn main_code(event: &KeyEvent) -> Option<u32> {
+    match event.unshifted {
+        Some(unshifted) if character_of(event.key).is_some() => Some(u32::from(unshifted)),
+        _ => key_code(event.key),
+    }
+}
+
+/// The alternates to write after the main code of a key: the shifted key and the key at
+/// the same position on the standard PC-101 layout, either of which may be absent.
+///
+/// Only the ones that say something are kept. The shifted key is the character the
+/// layout produced, and it is written only when shift is held and moved it away from
+/// the main key; the base-layout key comes from the host's physical key, and one that
+/// repeats the main key has nothing to add. An alternate equal to the main key is
+/// dropped rather than written as an empty or duplicate sub-field.
+fn alternate_keys(event: &KeyEvent, main: u32) -> (Option<u32>, Option<u32>) {
+    let shifted = character_of(event.key)
+        .filter(|_| event.mods.contains(Modifiers::SHIFT))
+        .map(u32::from)
+        .filter(|code| *code != main);
+    let base = event.base.map(u32::from).filter(|code| *code != main);
+    (shifted, base)
 }
 
 /// Whether the protocol reports a key in a sequence rather than giving it a code
@@ -616,11 +654,29 @@ fn kitty_text(event: &KeyEvent, flags: KeyboardFlags, all: bool) -> Option<Vec<u
     (!points.is_empty()).then_some(points)
 }
 
-/// `CSI <code> ; <mods> ; <text> u`, with each field left out when it has nothing to
-/// say.
-fn csi_u(code: u32, p: Params, text: Option<Vec<u32>>) -> Vec<u8> {
+/// `CSI <code> [: <shifted> [: <base>]] ; <mods> ; <text> u`, with each field left out
+/// when it has nothing to say.
+///
+/// `alt` is the pair a key with [`KeyboardFlags::ALTERNATE_KEYS`] adds: the shifted key
+/// and the key at the same position on the base layout. They sit between the code and
+/// the modifier parameter, and an absent shifted key with a present base key is written
+/// as an empty field — `CSI 121::122u` — so that the base key keeps the position the
+/// grammar gives it. An empty sub-field is not the same as no sub-field, which is why
+/// only writing the pair when one of them is present is enough.
+fn csi_u(code: u32, alt: (Option<u32>, Option<u32>), p: Params, text: Option<Vec<u32>>) -> Vec<u8> {
     let mut out = vec![ESC, b'['];
     out.extend_from_slice(code.to_string().as_bytes());
+    let (shifted, base) = alt;
+    if shifted.is_some() || base.is_some() {
+        out.push(b':');
+        if let Some(shifted) = shifted {
+            out.extend_from_slice(shifted.to_string().as_bytes());
+        }
+        if let Some(base) = base {
+            out.push(b':');
+            out.extend_from_slice(base.to_string().as_bytes());
+        }
+    }
     if text.is_some() && p.is_default() {
         // A field cannot be written without the one before it. `;1` says what an
         // absent modifier field says — no modifiers, a press — so the text has a
@@ -883,6 +939,8 @@ mod tests {
             mods,
             text: None,
             kind: KeyKind::Press,
+            base: None,
+            unshifted: None,
         }
     }
 
@@ -1258,6 +1316,8 @@ mod tests {
             mods: Modifiers::empty(),
             text: None,
             kind: KeyKind::Release,
+            base: None,
+            unshifted: None,
         };
         assert_eq!(encode_key(&event, &Modes::default()), None);
     }
@@ -1283,6 +1343,8 @@ mod tests {
                     mods,
                     text: None,
                     kind: KeyKind::Press,
+                    base: None,
+                    unshifted: None,
                 };
                 let repeat = KeyEvent {
                     kind: KeyKind::Repeat,
@@ -2439,6 +2501,91 @@ mod tests {
             ..press(Key::Char('a'), Modifiers::empty())
         };
         assert_eq!(kitty_bytes(&plain, flags), "\x1b[97;1;97u");
+    }
+
+    #[test]
+    fn report_alternate_keys_reports_the_shifted_key() {
+        // `CSI 97:65;2u` for Shift+a. The main code is the unshifted key the host
+        // carried, and the shifted one rides in a sub-field after a colon. This is the
+        // whole point of the flag: a program bound to `a` can match the press without
+        // knowing the layout put a capital on it.
+        let flags = KeyboardFlags::ALL_KEYS | KeyboardFlags::ALTERNATE_KEYS;
+        let event = KeyEvent {
+            unshifted: Some('a'),
+            ..press(Key::Char('A'), Modifiers::SHIFT)
+        };
+        assert_eq!(kitty_bytes(&event, flags), "\x1b[97:65;2u");
+    }
+
+    #[test]
+    fn a_base_layout_key_is_reported_after_an_empty_shifted_field() {
+        // `CSI 121::122u`. A key with an alternate but no shift has nothing to say in
+        // the shifted sub-field, and the protocol spells that with an empty field
+        // rather than by moving the base key up into it: the position of the sub-field
+        // is what says which of the two it is.
+        let flags = KeyboardFlags::ALL_KEYS | KeyboardFlags::ALTERNATE_KEYS;
+        let event = KeyEvent {
+            base: Some('z'),
+            ..press(Key::Char('y'), Modifiers::empty())
+        };
+        assert_eq!(kitty_bytes(&event, flags), "\x1b[121::122u");
+    }
+
+    #[test]
+    fn both_alternates_come_out_in_protocol_order() {
+        // `CSI 97:65:98;2u`, the widest form: shifted first, base-layout second, which
+        // is the order the protocol's grammar names them in.
+        let flags = KeyboardFlags::ALL_KEYS | KeyboardFlags::ALTERNATE_KEYS;
+        let event = KeyEvent {
+            base: Some('b'),
+            ..press(Key::Char('A'), Modifiers::SHIFT)
+        };
+        assert_eq!(kitty_bytes(&event, flags), "\x1b[97:65:98;2u");
+    }
+
+    #[test]
+    fn an_alternate_equal_to_the_main_key_is_left_out() {
+        // An alternate that repeats the main code says nothing the program did not
+        // already have, so it is dropped rather than written. `a` on the key that
+        // already produces `a` is the case, and the empty sub-field it would otherwise
+        // produce is exactly what the protocol's `has_alternate_key` rule forbids.
+        let flags = KeyboardFlags::ALL_KEYS | KeyboardFlags::ALTERNATE_KEYS;
+        let event = KeyEvent {
+            base: Some('a'),
+            ..press(Key::Char('a'), Modifiers::empty())
+        };
+        assert_eq!(kitty_bytes(&event, flags), "\x1b[97u");
+    }
+
+    #[test]
+    fn the_alternate_flag_alone_does_not_move_a_text_key_off_its_text() {
+        // The flag is a pure enhancement: it adds alternate sub-fields to a key that is
+        // already being reported as an escape code and never moves a key off its text.
+        // A program that set only this flag gets the legacy bytes exactly as before,
+        // which is what keeps the flag from silently changing what a shell receives.
+        let event = KeyEvent {
+            base: Some('b'),
+            ..press(Key::Char('a'), Modifiers::empty())
+        };
+        assert_eq!(
+            kitty_bytes(&event, KeyboardFlags::ALTERNATE_KEYS),
+            "a",
+            "with no other flag there is no escape code to add sub-fields to"
+        );
+    }
+
+    #[test]
+    fn the_main_key_is_the_unshifted_one_the_host_carried() {
+        // Shift+2 on a German layout, where the key cap says `"` and the unshifted key
+        // is `2`. The main code must be `2` (0x32) for the shortcut-matching the flag
+        // exists for, and the US-pairing guess would have sent `'` (0x27) instead.
+        let flags = KeyboardFlags::ALL_KEYS | KeyboardFlags::ALTERNATE_KEYS;
+        let event = KeyEvent {
+            unshifted: Some('2'),
+            base: Some('2'),
+            ..press(Key::Char('"'), Modifiers::SHIFT)
+        };
+        assert_eq!(kitty_bytes(&event, flags), "\x1b[50:34;2u");
     }
 
     #[test]

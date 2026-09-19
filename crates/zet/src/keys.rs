@@ -33,6 +33,7 @@
 
 use winit::event::KeyEvent as WinitKeyEvent;
 use winit::keyboard::{Key as WinitKey, ModifiersState, NamedKey, PhysicalKey};
+use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 use zet_input::{Key, KeyEvent, KeyKind, Modifiers};
 
 /// Translate a key event, or [`None`] for one zet has no name for.
@@ -49,7 +50,28 @@ pub fn translate(event: &WinitKeyEvent, held: ModifiersState) -> Option<KeyEvent
         event.state,
         event.repeat,
         held,
+        unshifted(event),
     )
+}
+
+/// The character this switch types with nothing held, as the layout defines it.
+///
+/// This is what the kitty protocol puts on the wire as the main code point, and it is a
+/// question only the platform can answer: `Shift+2` types `"` on a US layout and `"` on a
+/// German one, but the _key_ is `2` on the first and `2` on the second only because the
+/// layout says so — taking Shift off the character by the US pairing agrees on one layout
+/// and is an approximation everywhere else. `winit` asks the layout for us.
+///
+/// It lives here rather than in [`translate_key`] because the answer belongs to a real
+/// event: `winit`'s `KeyEvent` cannot be built outside `winit`, which is the same reason
+/// [`translate_key`] exists at all.
+fn unshifted(event: &WinitKeyEvent) -> Option<char> {
+    match event.key_without_modifiers() {
+        WinitKey::Character(text) => text.chars().next(),
+        // A key with no character — an arrow, a function key — has no unshifted form to
+        // report, and neither has one the platform declined to name.
+        _ => None,
+    }
 }
 
 /// The same translation, over the parts of an event rather than the event.
@@ -66,6 +88,7 @@ pub fn translate_key(
     state: winit::event::ElementState,
     repeat: bool,
     held: ModifiersState,
+    unshifted: Option<char>,
 ) -> Option<KeyEvent> {
     let key = key(logical).or_else(|| named_keycode(physical))?;
     Some(KeyEvent {
@@ -73,6 +96,74 @@ pub fn translate_key(
         mods: translate_modifiers(held),
         text: text_of(logical),
         kind: kind(state, repeat),
+        base: base_layout_char(physical),
+        unshifted,
+    })
+}
+
+/// The character a US PC-101 prints on the key at this position, if it prints one.
+///
+/// A fixed table, deliberately: the protocol's base-layout key is defined against the
+/// standard layout, not against whatever the user has loaded, so deriving it from the OS
+/// layout would answer a different question — and answer it twice, since [`unshifted`]
+/// already asks that one. The keys left out are the ones a US layout has no character for
+/// — the navigation cluster, the function row, the keypad, `IntlBackslash` and friends —
+/// and they report [`None`] so the encoder writes no base sub-field rather than a guess.
+fn base_layout_char(physical: PhysicalKey) -> Option<char> {
+    use winit::keyboard::KeyCode as C;
+    let PhysicalKey::Code(code) = physical else {
+        return None;
+    };
+    Some(match code {
+        C::KeyA => 'a',
+        C::KeyB => 'b',
+        C::KeyC => 'c',
+        C::KeyD => 'd',
+        C::KeyE => 'e',
+        C::KeyF => 'f',
+        C::KeyG => 'g',
+        C::KeyH => 'h',
+        C::KeyI => 'i',
+        C::KeyJ => 'j',
+        C::KeyK => 'k',
+        C::KeyL => 'l',
+        C::KeyM => 'm',
+        C::KeyN => 'n',
+        C::KeyO => 'o',
+        C::KeyP => 'p',
+        C::KeyQ => 'q',
+        C::KeyR => 'r',
+        C::KeyS => 's',
+        C::KeyT => 't',
+        C::KeyU => 'u',
+        C::KeyV => 'v',
+        C::KeyW => 'w',
+        C::KeyX => 'x',
+        C::KeyY => 'y',
+        C::KeyZ => 'z',
+        C::Digit0 => '0',
+        C::Digit1 => '1',
+        C::Digit2 => '2',
+        C::Digit3 => '3',
+        C::Digit4 => '4',
+        C::Digit5 => '5',
+        C::Digit6 => '6',
+        C::Digit7 => '7',
+        C::Digit8 => '8',
+        C::Digit9 => '9',
+        C::Space => ' ',
+        C::Minus => '-',
+        C::Equal => '=',
+        C::BracketLeft => '[',
+        C::BracketRight => ']',
+        C::Backslash => '\\',
+        C::Semicolon => ';',
+        C::Quote => '\'',
+        C::Backquote => '`',
+        C::Comma => ',',
+        C::Period => '.',
+        C::Slash => '/',
+        _ => return None,
     })
 }
 
@@ -321,6 +412,9 @@ mod tests {
     use winit::keyboard::{KeyCode, NativeKey, PhysicalKey};
 
     /// A press, built from the parts a test can actually construct.
+    ///
+    /// Unshifted is left unknown here, which is what a host that never asked the layout
+    /// would have. The one test that cares passes it explicitly.
     fn press(key: &WinitKey, code: KeyCode, held: ModifiersState) -> Option<KeyEvent> {
         translate_key(
             key,
@@ -328,6 +422,7 @@ mod tests {
             ElementState::Pressed,
             false,
             held,
+            None,
         )
     }
 
@@ -492,6 +587,7 @@ mod tests {
             ElementState::Pressed,
             true,
             ModifiersState::empty(),
+            None,
         )
         .expect("a repeat still names a key");
         assert_eq!(repeated.kind, KeyKind::Repeat);
@@ -505,6 +601,7 @@ mod tests {
             ElementState::Released,
             false,
             ModifiersState::empty(),
+            None,
         )
         .expect("a release still names a key");
         assert_eq!(released.kind, KeyKind::Release);
@@ -532,5 +629,74 @@ mod tests {
         // The first half of a composition is not a key press. The character the
         // composition eventually produces arrives as its own event, carrying text.
         assert!(plain(&WinitKey::Dead(None), KeyCode::Backquote).is_none());
+    }
+
+    /// The base-layout key comes from the switch under the finger, not from the layout.
+    ///
+    /// That is the whole point of the kitty protocol's `Report alternate keys` flag, and the
+    /// reason `winit`'s physical key is exactly the right input for it: the physical key is
+    /// labelled for a US PC-101 whatever layout is loaded, so a program bound to `Ctrl+Z`
+    /// can recognise the press that a QWERTZ keyboard types as `y`. The logical key cannot
+    /// answer that question — it has already been through the layout.
+    #[test]
+    fn a_base_layout_key_comes_from_the_physical_key() {
+        assert_eq!(
+            plain(&character("y"), KeyCode::KeyZ).unwrap().base,
+            Some('z')
+        );
+        assert_eq!(
+            plain(&character("a"), KeyCode::KeyA).unwrap().base,
+            Some('a')
+        );
+        assert_eq!(
+            plain(&character("1"), KeyCode::Digit1).unwrap().base,
+            Some('1')
+        );
+        assert_eq!(
+            plain(&character(" "), KeyCode::Space).unwrap().base,
+            Some(' ')
+        );
+        // The switch a US layout has no character for reports nothing rather than a guess,
+        // which the encoder turns into no base sub-field at all.
+        assert_eq!(
+            plain(&character("/"), KeyCode::NumpadDivide).unwrap().base,
+            None
+        );
+        assert_eq!(
+            plain(&WinitKey::Named(NamedKey::Enter), KeyCode::Enter)
+                .unwrap()
+                .base,
+            None
+        );
+    }
+
+    /// The unshifted key is carried from the event rather than derived from the character.
+    ///
+    /// The protocol puts the unshifted key on the wire as the main code point, so on a
+    /// layout where `Shift+2` types `"` the main code has to be `2`. Taking Shift back off
+    /// the character by the US pairing gives that answer on a US layout and a wrong one
+    /// everywhere else, which is why `winit`'s own `key_without_modifiers` is what feeds
+    /// this field.
+    #[test]
+    fn the_unshifted_key_is_carried_onto_the_event() {
+        let quoted = translate_key(
+            &character("\""),
+            PhysicalKey::Code(KeyCode::Digit2),
+            ElementState::Pressed,
+            false,
+            ModifiersState::SHIFT,
+            Some('2'),
+        )
+        .expect("a character key");
+        assert_eq!(
+            quoted.unshifted,
+            Some('2'),
+            "a German Shift+2 is the key the wire calls 2"
+        );
+        assert_eq!(
+            plain(&character("a"), KeyCode::KeyA).unwrap().unshifted,
+            None,
+            "nothing known is not the same as known to be a"
+        );
     }
 }

@@ -60,7 +60,7 @@ use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabIn
 use crate::keys;
 use crate::mouse;
 use crate::placement;
-use crate::platform::{SystemSettings, set_opacity};
+use crate::platform::{SystemSettings, set_corners, set_opacity};
 use crate::waker::Wake;
 
 /// The app's own name, as the titlebar's name slot shows it.
@@ -264,6 +264,16 @@ pub struct Host {
     /// where a window is made — a window cannot start maximized halfway through its life —
     /// and is carried here only because the four are written down together.
     windowed: WindowSettings,
+    /// Whether the corners were last asked for square, or [`None`] if never asked.
+    ///
+    /// The same shape as `windowed` and for the same reason, with one difference the
+    /// attribute forces: `DWMWA_WINDOW_CORNER_PREFERENCE` has no getter, so unlike the
+    /// opacity the window cannot be asked what it is wearing and the caller has to
+    /// remember. A `bool` rather than the [`CornerPreference`] itself, because the
+    /// maximized state is the input the decision is a function of.
+    ///
+    /// [`CornerPreference`]: winit::platform::windows::CornerPreference
+    corners: Option<bool>,
     /// The layout the previous frame's grid was positioned with.
     placed: Layout,
     /// The grid size the sessions were last told about, so that a frame which did not
@@ -357,6 +367,9 @@ impl Host {
             tabbed,
             pictured,
             windowed,
+            // Nothing has been asked of the compositor yet, and the answer is not one the
+            // window can be asked for back, so the first write is unconditional.
+            corners: None,
             placed: Layout::default(),
             // What `resumed` opens the first tab at, before any frame has been laid out
             // and therefore before anything knows how big the window really is.
@@ -488,6 +501,7 @@ impl Host {
                 .map_err(StartupError::Window)?,
         );
         set_opacity(&window, self.app.config().window.opacity);
+        self.corners = set_corners(&window, self.corners, window.is_maximized());
         self.windowed = self.app.config().window.clone();
 
         let size = window.inner_size();
@@ -1717,6 +1731,12 @@ impl Host {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.resize(size.width, size.height, scale);
         }
+        // Every route to maximizing and back ends here, because they all produce a
+        // `WM_SIZE` and winit updates its stored flag before dispatching: the caption
+        // button, `Win+Up` and `Win+Down`, and the Aero Snap a titlebar drag gets from
+        // the system. Asking the window rather than tracking the gesture is what keeps
+        // this from being a second answer to a question Windows already answered.
+        self.corners = set_corners(&window, self.corners, window.is_maximized());
         // The sessions are told their new size by the frame this asks for, from the
         // layout that frame builds.
         window.request_redraw();
@@ -1792,7 +1812,7 @@ fn panel_lines(lines: &[zet_app::Line], capturing: Option<Action>) -> Vec<zet_ui
                 text: line.text(),
                 row: match line {
                     zet_app::Line::Heading(_) => zet_ui::Row::Heading,
-                    zet_app::Line::Note(_) => zet_ui::Row::Note,
+                    zet_app::Line::Note(_) | zet_app::Line::Report { .. } => zet_ui::Row::Note,
                     zet_app::Line::Setting(setting) => {
                         zet_ui::Row::Control(control_of(setting.kind))
                     }
@@ -2192,12 +2212,16 @@ mod tests {
             mods: Modifiers::empty(),
             text: None,
             kind: KeyKind::Press,
+            base: None,
+            unshifted: None,
         };
         let down = KeyEvent {
             key: Key::Down,
             mods: Modifiers::empty(),
             text: None,
             kind: KeyKind::Press,
+            base: None,
+            unshifted: None,
         };
 
         assert!(
@@ -2244,6 +2268,8 @@ mod tests {
             mods: Modifiers::empty(),
             text: None,
             kind: KeyKind::Press,
+            base: None,
+            unshifted: None,
         }));
     }
 

@@ -34,6 +34,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     MB_SETFOREGROUND, MessageBoxW, SPI_GETCLIENTAREAANIMATION, SPI_GETHIGHCONTRAST, SW_SHOWNORMAL,
     SetLayeredWindowAttributes, SetWindowLongPtrW, SystemParametersInfoW, WS_EX_LAYERED,
 };
+use winit::platform::windows::{CornerPreference, WindowExtWindows};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 use zet_config::Rgb;
@@ -123,6 +124,58 @@ pub fn set_opacity(window: &Window, opacity: f32) {
             let _ = SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
         }
     }
+}
+
+/// How square or round the window's corners are, as the desktop has been asked to draw them.
+///
+/// `window.opacity` and this are the two window attributes zet asks the compositor for, and
+/// they are asked for the same reason: the design says what the frame looks like and DWM has
+/// an opinion of its own.
+///
+/// # Why this asks for rounding rather than deferring to the system
+///
+/// A `decorations(false)` window has overridden `WM_NCCALCSIZE`, which is the case Microsoft
+/// says DWM may never round. Measured on this machine rather than read: zet's own frame at
+/// its own corner is `R15 G17 B20` — the chrome's ground — in both the restored and the
+/// maximized state, so the window is square everywhere, and `DWMWCP_DEFAULT` leaves it that
+/// way. Asking for `Round` is what turns that pixel into the desktop behind it. Deferring
+/// would be the tidier-sounding choice and would restore exactly the square corner the
+/// design promises to remove.
+///
+/// The cost is stated plainly: this overrides a machine whose owner has turned rounded
+/// corners off system-wide. DESIGN.md asks for rounded corners on a restored window, and a
+/// promise that only holds on machines that would have kept it anyway is not the promise.
+///
+/// # Why the caller remembers rather than asks
+///
+/// [`fade`] can read the window back through `GetLayeredWindowAttributes`; this cannot.
+/// `DWMWA_WINDOW_CORNER_PREFERENCE` is documented for `DwmSetWindowAttribute` and has no
+/// getter, so there is nothing to read and the caller has to carry the state it last wrote.
+/// That state is a `bool` — whether the window was maximized — because that is the input the
+/// decision is a function of, and remembering the [`CornerPreference`] instead would be
+/// remembering an answer already derived from it.
+pub fn set_corners(window: &Window, worn: Option<bool>, maximized: bool) -> Option<bool> {
+    let wanted = corners(maximized, worn)?;
+    window.set_corner_preference(wanted);
+    Some(maximized)
+}
+
+/// What to ask the desktop for, or [`None`] when it has already been asked.
+///
+/// Separate from the call it feeds for the reason [`fade`] is separate from its two: this is
+/// the part that can be wrong, and it can be tested without a window. `Resized` fires on
+/// every step of a drag-resize, so without the guard a drag is sixty attribute writes a
+/// second — invisible on screen, and the kind of thing that is only ever noticed later as a
+/// stutter nobody can attribute.
+fn corners(maximized: bool, worn: Option<bool>) -> Option<CornerPreference> {
+    if worn == Some(maximized) {
+        return None;
+    }
+    Some(if maximized {
+        CornerPreference::DoNotRound
+    } else {
+        CornerPreference::Round
+    })
 }
 
 /// What to write to the window, or [`None`] when it is already wearing it.
@@ -518,5 +571,43 @@ mod tests {
         let buffer = wide("Hi");
         assert_eq!(buffer, vec![0x48, 0x69, 0]);
         assert_eq!(wide(""), vec![0]);
+    }
+
+    /// The restored state is a value zet asks for, not the one the system hands out.
+    ///
+    /// This is the whole reason the mapping is `Round` and not `Default`, and it was settled
+    /// by looking at a running window rather than by reading the documentation. On this
+    /// machine, zet's own frame at its own corner is `R15 G17 B20` — the chrome's ground —
+    /// in the restored state, so the corner is square; `DWMWCP_DEFAULT` leaves it square,
+    /// and only `DWMWCP_ROUND` turns that pixel into the desktop behind it. A `decorations(false)`
+    /// window has overridden `WM_NCCALCSIZE`, which puts it in the category Microsoft says
+    /// DWM may never round. Writing `Default` on restore therefore restores the square
+    /// corner it was supposed to remove, and would do so while looking entirely correct.
+    #[test]
+    fn a_restored_window_asks_for_the_rounding_the_system_does_not_give() {
+        assert_eq!(corners(false, None), Some(CornerPreference::Round));
+        assert_eq!(
+            corners(false, Some(true)),
+            Some(CornerPreference::Round),
+            "a window coming back from maximized is the case the design promises rounding for"
+        );
+    }
+
+    #[test]
+    fn a_maximized_window_asks_for_square_corners() {
+        assert_eq!(corners(true, None), Some(CornerPreference::DoNotRound));
+        assert_eq!(
+            corners(true, Some(false)),
+            Some(CornerPreference::DoNotRound)
+        );
+    }
+
+    #[test]
+    fn a_resize_that_did_not_move_the_maximized_state_writes_nothing() {
+        // `Resized` fires on every step of a drag-resize. Without this guard a drag is sixty
+        // DWM writes a second, which changes nothing on screen and is the kind of thing that
+        // is only ever noticed later, as a stutter nobody can attribute.
+        assert_eq!(corners(true, Some(true)), None);
+        assert_eq!(corners(false, Some(false)), None);
     }
 }

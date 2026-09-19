@@ -175,6 +175,22 @@ pub enum Line {
     /// setting, and this is what the loader said about it. The two are drawn differently —
     /// a heading is a section, and this is a line of text under one.
     Note(Problem),
+    /// Something the panel can report and cannot set.
+    ///
+    /// A row to read, for a setting no one of the panel's four controls can carry.
+    /// `font.fallback` is an ordered list — the order is the setting, and the stack walks
+    /// it per character — so a control that offered one value would be offering a member
+    /// of the list as a replacement for it, and a text entry would be a fifth kind of
+    /// control. The file is where it is changed, and this is what the file says.
+    ///
+    /// Nothing about it can be clicked or focused: see [`Line::kind`], which is what both
+    /// the panel's focus list and its hit regions are built from.
+    Report {
+        /// What the row is called.
+        label: &'static str,
+        /// What the file says, as it should be read.
+        value: String,
+    },
     /// A setting.
     Setting(Setting),
 }
@@ -189,12 +205,14 @@ pub struct Problem {
 }
 
 impl Line {
-    /// The text to draw: a heading's name, a problem's message, or a setting's label.
+    /// The text to draw: a heading's name, a problem's message, a report's label, or a
+    /// setting's label.
     #[must_use]
     pub fn text(&self) -> &str {
         match self {
             Self::Heading(text) => text,
             Self::Note(problem) => &problem.text,
+            Self::Report { label, .. } => label,
             Self::Setting(setting) => setting.label,
         }
     }
@@ -210,24 +228,25 @@ impl Line {
                 Severity::Error => "error",
                 Severity::Warning => "warning",
             },
+            Self::Report { value, .. } => value,
             Self::Setting(setting) => &setting.value,
         }
     }
 
-    /// How the row is clicked, `None` for a heading or a problem.
+    /// How the row is clicked, `None` for a heading, a problem, or a report.
     #[must_use]
     pub const fn kind(&self) -> Option<Kind> {
         match self {
-            Self::Heading(_) | Self::Note(_) => None,
+            Self::Heading(_) | Self::Note(_) | Self::Report { .. } => None,
             Self::Setting(setting) => Some(setting.kind),
         }
     }
 
-    /// What the row sets, `None` for a heading or a problem.
+    /// What the row sets, `None` for a heading, a problem, or a report.
     #[must_use]
     pub const fn id(&self) -> Option<Id> {
         match self {
-            Self::Heading(_) | Self::Note(_) => None,
+            Self::Heading(_) | Self::Note(_) | Self::Report { .. } => None,
             Self::Setting(setting) => Some(setting.id),
         }
     }
@@ -413,6 +432,13 @@ fn terminal_rows(config: &Config) -> Vec<Line> {
             format!("{} pt", configured_size(config).round()),
             Kind::Step,
         ),
+        // Directly under the two rows about the grid's face, because it is about that
+        // face: the families behind it. Not a third control — the list cannot be stepped
+        // through — and not a row with a click, which would have nothing to change.
+        Line::Report {
+            label: "Fallback",
+            value: fallback_summary(&config.font.fallback),
+        },
         setting(
             Id::CursorShape,
             "Cursor",
@@ -462,6 +488,30 @@ fn binding_rows(bindings: &[(Chord, Action)]) -> Vec<Line> {
         }));
     }
     lines
+}
+
+/// How the configured fallback list reads on a row.
+///
+/// The head of the list and how many families are behind it, never the whole list: the
+/// value column is 118px and the painter does not clip a run of text into it (see
+/// [`theme_row`]), so the shipped list of three — forty characters — would run out of the
+/// panel and over the grid.
+///
+/// A summary rather than a resolution, because there is no single resolved face to name:
+/// `zet-font`'s stack walks the primary and then this list *per character*, and reaches the
+/// system's own script families behind the end of it. Which makes the order of this list
+/// the setting, and the reason it is a row the panel reports rather than one it sets —
+/// no control this panel has can carry an ordered list without destroying it.
+///
+/// Nothing here asks the machine what it has, for the reason the font row above it gives:
+/// the row shows the file.
+#[must_use]
+fn fallback_summary(fallback: &[String]) -> String {
+    match fallback {
+        [] => "None".to_owned(),
+        [only] => only.clone(),
+        [first, rest @ ..] => format!("{first} +{}", rest.len()),
+    }
 }
 
 /// The name a family is offered under.
@@ -892,6 +942,17 @@ mod tests {
             .expect("the row is in the panel")
     }
 
+    /// The Fallback row's value, found the way the panel finds a row it cannot click: by
+    /// its label, because it has no id to be looked up by.
+    fn fallback_row(config: &Config) -> String {
+        lines(config, &parse_bindings(config))
+            .iter()
+            .find(|line| line.text() == "Fallback")
+            .map(Line::value)
+            .expect("the fallback row is in the panel")
+            .to_owned()
+    }
+
     #[test]
     fn every_action_has_a_row_and_every_row_names_an_action() {
         let config = config();
@@ -1125,6 +1186,51 @@ mod tests {
             .find(|line| line.id() == Some(Id::Font))
             .expect("the font row");
         assert_eq!(row.value(), "No Such Mono");
+    }
+
+    #[test]
+    fn the_fallback_summary_names_the_first_family_and_counts_the_rest() {
+        assert_eq!(fallback_summary(&[]), "None");
+        assert_eq!(fallback_summary(&["Consolas".to_owned()]), "Consolas");
+        let list = ["Consolas", "Segoe UI Emoji", "Segoe UI Symbol"].map(str::to_owned);
+        assert_eq!(fallback_summary(&list), "Consolas +2");
+    }
+
+    #[test]
+    fn a_report_row_is_a_row_to_read_not_a_row_to_set() {
+        // `font.fallback` is a list the panel's four controls cannot carry: the order is
+        // the setting, and a choice row would offer one family as a replacement for the
+        // list. So the row reports the file and nothing about it can be clicked. `kind()`
+        // is what both of the panel's answers are built from: `panel_key` keeps only the
+        // lines that have one, and the painter pushes a control only for a row that has
+        // one. A report row that answered with a kind would be a row the keyboard could
+        // land on and the mouse could click, with nothing for either to do.
+        let config = config();
+        let rows = lines(&config, &parse_bindings(&config));
+        let row = rows
+            .iter()
+            .find(|line| line.text() == "Fallback")
+            .expect("the fallback row is in the panel");
+        assert_eq!(row.value(), fallback_summary(&config.font.fallback));
+        assert!(
+            row.kind().is_none() && row.id().is_none(),
+            "a report is a row to read, not a row to set"
+        );
+    }
+
+    #[test]
+    fn the_fallback_row_shows_the_list_the_file_has_not_the_one_the_machine_can_run() {
+        // The same rule as the font row above it: the file is the setting, and the row
+        // reads it. A list of three reads as its head and a count, one family is just that
+        // family, and an empty list says so rather than quietly reporting the default.
+        let mut config = config();
+        assert_eq!(fallback_row(&config), "Consolas +2");
+
+        config.font.fallback = vec!["Menlo".to_owned()];
+        assert_eq!(fallback_row(&config), "Menlo");
+
+        config.font.fallback = Vec::new();
+        assert_eq!(fallback_row(&config), "None");
     }
 
     #[test]

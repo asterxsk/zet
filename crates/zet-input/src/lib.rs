@@ -31,13 +31,14 @@
 //! written against the specification's own tables rather than against what other
 //! terminals do.
 //!
-//! One flag of the five is deliberately not implemented: `Report alternate keys`
-//! asks for the key at the same position on the base layout beside every key, and
-//! the host does not carry the physical key that would come from. A terminal that
-//! cannot do something is supposed to say so rather than say nothing — the protocol
-//! has a program set the flags it wants and then query which it got, exactly so that
-//! a partial implementation is discoverable — so the bit is dropped when it arrives
-//! and never reported back.
+//! All five of the flags are implemented. `Report alternate keys` is the one that
+//! needs the host's help: the key at the same position on the base layout is a fact
+//! about the physical switch, so [`KeyEvent::base`] carries it and
+//! [`KeyEvent::unshifted`] carries the key the current layout produces with no
+//! modifiers. Both are written as sub-fields of the key's own sequence — see
+//! `crate::encode`'s `alternate_keys` — and a terminal that could not honour a flag is
+//! meant to drop it from what it reports back rather than claim it, which is the
+//! handshake the protocol is built around.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]

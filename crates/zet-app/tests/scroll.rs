@@ -38,6 +38,8 @@ fn chord(key: Key) -> KeyEvent {
         mods: Modifiers::CTRL | Modifiers::SHIFT,
         text: None,
         kind: KeyKind::Press,
+        base: None,
+        unshifted: None,
     }
 }
 

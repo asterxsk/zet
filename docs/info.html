@@ -139,7 +139,7 @@
 
       <ul>
         <li>No update check on launch, and none is planned. <code>zet --check-update</code> reports whether a newer version exists and <code>zet --update</code> installs it, and those commands are the only things in zet that touch the network.</li>
-        <li>No <code>Report alternate keys</code>. The rest of the kitty keyboard protocol is there; this flag is dropped rather than echoed, because the host does not carry the physical key.</li>
+        <li>All five kitty keyboard protocol flags, including <code>Report alternate keys</code>, which adds the shifted key and the base-layout key as sub-fields of the sequence. The base-layout key comes from the physical switch, so a program bound to <code>Ctrl+Z</code> recognises the press a QWERTZ keyboard types as <code>y</code>.</li>
         <li>No library API. The crates are a workspace behind one binary, and none of them is published to crates.io; <code>zet-update</code> is structured as a standalone library but is not on the registry either.</li>
         <li>No build for macOS or Linux. The pty layer is ConPTY, the window and clipboard layers are Win32, and the icon is compiled into the executable by a Windows resource compiler, so <code>cargo build</code> on either host fails at compile time. See <a href="install.html">Install</a>.</li>
       </ul>

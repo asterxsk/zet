@@ -5,8 +5,8 @@ renderer.
 
 > **Status: pre-alpha.** zet builds and runs: it opens a window, starts a shell, and draws it
 > with its own VT engine and its own GPU renderer. It speaks the kitty keyboard protocol in
-> both directions — the flag stack, the query, and the `CSI u` encoding, with `Report alternate
-> keys` the one flag it does not implement. What is missing is the depth around that:
+> both directions — the flag stack, the query, the `CSI u` encoding, and all five flags including
+> `Report alternate keys`. What is missing is the depth around that:
 > the update check exists as `zet --check-update` and `zet --update`, and never runs on launch —
 > nothing is planned to change that.
 > It installs and runs as a daily driver for the person who wrote it, and pre-alpha is the

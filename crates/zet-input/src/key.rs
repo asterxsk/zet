@@ -44,6 +44,21 @@ pub struct KeyEvent {
     pub text: Option<String>,
     /// Whether this is a press, a repeat, or a release.
     pub kind: KeyKind,
+    /// The key at the same position on the standard PC-101 layout, when the host knows
+    /// it. This is what the kitty protocol's `Report alternate keys` flag calls the
+    /// base-layout key, and it is the reason the flag needs the physical switch: a
+    /// shortcut bound to `Ctrl+Z` on a QWERTZ keyboard is a press of `y`'s position,
+    /// and only the base-layout key says so. `None` for a key the layout has no such
+    /// character for, and the encoder then writes no base sub-field rather than
+    /// guessing one.
+    pub base: Option<char>,
+    /// The key the current layout produces with no modifiers held, when the host knows
+    /// it. This is what names the key on the wire: the protocol's main code point is
+    /// the unshifted key, so `Shift+2` on a German layout is `2` (0x32) and not the
+    /// `"` its key cap shows. `None` falls back to taking the shift back off
+    /// [`KeyEvent::key`] by the US pairing, which is right on a US layout and an
+    /// approximation elsewhere.
+    pub unshifted: Option<char>,
 }
 
 #[cfg(test)]
@@ -57,9 +72,13 @@ mod tests {
             mods: Modifiers::empty(),
             text: Some("a".into()),
             kind: KeyKind::Press,
+            base: None,
+            unshifted: None,
         };
         assert_eq!(event.key, Key::Char('a'));
         assert_eq!(event.text.as_deref(), Some("a"));
         assert_eq!(event.kind, KeyKind::Press);
+        assert_eq!(event.base, None);
+        assert_eq!(event.unshifted, None);
     }
 }

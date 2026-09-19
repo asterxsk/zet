@@ -210,10 +210,22 @@
       wrong: a program matching <code>ctrl+shift+a</code> looks for the code of <code>a</code>, and a
       terminal that sends the code of <code>A</code> hands it a chord it will never match.</p>
 
-      <p><code>Report alternate keys</code> is the one flag deliberately not implemented, and the bit
-      is dropped rather than echoed back. The host does not carry the physical key, and claiming a
-      feature that is not there is worse than the honest no that the protocol's set-then-query
-      handshake exists to get.</p>
+      <p>All five flags are implemented. <code>Report alternate keys</code> adds the shifted key and
+      the base-layout key as colon-separated sub-fields of the sequence — <code>CSI unicode-key-code
+      : shifted-key : base-layout-key ; modifiers u</code> — and the two come from different places.
+      The shifted key is the character the layout produced, which the event already carries. The
+      base-layout key is the character a US PC-101 prints at that position, which is a question only
+      the physical switch can answer: a shortcut bound to <code>Ctrl+Z</code> is a press on a QWERTZ
+      keyboard that types <code>y</code>, and the logical key has already been through the layout and
+      cannot say so. The host reads the physical key and a fixed table, never the OS layout, because
+      the protocol defines this field against the standard layout rather than the user's.</p>
+
+      <p>The main code point is the unshifted key, and that comes from the platform too — <code>winit</code>
+      will say what the switch types with nothing held. Taking Shift back off the character by the US
+      pairing agrees on a US layout and is an approximation everywhere else, so on a German layout
+      <code>Shift+2</code> reports <code>2</code> rather than the code of the <code>"</code> its key cap
+      shows. As the protocol's own text requires, the flag is a pure enhancement: it adds sub-fields to
+      events that were already being escaped, and never moves a key that was being sent as text.</p>
 
       <h3>zet-session — one running terminal</h3>
 

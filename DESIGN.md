@@ -287,7 +287,12 @@ and this is the change that makes zet feel denser than Windows Terminal.
 - The drag region is any horizontal gap between the last tab and the caption
   buttons. Double-click maximizes.
 - Maximized: the row loses its bottom hairline and the window loses its rounded
-  corners, matching how Windows handles a maximized frame.
+  corners, matching how Windows handles a maximized frame. The rounding itself has to
+  be asked of the compositor rather than inherited from it: a frameless window has
+  overridden its own non-client area, and Windows leaves those square in both states.
+  So a restored zet asks for round corners explicitly and a maximized one asks for
+  square ones, which is the only way the design's promise holds on a machine whose
+  default would have been square anyway.
 - The app name is hidden when the tab strip needs the space. Tabs outrank branding.
 
 ## Motion

@@ -2460,20 +2460,27 @@ mod tests {
     }
 
     #[test]
-    fn a_bit_this_terminal_does_not_implement_is_not_reported_back() {
+    fn a_bit_above_the_ones_this_terminal_implements_is_not_reported_back() {
         // `CSI ? u` is a promise. A program that reads back a bit nothing here acts on
         // will rely on it, so the bits beyond the implemented ones are cleared rather
-        // than echoed — and `5` is the case that matters, because it is the one a real
-        // program sends: disambiguate and alternate keys, of which this terminal does
-        // the first and not the second.
+        // than echoed. Every bit the protocol defines is implemented now, so only the
+        // bits above them are cleared — and `5` is the case that matters in practice,
+        // because it is the one a real program sends: disambiguate and alternate keys,
+        // both of which this terminal now does.
         let mut t = open(10, 4);
         feed(&mut t, b"\x1b[=5u");
         feed(&mut t, b"\x1b[?u");
-        assert_eq!(t.take_responses(), b"\x1b[?1u");
+        assert_eq!(t.take_responses(), b"\x1b[?5u");
 
         feed(&mut t, b"\x1b[=255u");
         feed(&mut t, b"\x1b[?u");
-        assert_eq!(t.take_responses(), b"\x1b[?27u");
+        assert_eq!(t.take_responses(), b"\x1b[?31u");
+
+        // A bit the protocol has not defined yet is still dropped: it names nothing the
+        // encoder here would act on, so the reply must not claim it.
+        feed(&mut t, b"\x1b[=32u");
+        feed(&mut t, b"\x1b[?u");
+        assert_eq!(t.take_responses(), b"\x1b[?0u");
     }
 
     #[test]

@@ -130,6 +130,8 @@ fn keystroke() {
         mods: Modifiers::empty(),
         text: None,
         kind: KeyKind::Press,
+        base: None,
+        unshifted: None,
     };
     let mut samples = Vec::with_capacity(KEYSTROKES);
     for _ in 0..KEYSTROKES {

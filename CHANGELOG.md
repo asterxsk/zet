@@ -310,9 +310,14 @@ drifted apart without either of them saying so.
     disambiguated, which is the protocol's own carve-out: a shell has to be able to run `reset`.
   - Event types are only sent when the program asked for them. A release is otherwise not sent
     at all, because a program that did not ask would read one as a keypress.
-  - `Report alternate keys` is deliberately not implemented, and the bit is dropped rather than
-    echoed back. The host does not carry the physical key, and claiming a feature that is not
-    there is worse than the honest no that the protocol's set-then-query handshake exists to get.
+  - `Report alternate keys` is implemented, so all five flags are. The sequence gains the shifted
+    key and the base-layout key as colon-separated sub-fields. The shifted key is the character the
+    layout produced; the base-layout key is what a US PC-101 prints at that position, read from the
+    physical switch, which is what lets a program bound to `Ctrl+Z` recognise the press a QWERTZ
+    keyboard types as `y`. The main code point is now the platform's own unshifted key rather than
+    the US pairing approximation, which was wrong on every non-US layout. The flag stays a pure
+    enhancement, as the protocol's text requires: it adds sub-fields to events already being
+    escaped and never moves a key that was being sent as text.
 
 - **`zet-app` / `zet-ui` / `zet`** — a new tab asks which shell to open it with, which is what
   `tabs.open-default-without-asking` has been documented as switching off since the schema was

@@ -1509,6 +1509,8 @@ mod tests {
             mods,
             text: None,
             kind: KeyKind::Press,
+            base: None,
+            unshifted: None,
         }
     }
 

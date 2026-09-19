@@ -57,12 +57,17 @@ impl KeyboardFlags {
     /// layout, so that a shortcut bound to a character works on a layout where that
     /// character needs a different key.
     ///
-    /// **Not implemented**, and it is the only one of the five that is not. It wants
-    /// two code points beside every key — the shifted one and the one at the same
-    /// position on a PC-101 layout — and the host carries neither: a key event
-    /// arrives as the character the layout produced and the text it composed, and
-    /// the physical key the base-layout one would come from is dropped on the way.
-    /// See [`Self::SUPPORTED`] for what happens to a program that asks.
+    /// The two extra code points ride in sub-fields of the key's own sequence, after
+    /// the main one: `CSI main:shifted:base ; modifiers u`. The shifted key is the one
+    /// the layout produced; the base-layout key is the key at the same physical
+    /// position on the standard PC-101 layout, which the host carries beside the
+    /// character it produced. Only the sub-fields that say something are written,
+    /// which is what lets a key with an alternate but no shift and one with a shift
+    /// and no base share the grammar.
+    ///
+    /// This is a pure enhancement: it adds to a key that is already being reported as
+    /// an escape code and never moves a key off its text, so a program that sets this
+    /// flag and nothing else still gets the legacy bytes.
     pub const ALTERNATE_KEYS: Self = Self(0b100);
 
     /// `0b1000`. Report *every* key as an escape code, including the ones that would
@@ -85,12 +90,15 @@ impl KeyboardFlags {
     /// The protocol is built to be implemented a piece at a time: a program sets the
     /// flags it wants and then queries to find out which it got, and the specification
     /// says that is exactly how a program is meant to discover a terminal that does
-    /// only some of them. So the flag this terminal cannot honour — see
-    /// [`Self::ALTERNATE_KEYS`] — is dropped from every set that arrives and is never
-    /// reported back in the reply to `CSI ? u`. The alternative, echoing a bit nothing
-    /// acts on, is a promise the program then relies on and the keys then break.
+    /// only some of them. Every one of the five flags is implemented here, so every
+    /// defined bit survives a set that arrives and is named in the reply to `CSI ? u`;
+    /// only the bits above the five — which nothing defines — are cleared.
     pub const SUPPORTED: Self = Self(
-        Self::DISAMBIGUATE.0 | Self::EVENT_TYPES.0 | Self::ALL_KEYS.0 | Self::ASSOCIATED_TEXT.0,
+        Self::DISAMBIGUATE.0
+            | Self::EVENT_TYPES.0
+            | Self::ALTERNATE_KEYS.0
+            | Self::ALL_KEYS.0
+            | Self::ASSOCIATED_TEXT.0,
     );
 
     /// The flags a set of bits names, less the ones this terminal does not implement.
@@ -273,21 +281,32 @@ mod tests {
     }
 
     #[test]
-    fn a_bit_the_terminal_does_not_implement_is_dropped_rather_than_echoed() {
+    fn a_bit_above_the_defined_ones_is_dropped_rather_than_echoed() {
         // `CSI ? u` is a promise about what this terminal will report. Repeating back a
         // bit that nothing here acts on would be a lie the program then relies on, and
         // the protocol is built so that a program can find out: it sets what it wants,
         // queries, and reads the answer.
+        //
+        // Every bit the protocol defines is implemented now, so a program that asks for
+        // more than those gets the whole defined set back and only the bits above them
+        // are cleared.
         let asked = KeyboardFlags::from_bits(0xff);
-        assert_eq!(asked.bits(), 0b1_1011);
+        assert_eq!(asked.bits(), 0b1_1111);
         assert!(asked.contains(KeyboardFlags::ASSOCIATED_TEXT));
-        assert!(!asked.contains(KeyboardFlags::ALTERNATE_KEYS));
+        assert!(
+            asked.contains(KeyboardFlags::ALTERNATE_KEYS),
+            "the flag that used to be the unimplemented one is passed through now"
+        );
 
-        // And the same bit arriving on its own is nothing at all, rather than a set
-        // that claims to have it.
+        // A bit above the five defined ones is nothing at all, rather than a set that
+        // claims to have it.
+        assert_eq!(KeyboardFlags::from_bits(0b10_0000), KeyboardFlags::NONE);
+        assert_eq!(KeyboardFlags::from_bits(0b1010_0000), KeyboardFlags::NONE);
+
+        // And the alternate-keys bit arriving on its own is now that bit and no other.
         assert_eq!(
             KeyboardFlags::from_bits(KeyboardFlags::ALTERNATE_KEYS.bits()),
-            KeyboardFlags::NONE
+            KeyboardFlags::ALTERNATE_KEYS
         );
     }
 

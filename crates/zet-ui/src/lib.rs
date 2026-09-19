@@ -246,7 +246,13 @@ pub struct SettingLine<'a> {
 pub enum Row {
     /// A section's name, and the rule under it.
     Heading,
-    /// A line of text with nothing to click: something the configuration file got wrong.
+    /// A line of text with nothing to click: a diagnostic, or a setting the panel can
+    /// only report.
+    ///
+    /// Two things drawn the same way, because neither is a control: what the
+    /// configuration file got wrong, and a setting whose value no one of the four
+    /// controls can carry. The caller decides which it is; this crate only has to draw
+    /// the label and the value.
     Note,
     /// A setting, and what its control does.
     Control(Control),
