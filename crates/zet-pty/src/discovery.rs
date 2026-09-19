@@ -75,8 +75,10 @@ impl Profile {
 ///
 /// The first entry is the one a new tab opens with when the user has expressed no
 /// preference. On this platform that is PowerShell 7 if it is installed, because it is
-/// what a terminal's own users install first, and Command Prompt otherwise, because it
-/// is the one thing guaranteed to be there.
+/// what a terminal's own users install first, and Windows PowerShell or Command Prompt
+/// otherwise, because those are the ones guaranteed to be there. [`order`] is what decides
+/// that, so that it is a fact about the shells rather than about which of the four sources
+/// below happened to reach one first.
 pub fn discover() -> Vec<Profile> {
     let mut found = Vec::new();
     let system_root =
@@ -147,7 +149,36 @@ pub fn discover() -> Vec<Profile> {
         }
     }
 
-    dedupe(found)
+    let mut kept = dedupe(found);
+    order(&mut kept);
+    kept
+}
+
+/// Put a found set of profiles into the order the picker shows them.
+///
+/// The one rule with a reason of its own is the top of the list, because the first entry is
+/// the shell a new tab opens. PowerShell 7 leads *wherever it was found* — the well-known
+/// location, `PATH`, a package manager's directory — since which of those a machine's
+/// install used is not something the user chose, and the sources below reach it in an order
+/// that has nothing to do with which shell it is. Windows PowerShell and `cmd.exe` follow,
+/// because both are certain to be present and neither is what someone who installed pwsh 7
+/// wants by default. Everything else is left in the order the sources found it.
+///
+/// The Store alias is deliberately not promoted with `pwsh`: it is a shortcut that opens
+/// the Store when the app behind it is not installed, and ranking it above two shells that
+/// are known to work would be ranking a maybe above two certainties.
+fn order(profiles: &mut [Profile]) {
+    profiles.sort_by_key(rank);
+}
+
+/// How early a profile is shown, lowest first. See [`order`] for what the ranks mean.
+fn rank(profile: &Profile) -> u8 {
+    match profile.id.as_str() {
+        "pwsh" => 0,
+        "powershell" => 1,
+        "cmd" => 2,
+        _ => 3,
+    }
 }
 
 /// Drop profiles that would launch the same thing twice.
@@ -537,6 +568,110 @@ mod tests {
             );
             assert!(!profile.id.is_empty());
             assert!(!profile.name.is_empty());
+        }
+    }
+
+    #[test]
+    fn powershell_7_is_the_shell_a_new_tab_opens_whichever_source_found_it() {
+        // A machine whose pwsh is not at the well-known location — Scoop, a user-scope
+        // install, a package manager's directory — used to open Windows PowerShell 5.1 in
+        // a new tab, because the `PATH` search ran after the fallbacks and the first entry
+        // is the one a new tab opens. Which source reached the shell first is not something
+        // the user chose; which shell it is, is.
+        let mut found = vec![
+            Profile::new(
+                "powershell",
+                "Windows PowerShell",
+                PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"),
+                Source::KnownLocation,
+            ),
+            Profile::new(
+                "cmd",
+                "Command Prompt",
+                PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+                Source::KnownLocation,
+            ),
+            Profile::new(
+                "pwsh",
+                "PowerShell 7",
+                PathBuf::from(r"C:\Users\someone\scoop\shims\pwsh.exe"),
+                Source::Path,
+            ),
+            Profile::new(
+                "nu",
+                "Nushell",
+                PathBuf::from(r"C:\bin\nu.exe"),
+                Source::Path,
+            ),
+        ];
+        order(&mut found);
+        assert_eq!(
+            found
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["pwsh", "powershell", "cmd", "nu"],
+            "a new tab opens the first profile"
+        );
+    }
+
+    #[test]
+    fn everything_that_is_not_one_of_the_three_shells_keeps_the_order_it_was_found_in() {
+        // The rank is about which shell a new tab opens, and past `cmd` there is nothing to
+        // rank: the sources are consulted in the order a user would expect to see them, and
+        // a sort that reshuffled them would be a second opinion about that order.
+        let mut found = vec![
+            Profile::new(
+                "nu",
+                "Nushell",
+                PathBuf::from(r"C:\bin\nu.exe"),
+                Source::Path,
+            ),
+            Profile::new(
+                "git-bash",
+                "Git Bash",
+                PathBuf::from(r"C:\bin\bash.exe"),
+                Source::Path,
+            ),
+            Profile::new(
+                "wsl:Ubuntu",
+                "Ubuntu (WSL)",
+                PathBuf::from(r"C:\bin\wsl.exe"),
+                Source::Wsl,
+            ),
+            Profile::new(
+                "pwsh-alias",
+                "PowerShell 7 (Store)",
+                PathBuf::from(r"C:\alias\pwsh.exe"),
+                Source::AppAlias,
+            ),
+        ];
+        order(&mut found);
+        assert_eq!(
+            found
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nu", "git-bash", "wsl:Ubuntu", "pwsh-alias"]
+        );
+    }
+
+    #[test]
+    fn a_machine_with_powershell_7_opens_a_tab_with_it() {
+        // The machine-level half of the same rule: whatever `discover` found, if it found
+        // PowerShell 7 then that is what a new tab opens. The profile is looked for by id
+        // and not by position, because where discover put it is the thing under test.
+        let profiles = discover();
+        if profiles.iter().any(|profile| profile.id == "pwsh") {
+            assert_eq!(
+                profiles[0].id,
+                "pwsh",
+                "found {:#?}",
+                profiles
+                    .iter()
+                    .map(|profile| &profile.id)
+                    .collect::<Vec<_>>()
+            );
         }
     }
 
