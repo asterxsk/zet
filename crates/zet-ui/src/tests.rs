@@ -19,8 +19,8 @@ use zet_render::{BatchKind, Frame, Placement, Quad};
 
 use crate::fonts::GlyphSource;
 use crate::geometry::{
-    CAPTION_WIDTH, MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, PANEL_RAIL, RAIL_WIDTH, ROW_HEIGHT,
-    SETTINGS_CELL, menu_rect, menu_width,
+    CAPTION_WIDTH, CLOSE_BAND, CONTROLS_GAP, MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, PANEL_RAIL,
+    RAIL_WIDTH, ROW_HEIGHT, SETTINGS_CELL, TAB_GAP, TAB_PADDING, menu_rect, menu_width,
 };
 use crate::{
     Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, MenuLine, PickerLine, Rect, Row,
@@ -398,10 +398,11 @@ fn the_tabs_sit_side_by_side_and_a_cell_is_what_the_sum_of_its_parts_says() {
     assert!((first.height - ROW_HEIGHT).abs() < f32::EPSILON);
 
     // `#1 Terminal 1`: the `#` at seventy percent, one digit, the gap, ten characters of
-    // name at half the size, and the padding either side. Every character in the test
-    // source is half an em wide, which is what makes this an arithmetic rather than a
-    // measurement.
-    let expected = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + 8.0 + 10.0 * 13.0 * 0.5 + 2.0 * 12.0;
+    // name at half the size, the padding on the way in, and the band the × lives in on the
+    // way out. Every character in the test source is half an em wide, which is what makes
+    // this an arithmetic rather than a measurement.
+    let expected =
+        13.0 * 0.7 * 0.5 + 13.0 * 0.5 + TAB_GAP + 10.0 * 13.0 * 0.5 + TAB_PADDING + CLOSE_BAND;
     assert!(
         (first.width - expected).abs() < 1.0e-4,
         "a tab is {expected} wide, not {}",
@@ -455,12 +456,16 @@ fn the_new_tab_mark_ends_the_run_and_has_a_bare_tab_s_footprint() {
     let rects = tab_rects(&chrome);
     let plus = plus_rect(&chrome).expect("the new-tab mark is always on the row");
     let last = rects[rects.len() - 1].1;
-    assert!((plus.x - last.right()).abs() < f32::EPSILON);
-    // A tab with nothing to say: `#1` and its padding. The mark is the tab that is about
-    // to exist, and a new tab has no name until a program gives it one — so the mark is
-    // the width of the cell it will land in, not the width of a tab that is running a
-    // title.
-    let bare = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + 2.0 * 12.0;
+    assert!(
+        (plus.x - last.right() - CONTROLS_GAP).abs() < f32::EPSILON,
+        "the run and the mark are {} apart and the gap is {CONTROLS_GAP}",
+        plus.x - last.right()
+    );
+    // A tab with nothing to say: `#1`, its padding, and the band its × lives in — the cell
+    // has to hold a mark whether or not there is a name, and the new-tab mark stands where
+    // that cell does. A new tab has no name until a program gives it one, so the mark is the
+    // width of the cell it will land in, not the width of a tab that is running a title.
+    let bare = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + TAB_PADDING + CLOSE_BAND;
     assert!(
         (plus.width - bare).abs() < 1.0e-4,
         "the mark is {bare} wide, not {}",
@@ -521,7 +526,10 @@ fn the_run_starts_after_the_app_name() {
     assert!((rects[0].1.x - start).abs() < 1.0e-4, "after the app name");
     let run = rects[1].1.right() - start;
     assert!((run - 2.0 * rects[0].1.width).abs() < 1.0e-4);
-    assert!((plus.right() - (start + run + plus.width)).abs() < 1.0e-4);
+    assert!(
+        (plus.right() - (start + run + CONTROLS_GAP + plus.width)).abs() < 1.0e-4,
+        "the mark does not end the run at its own gap: {plus:?}"
+    );
 }
 
 #[test]
@@ -694,7 +702,7 @@ fn a_tab_with_no_name_is_still_a_tab() {
     let drawn = draw(&mut chrome, &input(&palette, &tabs, window()));
 
     assert!(run(&drawn.frame, Weight::MEDIUM).contains("#1"));
-    let bare = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + 2.0 * 12.0;
+    let bare = 13.0 * 0.7 * 0.5 + 13.0 * 0.5 + TAB_PADDING + CLOSE_BAND;
     assert!((tab_rect(&chrome, 1).width - bare).abs() < 1.0e-4);
 }
 
@@ -914,13 +922,13 @@ fn a_hovered_tab_gets_a_bar_and_a_mark() {
     );
     assert!((bar.rect[1] - (ROW_HEIGHT - 2.0)).abs() < f32::EPSILON);
 
-    // The × sits in the cell's right padding, in `ink-mid` at rest.
+    // The × sits in the cell's right band, in `ink-mid` at rest.
     let cell = tab_rect(&chrome, 2);
     let mark = close_rect(&chrome, TabId::Terminal(2)).expect("the hovered cell's ×");
     assert_eq!(
         mark,
-        Rect::new(cell.right() - 12.0, cell.y, 12.0, cell.height),
-        "the × is not the cell's right padding"
+        Rect::new(cell.right() - CLOSE_BAND, cell.y, CLOSE_BAND, cell.height),
+        "the × is not the cell's right band"
     );
     assert!(
         extra.iter().any(|quad| same(stripped(quad.color), ink_mid)),
@@ -991,7 +999,7 @@ fn the_run_does_not_move_when_the_pointer_crosses_it() {
 }
 
 #[test]
-fn a_close_mark_sits_in_the_padding_a_cell_already_has() {
+fn a_close_mark_sits_in_the_band_a_cell_already_has() {
     let palette = Palette::instrument();
     for position in [TabPosition::Top, TabPosition::Left] {
         let settings = TabSettings {
@@ -1011,14 +1019,53 @@ fn a_close_mark_sits_in_the_padding_a_cell_already_has() {
             .unwrap_or_else(|| panic!("no × in {position:?}"));
         assert_eq!(
             mark,
-            Rect::new(cell.right() - 12.0, cell.y, 12.0, cell.height),
-            "the × is not the cell's right `TAB_PADDING` in {position:?}"
+            Rect::new(cell.right() - CLOSE_BAND, cell.y, CLOSE_BAND, cell.height),
+            "the × is not the cell's right `CLOSE_BAND` in {position:?}"
         );
         assert!(
             (cell.width - width).abs() < f32::EPSILON,
             "the mark changed a cell's width in {position:?}"
         );
     }
+}
+
+#[test]
+fn the_close_mark_is_smaller_than_a_caption_button_s_and_clear_of_both_edges() {
+    // The × is a control inside a cell rather than a button with a face of its own, and at the
+    // caption's ten pixels it was the heaviest thing in a strip whose numbers are set at
+    // thirteen. The band it is centred in is the rest of it: the ink has to sit strictly
+    // inside the region the pointer can hit, which is also what keeps it off the name — a
+    // name is fitted to end at the band, so no glyph is in there either.
+    let palette = Palette::instrument();
+    let mut raised = tabs(&[1, 2]);
+    raised[0].hovered = true;
+    let mut chrome = chrome();
+    // Asked about once the hover has arrived: the mark is drawn at the hover's own coverage,
+    // so the frame the pointer lands on is a frame with nothing of it on it.
+    let drawn = settled(&mut chrome, &input(&palette, &raised, window()), 0.0);
+
+    let mark = close_rect(&chrome, TabId::Terminal(1)).expect("the hovered cell's ×");
+    let ink = ink_in(&drawn, mark, 1.0);
+    assert!(!ink.is_empty(), "the hovered cell drew no ×");
+
+    // The cross's coverage ramp inks a pixel either side of its box, so this is the drawn
+    // extent rather than the box: what the comparison has to prove is that the tab's mark is
+    // the smaller of the two, and what the second assertion has to prove is that both of
+    // those ramp pixels are still inside the band the pointer answers to.
+    let ((tab_left, tab_right), _) = ink_extent(&ink);
+    let ((caption_left, caption_right), _) = ink_extent(&mark_ink(Caption::Close, 1.0, false));
+    assert!(
+        tab_right - tab_left < caption_right - caption_left,
+        "the tab's × is {} pixels across and a caption button's is {}: it was not made smaller",
+        tab_right - tab_left,
+        caption_right - caption_left
+    );
+    let edge = CLOSE_BAND as i32 / 2;
+    assert!(
+        tab_left >= -edge && tab_right <= edge,
+        "the × reaches the band's edge: columns {tab_left}..{tab_right} in a band of \
+         {CLOSE_BAND}, whose half is {edge}"
+    );
 }
 
 #[test]
@@ -3712,7 +3759,7 @@ fn the_title_under_a_menu_is_not_in_the_batch_the_menu_is() {
 ///
 /// It is not a cell of the strip's kind and is not measured like one: the new-tab mark is a
 /// tab's width because it stands where a tab would, and the settings mark is a fixed sixteen
-/// pixels with no number and no padding, which is what puts its centre twenty-five and a half
+/// pixels with no number and no padding, which is what puts its centre twenty-eight and a half
 /// pixels from the new-tab mark's rather than a whole cell away.
 #[test]
 fn the_settings_control_sits_beside_the_new_tab_mark() {
@@ -3734,7 +3781,7 @@ fn the_settings_control_sits_beside_the_new_tab_mark() {
     );
     assert!((settings.height - ROW_HEIGHT).abs() < f32::EPSILON);
     assert!(
-        (settings.center().0 - plus.center().0 - 25.5).abs() < 0.05,
+        (settings.center().0 - plus.center().0 - 28.5).abs() < 0.05,
         "the two marks are {} apart centre to centre: {plus:?} and {settings:?}",
         settings.center().0 - plus.center().0
     );
@@ -3779,7 +3826,7 @@ fn the_settings_control_is_dropped_before_the_new_tab_mark_is() {
     // tabs is sized, so the two only ever compete in a strip with no room for a tab at all —
     // which is this one, and is the strip where the question of which control gives way is
     // asked. One tenth of a pixel less is the other side of the line.
-    let both = 3.0 * CAPTION_WIDTH + plus.width + SETTINGS_CELL;
+    let both = 3.0 * CAPTION_WIDTH + CONTROLS_GAP + plus.width + SETTINGS_CELL;
     let at = |width: f32| Size {
         width,
         height: 800.0,

@@ -94,7 +94,10 @@ fn stroke(scale: f32) -> f32 {
 ///
 /// `button` is the whole clickable rectangle in logical pixels — 46 by 40, Windows'
 /// metric — and the mark is centred inside it, which is why this takes the button rather
-/// than a box.
+/// than a box. `box` is the side of the square the mark itself is measured in, which is
+/// [`MARK_BOX`] for every control in the window's own furniture and a size of its caller's
+/// choosing for a mark that sits inside something else: the strip's × is drawn in a tab's
+/// cell, where ten pixels read as the heaviest thing in the row.
 ///
 /// The coverage is the hover's cross-fade, which is the one caller that wants a mark at
 /// anything but full strength: it draws the resting mark and the hovered one over each other,
@@ -107,6 +110,7 @@ pub(crate) fn draw(
     paint: &mut Painter<'_>,
     mark: Mark,
     button: Rect,
+    box_: f32,
     color: Rgb,
     alpha: f32,
     scale: f32,
@@ -121,7 +125,7 @@ pub(crate) fn draw(
     let (cx, cy) = button.center();
     let centre_x = (cx * scale).round();
     let centre_y = (cy * scale).round();
-    let half = (MARK_BOX * scale / 2.0).round().max(1.0);
+    let half = (box_ * scale / 2.0).round().max(1.0);
     let thickness = stroke(scale);
 
     let left = centre_x - half;

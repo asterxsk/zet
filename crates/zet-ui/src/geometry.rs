@@ -131,8 +131,37 @@ pub const NAME_TRACKING: f32 = 0.02;
 /// The size of a tab's index, and therefore of the new-tab mark.
 pub const TAB_SIZE: f32 = 13.0;
 
-/// The padding either side of a tab's index.
+/// The padding in front of a tab's index, and therefore between cells.
+///
+/// One number for the room a cell's content leaves on its way in and the room two cells
+/// leave between them, which is the same gap seen from either side.
 pub const TAB_PADDING: f32 = 12.0;
+
+/// The width reserved at a cell's right edge for its close mark, in logical pixels.
+///
+/// The name is fitted to stop at this line, so a tab's text and its × never touch: the mark
+/// is narrower than the band and is centred in it, which leaves as many pixels between the
+/// text and the mark as between the mark and the cell's edge. Deliberately not
+/// [`TAB_PADDING`]: padding is where a cell breathes and this is where a control sits, and a
+/// mark as close to the name as two names are to each other is a mark the eye reads as part
+/// of the title.
+pub const CLOSE_BAND: f32 = 18.0;
+
+/// The side of the square a tab's close mark is drawn in, in logical pixels.
+///
+/// Smaller than the caption buttons' `MARK_BOX`: a tab's × is a control inside a cell rather
+/// than a button with a face of its own, and at the caption's ten pixels it was the heaviest
+/// thing in a strip whose numbers are set at thirteen.
+pub const CLOSE_MARK: f32 = 8.0;
+
+/// The gap between the run of tabs and the two controls at its end, in logical pixels.
+///
+/// A new-tab mark butted against the last cell reads as the next tab in the run, which is
+/// exactly what it is not — it is a control, and the run has to say where it stops. The gap
+/// is the strip's own [`TAB_PADDING`] plus the air a control's own box wants, and it is
+/// smaller than the app name's gap because the tabs and the marks are one cluster and the
+/// name is not part of it.
+pub const CONTROLS_GAP: f32 = 12.0;
 
 /// The gap between a tab's number and its name.
 pub const TAB_GAP: f32 = 8.0;

@@ -16,12 +16,12 @@ use crate::Hit;
 use crate::TabId;
 use crate::TabInfo;
 use crate::geometry::{
-    CAPTION_WIDTH, HASH_RATIO, INDICATOR, NAME_GAP, NAME_INSET, NAME_SIZE, NAME_TRACKING,
-    RAIL_CELL, RAIL_CELL_FLOOR, RAIL_WIDTH, ROW_HEIGHT, Rect, SETTINGS_CELL, Size, TAB_GAP,
-    TAB_MAX_WIDTH, TAB_PADDING, TAB_SIZE, TRAVEL,
+    CAPTION_WIDTH, CLOSE_BAND, CLOSE_MARK, CONTROLS_GAP, HASH_RATIO, INDICATOR, NAME_GAP,
+    NAME_INSET, NAME_SIZE, NAME_TRACKING, RAIL_CELL, RAIL_CELL_FLOOR, RAIL_WIDTH, ROW_HEIGHT, Rect,
+    SETTINGS_CELL, Size, TAB_GAP, TAB_MAX_WIDTH, TAB_PADDING, TAB_SIZE, TRAVEL,
 };
 use crate::hover::{Fades, Hover};
-use crate::marks::{self, Mark};
+use crate::marks::{self, MARK_BOX, Mark};
 use crate::paint::{Painter, TextStyle};
 
 /// How strong the wash under a caption button that is not close is at full hover.
@@ -51,13 +51,13 @@ pub(crate) struct TabCell {
     /// Zero on a cell with no room for a name, which is every cell in the rail and every
     /// cell in a run that has been squeezed down to its numbers.
     pub title: usize,
-    /// The ×, in the cell's right padding, when the pointer is over the cell.
+    /// The ×, in the cell's right [`CLOSE_BAND`], when the pointer is over the cell.
     ///
-    /// `Some` exactly when [`TabInfo::hovered`] is, and its rectangle is the right `TAB_PADDING`
-    /// of the cell at full height. That padding is already there and already empty — a name is
-    /// fitted to end `TAB_PADDING` short of the cell — so the mark overlaps nothing and moves
-    /// nothing, which is what lets it appear under the pointer without the run reflowing
-    /// beneath it. `None` is the mark that is not drawn and therefore is not hit.
+    /// `Some` exactly when [`TabInfo::hovered`] is, and its rectangle is that band at full
+    /// height. The band is already there and already empty — a name is fitted to end at it —
+    /// so the mark overlaps nothing and moves nothing, which is what lets it appear under the
+    /// pointer without the run reflowing beneath it. `None` is the mark that is not drawn and
+    /// therefore is not hit.
     pub close: Option<Rect>,
 }
 
@@ -178,7 +178,14 @@ fn horizontal(
     // guarantee: the run of tabs stops before both of them.
     let plus_width = number_cell(paint, TabId::Terminal(1));
     let settings_width = SETTINGS_CELL;
-    let controls = plus_width + settings_width;
+    // The gap is between the run and the controls, so a strip with no run has nothing for it
+    // to separate: the `+` stands where a first tab would, at the app name's own gap.
+    let gap = if input.tabs.is_empty() {
+        0.0
+    } else {
+        CONTROLS_GAP
+    };
+    let controls = gap + plus_width + settings_width;
     let natural: f32 = input
         .tabs
         .iter()
@@ -220,15 +227,18 @@ fn horizontal(
         cursor += width;
     }
 
-    let plus =
-        (cursor + plus_width <= limit).then(|| Rect::new(cursor, 0.0, plus_width, ROW_HEIGHT));
+    // A run with nothing drawn in it is not a run, so the gap goes with it: the mark stands
+    // where a first tab would rather than twelve pixels to the right of nowhere.
+    let gap = if tabs.is_empty() { 0.0 } else { gap };
+    let plus = (cursor + gap + plus_width <= limit)
+        .then(|| Rect::new(cursor + gap, 0.0, plus_width, ROW_HEIGHT));
     // The settings control is dropped rather than squeezed when the two do not both fit: a
     // control drawn a few pixels narrower than its own mark is a mark with its edge cut off,
     // and the chord that opens the page is still there. The width it would have taken
     // becomes drag region, which is where a press on a strip with no room for controls
     // should land anyway.
     let settings = (cursor + controls <= limit)
-        .then(|| Rect::new(cursor + plus_width, 0.0, settings_width, ROW_HEIGHT));
+        .then(|| Rect::new(cursor + gap + plus_width, 0.0, settings_width, ROW_HEIGHT));
     let end = settings.map_or_else(|| plus.map_or(cursor, Rect::right), Rect::right);
     let drag = Rect::between(end, 0.0, limit, ROW_HEIGHT);
 
@@ -344,6 +354,7 @@ pub(crate) fn settings_mark(
             paint,
             Mark::Sliders,
             rect,
+            MARK_BOX,
             input.palette.ink,
             1.0,
             input.scale,
@@ -356,6 +367,7 @@ pub(crate) fn settings_mark(
             paint,
             Mark::Sliders,
             rect,
+            MARK_BOX,
             input.palette.ink_mid,
             1.0 - lit,
             input.scale,
@@ -366,6 +378,7 @@ pub(crate) fn settings_mark(
             paint,
             Mark::Sliders,
             rect,
+            MARK_BOX,
             input.palette.ink,
             lit,
             input.scale,
@@ -393,13 +406,19 @@ fn number_style() -> TextStyle {
 /// How wide the cell is that holds a number and nothing else.
 ///
 /// The floor a tab is squeezed to, and the footprint the new-tab mark takes. A settings cell
-/// has no number, so its floor is the padding alone: the callers that ask for a floor are
+/// has no number, so its floor is the two edges alone: the callers that ask for a floor are
 /// asking "how narrow can this cell be and still show what it has", and what a settings cell
 /// has is its name, which needs exactly the padding it is drawn with.
+///
+/// The two edges are not the same width. A cell's left side is its [`TAB_PADDING`]; its right
+/// side is the [`CLOSE_BAND`] its × needs, which is where every cell's name is fitted to stop
+/// — so this is the floor with the mark in it rather than a floor the mark was made to fit.
 fn number_cell(paint: &mut Painter<'_>, id: TabId) -> f32 {
     match id {
-        TabId::Terminal(index) => number_width(paint, index, number_style()) + 2.0 * TAB_PADDING,
-        TabId::Settings => 2.0 * TAB_PADDING,
+        TabId::Terminal(index) => {
+            number_width(paint, index, number_style()) + TAB_PADDING + CLOSE_BAND
+        }
+        TabId::Settings => TAB_PADDING + CLOSE_BAND,
     }
 }
 
@@ -430,12 +449,12 @@ fn tab_width(paint: &mut Painter<'_>, tab: &TabInfo, cap: f32) -> f32 {
 
 /// Where a cell's × goes, or `None` when the pointer is not over the cell.
 ///
-/// No new measurement and no reserved slot: a mark is ten pixels and the cell's right
-/// `TAB_PADDING` is already twelve and already empty, because that is where the name is fitted
-/// to stop. The mark is drawn centred in that padding, in both positions of the strip, so a
-/// cell's width, its name's fit, and `tab_cap`'s floor are all exactly what they were.
+/// No new measurement and no reserved slot: the cell's right [`CLOSE_BAND`] is already empty,
+/// because that is where the name is fitted to stop. The mark is drawn centred in that band,
+/// in both positions of the strip, so a cell's width, its name's fit, and `tab_cap`'s floor
+/// are all exactly what they were.
 fn close_box(cell: Rect, hovered: bool) -> Option<Rect> {
-    hovered.then(|| Rect::new(cell.right() - TAB_PADDING, cell.y, TAB_PADDING, cell.height))
+    hovered.then(|| Rect::new(cell.right() - CLOSE_BAND, cell.y, CLOSE_BAND, cell.height))
 }
 
 /// How wide a tab's cell may be, given how many there are and how much run they share.
@@ -596,11 +615,11 @@ pub(crate) fn draw(
 
         let x = if strip.position == TabPosition::Left {
             // The number is centred in what the mark leaves rather than in the whole cell: the
-            // rail reserves the same right `TAB_PADDING` a horizontal cell does, so both
-            // positions carry the × in the same place. The number moves half a padding left of
+            // rail reserves the same right `CLOSE_BAND` a horizontal cell does, so both
+            // positions carry the × in the same place. The number moves half a band left of
             // centre, permanently, which is the price of the strip being the same in both.
-            let width = number_cell(paint, cell.id) - 2.0 * TAB_PADDING;
-            cell.rect.x + (cell.rect.width - TAB_PADDING - width) / 2.0
+            let width = number_cell(paint, cell.id) - TAB_PADDING - CLOSE_BAND;
+            cell.rect.x + (cell.rect.width - CLOSE_BAND - width) / 2.0
         } else {
             cell.rect.x + TAB_PADDING
         };
@@ -688,7 +707,15 @@ fn close_mark(
     } else {
         input.palette.ink_mid
     };
-    marks::draw(paint, Mark::Close, rect, ink, coverage, input.scale);
+    marks::draw(
+        paint,
+        Mark::Close,
+        rect,
+        CLOSE_MARK,
+        ink,
+        coverage,
+        input.scale,
+    );
 }
 
 /// A tab's number: the `#` at seventy percent, then its digits.
@@ -781,11 +808,20 @@ pub(crate) fn captions(
             if closing { lit } else { lit * CAPTION_WASH },
         );
         let mark = mark_of(*caption, input.maximized);
-        marks::draw(paint, mark, *rect, palette.ink_mid, 1.0 - lit, input.scale);
         marks::draw(
             paint,
             mark,
             *rect,
+            MARK_BOX,
+            palette.ink_mid,
+            1.0 - lit,
+            input.scale,
+        );
+        marks::draw(
+            paint,
+            mark,
+            *rect,
+            MARK_BOX,
             if closing { palette.ground } else { palette.ink },
             lit,
             input.scale,

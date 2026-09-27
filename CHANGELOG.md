@@ -54,11 +54,15 @@ counts as a breaking change in a terminal, is in
     a screen that is not being shown. Chords still go through, because a chord is the user asking
     zet itself for something. The mouse is held back for the same reason: a program in reporting
     mode would be told about a click at a coordinate on a screen it is not on.
+- **`zet-ui`** — the new-tab mark stands twelve pixels clear of the run of tabs, which is where the
+  run ends: a `+` butted against the last cell read as the next tab rather than as a control. The
+  settings mark beside it is unmoved — the two are one cluster.
 - **`zet-ui`, `zet`** — a tab has a close mark: an × at the right of its cell, drawn while the pointer
   is on the cell, and the settings cell has one too.
-  - It goes in the right `TAB_PADDING` a cell already leaves empty — a ten-pixel mark inside twelve
-    pixels — so no cell's width, no name's fit, and no floor in `tab_cap` changes for it. There is no
-    reserved slot and no new measurement.
+  - It goes in the right `CLOSE_BAND` a cell reserves — eighteen pixels, wider than the twelve a
+    cell pads with — and is eight pixels across rather than the caption buttons' ten. The band is
+    what a name is fitted against, so the mark, the gap in front of it and the gap behind it are all
+    decided before the pointer arrives and nothing reflows when it does.
   - `Hit::CloseTab` carries a `TabId` rather than a tab number, so the mark closes the tab it is
     drawn on rather than the tab the app happens to have active. A user aiming at a cell's × has
     aimed at that cell, which is not always the cell on screen.

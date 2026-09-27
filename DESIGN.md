@@ -175,19 +175,26 @@ right now.
   untouched: its index is `ink` and its bar is already there, and the tab that is
   open outranks the pointer.
 - New tab: a `+` at the end of the run, the footprint of a tab with no name,
-  `ink-dim`.
-- Every cell carries a × when the pointer is on it, in the right padding the cell
-  already leaves empty: a mark ten pixels wide inside a `TAB_PADDING` of twelve, so no
-  cell's width, no name's fit, and no floor in the cap changes for it. It is drawn only
-  while the pointer is on the cell, so a strip with no pointer on it is the strip it
-  always was, and the × cannot be reached for without the cell it belongs to lighting
-  first. Its ink is `ink-mid` anywhere in the cell and `danger` inside the mark itself —
-  the caption's close button spends the same colour for the same reason. That last step
-  is the one hover in the chrome that is not a fade: the mark does not exist until the
-  pointer is already inside its own cell, so the two are one control seen at two
-  distances rather than two controls the pointer crosses between. The settings cell has
-  one too: it is a tab like the others, and a tab that cannot be closed the way it is
-  closed is a tab that teaches the wrong gesture.
+  `ink-dim`, standing one `CONTROLS_GAP` of 12px clear of the last cell. A mark butted
+  against the run reads as the next tab in it, which is exactly what it is not: the run
+  has to say where it stops before the control does.
+- Every cell carries a × when the pointer is on it, in the `CLOSE_BAND` of 18px the
+  cell reserves at its right. A name is fitted to end at that band, so the mark, the
+  gap in front of it and the gap behind it are all decided before the pointer arrives
+  and nothing reflows when it does — and the mark is 8px rather than the caption
+  buttons' 10, because a control inside a cell is not a button with a face of its own
+  and at ten it was the heaviest thing in a strip whose numbers are set at 13. The band
+  is wider than `TAB_PADDING` for the same reason the mark is smaller: two names sit
+  `TAB_PADDING` apart and read as two cells, so a mark the same distance from a name
+  reads as part of it. It is drawn only while the pointer is on the cell, so a strip
+  with no pointer on it is the strip it always was, and the × cannot be reached for
+  without the cell it belongs to lighting first. Its ink is `ink-mid` anywhere in the
+  cell and `danger` inside the mark itself — the caption's close button spends the same
+  colour for the same reason. That last step is the one hover in the chrome that is not
+  a fade: the mark does not exist until the pointer is already inside its own cell, so
+  the two are one control seen at two distances rather than two controls the pointer
+  crosses between. The settings cell has one too: it is a tab like the others, and a tab
+  that cannot be closed the way it is closed is a tab that teaches the wrong gesture.
 - The OS window title is the active tab's name and then `zet`, so the taskbar and
   Alt-Tab distinguish two zet windows. The drawn strip keeps `zet` in its own
   slot: the names are already on the tabs.
@@ -206,8 +213,9 @@ right now.
 ```
 
 - Rail width 48px, cells 36px tall, index centred in what the × leaves — the rail
-  reserves the same right `TAB_PADDING` a horizontal cell does, so both positions carry
-  the mark in the same place.
+  reserves the same `CLOSE_BAND` a horizontal cell does, so both positions carry the mark
+  in the same place. It is the one position where a tab's number is not centred in its
+  cell, and that is the price of the strip behaving the same way in both.
 - The rail carries numbers and no names. It is 48px wide and the whole reason to
   choose it is that it gives the grid the rest, so a name in it would be a name in
   the space the tabs were moved aside to free. This is the one position where a tab
@@ -326,8 +334,10 @@ Windows Terminal.
 - Two controls sit after the last tab: `+` for a new tab, and the settings mark that opens
   the settings tab. `+` is one number cell wide, because it stands where a tab would; the
   settings mark is a fixed 16px, because it is not a tab and has no number to make room
-  for. The two are adjacent — nothing between them — which puts their centres 25.5px
-  apart, where a cell-wide settings control would have put them 35px apart. Both are
+  for. The two are adjacent — nothing between them — and the pair stands 12px clear of the
+  run, so the pair's centres are 28.5px apart, where a cell-wide settings control would
+  have put them 41px apart. That gap is the run's own end rather than the pair's spacing:
+  the two marks are one cluster and the tabs are not part of it. Both are
   drawn only when they fit — a control is never the thing that overflows, and the tabs
   stop before them rather than running under them. The settings mark goes first: 16px is
   the whole difference between a row that holds both and a row that holds one, and the
