@@ -1,0 +1,10 @@
+# `blank_issues_enabled: false` is the point of this file: the two forms are the shape of a report
+# that can be acted on, and a blank issue is usually one of them with the fields missing.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/asterxsk/zet/security/advisories/new
+    about: Privately, never as a public issue. See SECURITY.md for what is in scope.
+  - name: Read the design and the product notes first
+    url: https://github.com/asterxsk/zet/blob/main/DESIGN.md
+    about: How the window is meant to behave and be drawn. Most "should it do X" questions are answered here.

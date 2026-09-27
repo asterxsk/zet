@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest something zet should do. Read the note below first — the list is deliberately short.
+title: "[feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Requests are read, and most are declined on purpose. zet's scope is in
+        [PRODUCT.md](https://github.com/asterxsk/zet/blob/main/PRODUCT.md), and the README's "Why"
+        section says what the project is refusing to become: the point is the depth of the terminal
+        engine, not the length of the feature list. A request that argues from that document — this
+        makes an existing guarantee hold, this is needed for the thing zet already claims to do —
+        gets much further than a request that adds a surface.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What you are trying to do and where zet gets in the way. Describe the problem before the
+        solution: a convincing problem with the wrong proposed fix is still useful, and a fix with
+        no problem behind it is not.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: How you would like it to work, if you have a shape in mind.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead today
+      description: |
+        Another terminal, a script, a keybinding, living with it. This is what the request is
+        weighed against, so it is the most useful part of the form.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Before you send it
+      options:
+        - label: I read PRODUCT.md's scope and this is not a feature it already rules out.
+          required: false
+        - label: I searched the existing issues for this request.
+          required: true

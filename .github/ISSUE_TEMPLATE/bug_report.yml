@@ -1,0 +1,94 @@
+name: Bug report
+description: zet did something it should not have — a crash, a wrong cell on screen, a key that does nothing.
+title: "[bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        zet is pre-alpha: it holds up as a daily driver for one person, and the areas around the
+        terminal engine are thin. A missing feature is usually a known gap rather than a bug — the
+        status paragraph at the top of the README is the honest list. What belongs here is
+        behaviour that is wrong, not behaviour that is not there yet.
+
+        For a security problem, do not open an issue — see
+        [SECURITY.md](https://github.com/asterxsk/zet/blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: zet version
+      description: |
+        The whole line `zet --version` prints: version, commit, and target.
+      placeholder: zet 0.1.2 (a1b2c3d, x86_64-pc-windows-msvc)
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows build
+      description: |
+        The output of `winver`, or the edition and build number from Settings → System → About.
+      placeholder: Windows 11 Home, 24H2, build 26100.2894
+    validations:
+      required: true
+
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      description: |
+        zet renders with wgpu. A large share of what looks like a drawing bug is a driver, so this
+        is the first thing a rendering report is checked against. Windows' Task Manager
+        (Performance → GPU) or `dxdiag` has both.
+      placeholder: AMD Radeon RX 6800, driver 25.5.1
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce it
+      description: |
+        The smallest sequence that shows it. If a program inside zet is involved, name it, and say
+        whether the same program behaves correctly in another terminal.
+
+        A recording of the bytes that trigger it is worth more than a screenshot: if you can
+        capture the output (a script, a log, a file that reproduces it when `type`d) attach it.
+        1. ...
+        2. ...
+        3. ...
+      placeholder: |
+        1. Open zet
+        2. Run ...
+        3. Resize the window
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: |
+        The contents of `%APPDATA%\zet\config.toml`, if you have one. A configuration that reaches
+        an unusual state is a common cause, and the defaults are what the report is reproduced
+        against.
+      render: toml
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Anything else
+      description: Screenshots, a recording, a panic message, or what you already ruled out.
+    validations:
+      required: false
