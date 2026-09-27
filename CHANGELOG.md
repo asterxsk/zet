@@ -9,6 +9,33 @@ counts as a breaking change in a terminal, is in
 
 ## [Unreleased]
 
+### Added
+
+- **`zet-ui`, `zet`** — the settings panel is opened by a control of its own in the tab strip,
+  beside the new-tab mark, and its contents are split into sections down a rail at its left edge.
+  - The control is the same square the new-tab mark is, directly after it, and it goes through the
+    same toggle as the `settings` chord rather than a second one — a button that opened the panel
+    and a binding that toggled it would leave a user pressing the button again to be rid of it and
+    being handed a second panel. It is the one thing in the strip drawn over the panel it opens, so
+    in a window narrow enough that the panel is the window it is still visible and still clickable;
+    it is drawn only when the row has room for it, and never at the expense of a tab's.
+  - Its mark is geometry like the caption buttons' — three bars with a tick on each, in the same
+    hinted whole-pixel idiom. A gear would have meant a polygon rasteriser in a module whose whole
+    subject is a one-pixel stroke landing on exactly one pixel.
+  - The panel is 560 pixels wide, which is a 180-pixel rail and a 380-pixel page: the page is
+    exactly the width the rows were already laid out for, so the rail is what the panel grew by.
+    One section is drawn at a time and without its heading, because the rail is the heading.
+  - The rail is drawn only when there are two or more named sections. A panel with one section, or
+    with rows and no headings at all, is the panel this was before there was a rail.
+  - Sections are named rather than numbered, and the window remembers the name. `Problems` is a
+    section only while the configuration file has something wrong with it, so every index after it
+    moves the moment a setting fixes the last diagnostic, and a window holding an index would find
+    itself on a different section without anything having been asked for.
+  - The sections follow the keyboard: walking past the last row of one lands on the first row of
+    the next, which brings that section to the page with it. No key was invented for the rail, and
+    none was taken from the shell. Clicking a section name switches the page and puts the keyboard
+    back where it was.
+
 ### Fixed
 
 - **`zet-ui`** — right-clicking a tab drew the context menu under the tab's title, so the title

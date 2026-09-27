@@ -122,6 +122,20 @@ pub struct ChromeInput<'a> {
     /// would have stolen them from the shell, and the terminal behind it is supposed to
     /// still be usable.
     pub settings_focus: Option<usize>,
+    /// Which section of the panel to show, by its heading's name.
+    ///
+    /// `None` is the first section, so a caller with no opinion asks for nothing. A name that
+    /// matches no heading shows the first section as well, and the answer comes back in
+    /// [`Layout::settings_section`] — the panel is the side that knows what the headings are,
+    /// and a caller holding a name it was given is a caller that cannot check it.
+    ///
+    /// A name rather than an index, because the headings move: `Problems` is a section that
+    /// exists only while the configuration has something wrong with it, so every index after
+    /// it shifts the moment the last diagnostic is fixed.
+    ///
+    /// Ignored unless [`ChromeInput::settings_open`], and ignored when the list has fewer than
+    /// two named sections: one section is not a choice.
+    pub settings_section: Option<&'a str>,
     /// What the find bar is showing, or `None` when it is closed.
     ///
     /// Whether the bar is open is this and nothing else, so there is no second flag for a
@@ -323,6 +337,13 @@ pub struct Layout {
     /// list it cannot measure, and the wheel would then do nothing for a while before
     /// the content caught up.
     pub settings_scroll: f32,
+    /// The heading line of the section the panel actually drew, when it drew a rail.
+    ///
+    /// `None` when there is no rail — no headings, or one — in which case the whole list is
+    /// the page and there is no section to name. A line index rather than the name, because
+    /// this is `Copy` and borrowed from nothing: the caller already holds the rows, and
+    /// `settings[section].text` is the name.
+    pub settings_section: Option<usize>,
 }
 
 /// What the user hit.
@@ -346,6 +367,17 @@ pub enum Hit {
     Caption(Caption),
     /// The draggable region between the last tab and the caption buttons.
     Drag,
+    /// The settings control in the strip, beside the new-tab mark.
+    ///
+    /// Not [`Hit::Settings`], which is the panel's own surface: this one is the window's
+    /// control that opens and closes it, and it is the reason the panel has a button at all.
+    SettingsButton,
+    /// A section of the panel's rail, by the line its heading is on.
+    ///
+    /// The heading's line index, the same identity [`Hit::Setting`] uses for a row: a click
+    /// on the rail names a heading and a click on a row names a row, and both are resolved
+    /// against the list the caller handed over.
+    Section(usize),
     /// The settings panel is open and the point is inside it, but not on a control.
     Settings,
     /// A settings row's control, by the line it is on and the part of it that was hit.
@@ -461,12 +493,17 @@ enum Region {
         rect: Rect,
     },
     NewTab(Rect),
+    SettingsButton(Rect),
     Caption {
         caption: Caption,
         rect: Rect,
     },
     Drag(Rect),
     Settings(Rect),
+    Section {
+        line: usize,
+        rect: Rect,
+    },
     Setting {
         line: usize,
         part: SettingPart,
@@ -494,9 +531,11 @@ impl Region {
         match self {
             Self::Tab { index, rect } if rect.contains(x, y) => Some(Hit::Tab(*index)),
             Self::NewTab(rect) if rect.contains(x, y) => Some(Hit::NewTab),
+            Self::SettingsButton(rect) if rect.contains(x, y) => Some(Hit::SettingsButton),
             Self::Caption { caption, rect } if rect.contains(x, y) => Some(Hit::Caption(*caption)),
             Self::Drag(rect) if rect.contains(x, y) => Some(Hit::Drag),
             Self::Settings(rect) if rect.contains(x, y) => Some(Hit::Settings),
+            Self::Section { line, rect } if rect.contains(x, y) => Some(Hit::Section(*line)),
             Self::Setting { line, part, rect } if rect.contains(x, y) => Some(Hit::Setting {
                 line: *line,
                 part: *part,
@@ -516,6 +555,28 @@ impl Region {
             }
             _ => None,
         }
+    }
+}
+
+/// Hand one layer of the frame to the frame, as a pair of batches.
+///
+/// A batch per kind and in this order, because the frame draws its batches in the order they
+/// were opened and a layer's text belongs over its own surfaces. An empty run is skipped
+/// rather than opened and closed: an empty batch is a draw call that draws nothing.
+fn submit(frame: &mut zet_render::Frame, quads: &[Quad], glyphs: &[GlyphQuad]) {
+    if !quads.is_empty() {
+        frame.begin_quads();
+        for quad in quads {
+            frame.push_quad(*quad);
+        }
+        frame.end_quads();
+    }
+    if !glyphs.is_empty() {
+        frame.begin_glyphs();
+        for glyph in glyphs {
+            frame.push_glyph(*glyph);
+        }
+        frame.end_glyphs();
     }
 }
 
@@ -567,6 +628,14 @@ pub struct Chrome {
     /// same reason a frame is: this runs sixty times a second.
     quads: Vec<Quad>,
     glyphs: Vec<GlyphQuad>,
+    /// Where the menu's output begins in those two arrays, as of the last frame.
+    ///
+    /// The menu is drawn after everything else, so what it draws is the tail of both arrays,
+    /// and the tail is submitted as its own pair of batches: that is what puts its surface
+    /// over the chrome's text — a tab's title included — while its own labels stay over its
+    /// own surface. Written by [`Chrome::overdraw`], read by [`Chrome::layout`], and the two
+    /// are the same fact about one frame.
+    menu_split: (usize, usize),
 }
 
 /// Everything one frame drew over the terminal, in the order it was drawn.
@@ -608,6 +677,8 @@ impl Chrome {
             regions: Vec::new(),
             quads: Vec::new(),
             glyphs: Vec::new(),
+            // Both totals: with nothing drawn yet and no menu, the tail is empty.
+            menu_split: (0, 0),
         }
     }
 
@@ -761,6 +832,7 @@ impl Chrome {
 
         let over = self.overdraw(input, paint, &strip_plan, left, top, bottom);
         let settings_scroll = over.panel.as_ref().map_or(0.0, |panel| panel.scroll);
+        let settings_section = over.panel.as_ref().and_then(|panel| panel.shown);
 
         self.publish(&strip_plan, &over);
 
@@ -771,6 +843,7 @@ impl Chrome {
             bottom,
             grid,
             settings_scroll,
+            settings_section,
         };
         self.layout
     }
@@ -805,6 +878,13 @@ impl Chrome {
             .map(|picker| overlays::profile_picker(paint, input, picker, left, top, bottom));
         let scroll = overlays::scrollbar(paint, input, top, bottom, self.scroll);
 
+        // The settings control, drawn here rather than with the rest of the strip because the
+        // panel is drawn over the strip: in a window narrow enough that the panel is the
+        // window, a mark drawn with the strip is under the panel — a hit region one can press
+        // and not see. It is the window's control and it belongs with the window's controls,
+        // so it goes over everything the panel put down and under the captions.
+        strip::settings_mark(paint, strip_plan, input);
+
         // Last but the menu, because these are the window's own controls and nothing in zet
         // may cover them: with no tabs there is no row, and they are the only thing left on
         // the window that can be clicked.
@@ -816,10 +896,20 @@ impl Chrome {
         // than against the frame. It covers the caption buttons only when it was opened
         // under them, and the next click — on a caption button or anywhere else — is what
         // dismisses it, which is the rule every menu on the system follows.
+        //
+        // This is also the boundary between the frame's two layers, so it is recorded before
+        // the menu draws rather than after: everything from here to the end of the frame is
+        // the menu's, and `layout` submits it as its own pair of batches. Nothing may be
+        // drawn after the menu — an overlay added below this line would be submitted *inside*
+        // the menu's layer, which is the one way to get this wrong. If something ever has to
+        // sit over the menu, the chrome needs the ordered list of layers rather than a single
+        // boundary, and this comment is the note that says so.
+        let split = (paint.quads(), paint.glyphs());
         let menu = input
             .menu
             .as_ref()
             .map(|menu| overlays::context_menu(paint, input, menu));
+        self.menu_split = split;
 
         Overdrawn {
             menu,
@@ -831,6 +921,30 @@ impl Chrome {
 
     /// Publish what the frame made hittable, from the front of the window backwards.
     fn publish(&mut self, strip_plan: &strip::Strip, over: &Overdrawn) {
+        // The regions run back up the paint order, because `Chrome::hit` answers with the
+        // first region that holds the point: the thing drawn last is the thing clicked.
+        // Pushed the other way round, everything the user can see would be shadowed by
+        // whatever is underneath it — a control by the panel it sits on, a row by the
+        // popover, and no setting and no shell would ever be clicked.
+        //
+        // The menu first of all, because it was drawn last of all: it is the thing the user
+        // is interacting with right now, so it is the thing a click lands on — over the panel,
+        // over the tab strip, and over the caption buttons it happens to cover, which is what
+        // DESIGN.md promises and what the order here used to deny. A click anywhere else is
+        // the click that closes it, which the caller does by not offering a menu next frame —
+        // this crate only says where the menu is.
+        if let Some(menu) = &over.menu {
+            for (row, rect) in &menu.rows {
+                self.regions.push(Region::MenuItem {
+                    row: *row,
+                    rect: *rect,
+                });
+            }
+            self.regions.push(Region::Menu(menu.rect));
+        }
+        // Then the window's own controls, under the menu and over everything else: they are
+        // what is left of the window when there are no tabs, and the panel the gear floats
+        // above is drawn below it.
         for (caption, rect) in &strip_plan.captions {
             self.regions.push(Region::Caption {
                 caption: *caption,
@@ -845,6 +959,9 @@ impl Chrome {
         }
         if let Some(rect) = strip_plan.plus {
             self.regions.push(Region::NewTab(rect));
+        }
+        if let Some(rect) = strip_plan.settings {
+            self.regions.push(Region::SettingsButton(rect));
         }
         if let Some(rect) = strip_plan.drag {
             self.regions.push(Region::Drag(rect));
@@ -868,6 +985,17 @@ impl Chrome {
             self.regions.push(Region::Picker(popover.rect));
         }
         if let Some(panel) = &over.panel {
+            // The rail first of the panel's own regions, for the reason the controls come
+            // before the surface that holds them: the thing drawn on top is what a click
+            // lands on. A rail item and a row cannot overlap — the page is laid out beside
+            // the rail, and both are culled to it — so this is the order made explicit rather
+            // than an order anything depends on.
+            for (line, rect) in &panel.sections {
+                self.regions.push(Region::Section {
+                    line: *line,
+                    rect: *rect,
+                });
+            }
             for (line, part, rect) in &panel.controls {
                 self.regions.push(Region::Setting {
                     line: *line,
@@ -965,69 +1093,3 @@ impl Chrome {
         });
     }
 }
-/// Hand one layer of the frame to the frame, as a pair of batches.
-///
-/// A batch per kind and in this order, because the frame draws its batches in the order they
-/// were opened and a layer's text belongs over its own surfaces. An empty run is skipped
-/// rather than opened and closed: an empty batch is a draw call that draws nothing.
-fn submit(frame: &mut zet_render::Frame, quads: &[Quad], glyphs: &[GlyphQuad]) {
-    if !quads.is_empty() {
-        frame.begin_quads();
-        for quad in quads {
-            frame.push_quad(*quad);
-        }
-        frame.end_quads();
-    }
-    if !glyphs.is_empty() {
-        frame.begin_glyphs();
-        for glyph in glyphs {
-            frame.push_glyph(*glyph);
-        }
-        frame.end_glyphs();
-    }
-}
-
-    /// Where the menu's output begins in those two arrays, as of the last frame.
-    ///
-    /// The menu is drawn after everything else, so what it draws is the tail of both arrays,
-    /// and the tail is submitted as its own pair of batches: that is what puts its surface
-    /// over the chrome's text — a tab's title included — while its own labels stay over its
-    /// own surface. Written by [`Chrome::overdraw`], read by [`Chrome::layout`], and the two
-    /// are the same fact about one frame.
-    menu_split: (usize, usize),
-            // Both totals: with nothing drawn yet and no menu, the tail is empty.
-            menu_split: (0, 0),
-        //
-        // This is also the boundary between the frame's two layers, so it is recorded before
-        // the menu draws rather than after: everything from here to the end of the frame is
-        // the menu's, and `layout` submits it as its own pair of batches. Nothing may be
-        // drawn after the menu — an overlay added below this line would be submitted *inside*
-        // the menu's layer, which is the one way to get this wrong. If something ever has to
-        // sit over the menu, the chrome needs the ordered list of layers rather than a single
-        // boundary, and this comment is the note that says so.
-        let split = (paint.quads(), paint.glyphs());
-        self.menu_split = split;
-        // The regions run back up the paint order, because `Chrome::hit` answers with the
-        // first region that holds the point: the thing drawn last is the thing clicked.
-        // Pushed the other way round, everything the user can see would be shadowed by
-        // whatever is underneath it — a control by the panel it sits on, a row by the
-        // popover, and no setting and no shell would ever be clicked.
-        //
-        // The menu first of all, because it was drawn last of all: it is the thing the user
-        // is interacting with right now, so it is the thing a click lands on — over the panel,
-        // over the tab strip, and over the caption buttons it happens to cover, which is what
-        // DESIGN.md promises and what the order here used to deny. A click anywhere else is
-        // the click that closes it, which the caller does by not offering a menu next frame —
-        // this crate only says where the menu is.
-        if let Some(menu) = &over.menu {
-            for (row, rect) in &menu.rows {
-                self.regions.push(Region::MenuItem {
-                    row: *row,
-                    rect: *rect,
-                });
-            }
-            self.regions.push(Region::Menu(menu.rect));
-        }
-        // Then the window's own controls, under the menu and over everything else: they are
-        // what is left of the window when there are no tabs, and the panel the gear floats
-        // above is drawn below it.

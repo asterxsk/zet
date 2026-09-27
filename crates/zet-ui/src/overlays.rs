@@ -6,6 +6,8 @@
 //! a hairline and a one-step surface change — DESIGN.md's only depth mechanism in the
 //! chrome, since there are no shadows, no gradients, and no glass.
 
+use std::ops::Range;
+
 use zet_font::Weight;
 
 use crate::ChromeInput;
@@ -15,7 +17,7 @@ use crate::ScrollState;
 use crate::SettingLine;
 use crate::SettingPart;
 use crate::geometry::{
-    FIND_BAR_HEIGHT, MENU_PAD, MENU_ROW, PANEL_WIDTH, Rect, SCROLLBAR, SCROLLBAR_HOVER,
+    FIND_BAR_HEIGHT, MENU_PAD, MENU_ROW, PANEL_RAIL, PANEL_WIDTH, Rect, SCROLLBAR, SCROLLBAR_HOVER,
     SCROLLBAR_MIN_THUMB,
 };
 use crate::paint::{Painter, TextStyle};
@@ -272,8 +274,154 @@ pub(crate) struct Panel {
     pub rect: Rect,
     /// Every control that was on screen, and which line it belongs to.
     pub controls: Vec<(usize, SettingPart, Rect)>,
+    /// The rail's items, and the heading line each one shows.
+    ///
+    /// Empty when there is no rail, which is most callers: a list with no headings, or with
+    /// one, is one page and no rail.
+    pub sections: Vec<(usize, Rect)>,
+    /// The heading line of the section that was drawn, when a rail was drawn at all.
+    ///
+    /// The answer to what the caller asked for, which is why it exists: the caller names a
+    /// section and the panel decides what that means, so the layout has to be able to say
+    /// which one it actually drew — a name that matched nothing shows the first section, and
+    /// a caller keeping its own state in step needs to know that.
+    pub shown: Option<usize>,
     /// The scroll this frame was drawn at, clamped to what actually overflows.
     pub scroll: f32,
+}
+
+/// One section of the panel: a heading, and the rows under it.
+///
+/// The sections are the caller's headings and nothing else. What a setting *is* belongs to the
+/// configuration, which this crate is not given, so the words are the caller's and the
+/// grouping is what those words already imply.
+struct Section<'a> {
+    /// The line the section starts on: its heading's line, or 0 for an unnamed leading run.
+    start: usize,
+    /// The line the next section starts on, or the end of the list.
+    end: usize,
+    /// The heading's text, which is what a caller names a section by.
+    ///
+    /// `None` for rows that came before any heading. Nothing current produces one, and a
+    /// caller who does gets a panel with no rail rather than rows quietly dropped.
+    name: Option<&'a str>,
+}
+
+/// The panel's sections, in the order the caller put them in.
+///
+/// Always at least one, because a list with no headings has one section: itself.
+fn sections<'a>(lines: &'a [SettingLine<'a>]) -> Vec<Section<'a>> {
+    let mut out: Vec<Section<'_>> = Vec::new();
+    for (line, setting) in lines.iter().enumerate() {
+        if setting.row != crate::Row::Heading {
+            continue;
+        }
+        if let Some(last) = out.last_mut() {
+            last.end = line;
+        }
+        out.push(Section {
+            start: line,
+            end: lines.len(),
+            name: Some(setting.text),
+        });
+    }
+    match out.first() {
+        // Rows above the first heading are a section of their own, unnamed. They are not
+        // dropped: a panel that stopped listing rows because someone put them in the wrong
+        // order is a panel that hides settings.
+        Some(first) if first.start != 0 => out.insert(
+            0,
+            Section {
+                start: 0,
+                end: first.start,
+                name: None,
+            },
+        ),
+        Some(_) => {}
+        None => out.push(Section {
+            start: 0,
+            end: lines.len(),
+            name: None,
+        }),
+    }
+    out
+}
+
+/// Which section a caller's name asks for, or the first one.
+///
+/// By name rather than by index, because indexes move: the `Problems` section disappears the
+/// moment the last diagnostic is fixed, and every heading after it shifts down by however
+/// many lines it was. A caller holding an index would find itself on a different section the
+/// frame after the fix; a caller holding a name stays where it was.
+fn resolve(name: Option<&str>, all: &[Section<'_>]) -> usize {
+    name.and_then(|name| all.iter().position(|section| section.name == Some(name)))
+        .unwrap_or(0)
+}
+
+/// Draw the rail, and answer where each of its items went.
+///
+/// The panel's one control that is not a setting: the sections, in the order the caller put
+/// them in, with the one being shown filled. Items are set in the same type and the same
+/// upper case as the heading they stand for, because they are that heading — a rail item is
+/// not a second name for a section, it is the section's name, moved to where it can be used
+/// to choose.
+///
+/// Laid out from the top of the panel with the panel's own padding, one row apart. A rail
+/// longer than the panel is not scrolled: sections are counted in single digits in every
+/// configuration this app has, and a scrolling rail is a second scroll for the pointer's
+/// wheel to be sorted between.
+fn draw_rail(
+    paint: &mut Painter<'_>,
+    input: &ChromeInput<'_>,
+    panel: Rect,
+    width: f32,
+    sections: &[Section<'_>],
+    chosen: usize,
+) -> Vec<(usize, Rect)> {
+    let palette = *input.palette;
+    let mut items = Vec::with_capacity(sections.len());
+    let mut y = panel.y + PAD;
+    for (index, section) in sections.iter().enumerate() {
+        let item = Rect::new(panel.x + PAD, y, (width - 2.0 * PAD).max(0.0), ROW);
+        // The panel's own pair of fills: `hairline` for the one you are on, `ground` for the
+        // one under the pointer. The same two the panel gives a control and its hover, which
+        // is what makes the rail read as part of the same surface rather than a second thing
+        // bolted to its edge.
+        let hovered = input.pointer.is_some_and(|(x, y)| item.contains(x, y));
+        if index == chosen {
+            paint.fill(item, palette.hairline);
+        } else if hovered {
+            paint.fill(item, palette.ground);
+        }
+        let style =
+            TextStyle::new(HEADING_SIZE, Weight::MEDIUM, palette.ink).tracking(HEADING_TRACKING);
+        let baseline = paint.baseline_in(item, HEADING_SIZE);
+        paint.text(
+            &section.name.unwrap_or_default().to_uppercase(),
+            item.x,
+            baseline,
+            style,
+        );
+        items.push((section.start, item));
+        y += ROW;
+    }
+    // The seam between the rail and the page: one pixel, the same hairline the panel's own
+    // left edge wears, because a seam inside a surface is a depth step and this crate has
+    // exactly one way to say that.
+    paint.fill(
+        Rect::new(panel.x + width, panel.y, 1.0, panel.height),
+        palette.hairline,
+    );
+    items
+}
+
+/// How wide the rail is inside a panel of `width`.
+///
+/// Two fifths of the panel at most, which only bites in a window too narrow to be showing the
+/// panel's full width anyway: at that point the rail is the part that gives, because a rail of
+/// section names is legible truncated and a page of settings values is not.
+fn rail_width(width: f32) -> f32 {
+    PANEL_RAIL.min(width * 0.4)
 }
 
 /// Draw the settings panel and answer where it went.
@@ -299,9 +447,8 @@ pub(crate) fn panel(
     arrival: f32,
 ) -> Panel {
     let palette = *input.palette;
-    // Narrower than 380 pixels of window means the panel is the window. Letting it hang
-    // off the left edge would put the heading of a section nobody can read behind the
-    // rail.
+    // Narrower than the panel means the panel is the window. Letting it hang off the left
+    // edge would put the rail of a section nobody can read off the screen entirely.
     let width = PANEL_WIDTH.min(input.size.width);
     // The slide is a translation of the whole panel rather than a widening of it: the
     // right edge is the window's and stays there, and what arrives is the left edge. The
@@ -321,31 +468,44 @@ pub(crate) fn panel(
         palette.hairline,
     );
 
-    // What the whole list would take, so the scroll can be clamped to the overflow
-    // rather than to a number the caller guessed. This walks the lines twice, and the
-    // second walk is the one that draws.
-    let content = list_height(input.settings);
-    let viewport = (rect.height - 2.0 * PAD).max(0.0);
-    let mut scroll = input
-        .settings_scroll
-        .clamp(0.0, (content - viewport).max(0.0));
-    // A row the keyboard is on has to be on screen, or the keys move a highlight nobody
-    // can see and the panel looks broken rather than scrolled.
-    if let Some(focus) = input.settings_focus {
-        let top = content_top(input.settings, focus);
-        if top < scroll {
-            scroll = top;
-        } else if top + ROW > scroll + viewport {
-            scroll = top + ROW - viewport;
-        }
-        scroll = scroll.clamp(0.0, (content - viewport).max(0.0));
+    // The rail, and the page beside it. The rail exists only when there is more than one
+    // section to choose between and every one of them has a name: a rail with a single item
+    // in it is a control that cannot do anything, and a list of rows with no headings at all
+    // — which a caller is free to hand over, and which this crate's own tests do — is one
+    // page and no rail, exactly as the panel was before there was a rail.
+    let all = sections(input.settings);
+    let railed = all.len() > 1 && all.iter().all(|section| section.name.is_some());
+    let chosen = resolve(input.settings_section, &all);
+    let rail = if railed { rail_width(rect.width) } else { 0.0 };
+    let page = Rect::new(rect.x + rail, rect.y, rect.width - rail, rect.height);
+    // The chosen section's rows and not its heading, when there is a rail: the rail says what
+    // the section is, and a page repeating the word under the rail item that already says it
+    // is a line of nothing. With no rail the page is the whole list, headings and all, which
+    // is what the panel drew before any of this existed.
+    let lines: Range<usize> = if railed {
+        all[chosen].start + 1..all[chosen].end
+    } else {
+        0..input.settings.len()
+    };
+
+    let mut sections_out = Vec::new();
+    if railed {
+        sections_out = draw_rail(paint, input, rect, rail, &all, chosen);
     }
 
+    // What the page would take, so the scroll can be clamped to the overflow rather than to a
+    // number the caller guessed. This walks the page twice, and the second walk is the one
+    // that draws.
+    let scroll = page_scroll(input, &lines, page);
+
     let mut controls = Vec::new();
-    let mut y = rect.y + PAD - scroll;
-    for (line, setting) in input.settings.iter().enumerate() {
+    let mut y = page.y + PAD - scroll;
+    for (at, setting) in input.settings[lines.clone()].iter().enumerate() {
+        // The line's index in the whole list rather than in the page, because that is what a
+        // click on it names and what the caller resolves against its own rows.
+        let line = lines.start + at;
         let focused = input.settings_focus == Some(line);
-        let (lead, height) = block(line, setting);
+        let (lead, height) = block(setting, line == lines.start);
         y += lead;
         if setting.row == crate::Row::Heading {
             // A section heading, and the rule under it.
@@ -355,8 +515,8 @@ pub(crate) fn panel(
             // asked separately it can pass the containment test while the text above it
             // does not, which draws a full-width hairline with nothing over it — a line
             // that reads as a rule for whichever row happens to sit above it.
-            let heading_box = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, HEADING_BOX);
-            let rule = Rect::new(rect.x, y + HEADING_BOX, rect.width, 1.0);
+            let heading_box = Rect::new(page.x + PAD, y, page.width - 2.0 * PAD, HEADING_BOX);
+            let rule = Rect::new(page.x, y + HEADING_BOX, page.width, 1.0);
             // The box the pair is culled by: the heading's, one hairline taller.
             let block = Rect::new(
                 heading_box.x,
@@ -364,7 +524,7 @@ pub(crate) fn panel(
                 heading_box.width,
                 HEADING_BOX + 1.0,
             );
-            if visible(block, rect) {
+            if visible(block, page) {
                 let style = TextStyle::new(HEADING_SIZE, Weight::MEDIUM, palette.ink)
                     .tracking(HEADING_TRACKING);
                 // Upper case here rather than in the caller's literal, because DESIGN.md
@@ -379,11 +539,11 @@ pub(crate) fn panel(
             continue;
         }
 
-        let row = Rect::new(rect.x + PAD, y, rect.width - 2.0 * PAD, ROW);
+        let row = Rect::new(page.x + PAD, y, page.width - 2.0 * PAD, ROW);
         let crate::Row::Control(control) = setting.row else {
             // Something the configuration file got wrong: a line to read rather than a
             // control to click.
-            if visible(row, rect) {
+            if visible(row, page) {
                 note(paint, setting, row, &palette);
             }
             y += height;
@@ -396,7 +556,7 @@ pub(crate) fn panel(
             CONTROL_WIDTH,
             CONTROL_HEIGHT,
         );
-        if visible(row, rect) {
+        if visible(row, page) {
             // The label grows into whatever the control does not take, which is what
             // keeps a long family name from running under its own value.
             let label_box = Rect::new(
@@ -418,6 +578,8 @@ pub(crate) fn panel(
     Panel {
         rect,
         controls,
+        sections: sections_out,
+        shown: railed.then(|| all[chosen].start),
         scroll,
     }
 }
@@ -461,16 +623,24 @@ fn note(
     );
 }
 
-/// Whether a box can be drawn without any of it escaping the panel.
+/// Whether a box can be drawn without any of it escaping the page.
 ///
 /// Containment, not intersection. There is no scissor under this — the painter pushes
 /// rectangles and glyphs straight into the frame — so a row that is scrolled half off
 /// the top of the list draws its control, its border and its value over whatever the
 /// chrome put above the panel, which is the tab strip. A row is drawn once all of it is
-/// on the panel, and the panel's own padding is wide enough that it slides in over that
+/// on the page, and the page's own padding is wide enough that it slides in over that
 /// rather than over the strip.
-fn visible(box_: Rect, panel: Rect) -> bool {
-    box_.y >= panel.y && box_.bottom() <= panel.bottom()
+///
+/// Both axes, since the rail arrived. On the page's left the old answer was "nothing can be
+/// there" — a row is laid out the page's padding in from the panel's own edge — and that is
+/// no longer true: the rail is inside the surface, and a row wide enough to reach it would be
+/// a setting drawn under a section name.
+fn visible(box_: Rect, page: Rect) -> bool {
+    box_.x >= page.x
+        && box_.right() <= page.right()
+        && box_.y >= page.y
+        && box_.bottom() <= page.bottom()
 }
 
 /// The eight pixels either side of a control that a hover reads as "on this one".
@@ -539,7 +709,35 @@ fn parts(control: Control, rect: Rect) -> Vec<(SettingPart, Rect)> {
     }
 }
 
-/// What one line of the panel takes: the gap above it, and its own height.
+/// How far the page is scrolled this frame, clamped to what actually overflows.
+///
+/// The scroll the caller asked for and the row the keyboard is on are two answers to one
+/// question, and the second wins: a row the keyboard is on has to be on screen, or the keys
+/// move a highlight nobody can see and the panel looks broken rather than scrolled. A focus
+/// that is not in this page is left alone — the caller moves the section and the focus
+/// together, so a mismatch is a frame in flight rather than a row to scroll to.
+///
+/// What it is clamped to is what the page overflows rather than the whole list, because the
+/// rail means the page is a section and the caller's number was measured against a page that is
+/// no longer being drawn.
+fn page_scroll(input: &ChromeInput<'_>, lines: &Range<usize>, page: Rect) -> f32 {
+    let content = list_height(input.settings, lines);
+    let viewport = (page.height - 2.0 * PAD).max(0.0);
+    let overflow = (content - viewport).max(0.0);
+    let mut scroll = input.settings_scroll.clamp(0.0, overflow);
+    if let Some(focus) = input.settings_focus.filter(|focus| lines.contains(focus)) {
+        let top = content_top(input.settings, lines, focus);
+        if top < scroll {
+            scroll = top;
+        } else if top + ROW > scroll + viewport {
+            scroll = top + ROW - viewport;
+        }
+        scroll = scroll.clamp(0.0, overflow);
+    }
+    scroll
+}
+
+/// What one line of the page takes: the gap above it, and its own height.
 ///
 /// The one place the panel's vertical rhythm is written down. The walk in [`panel`] and
 /// the two measurements below all go through this, so the scroll the caller asked for
@@ -547,12 +745,14 @@ fn parts(control: Control, rect: Rect) -> Vec<(SettingPart, Rect)> {
 /// the three of them cannot drift apart.
 ///
 /// The gap above a section heading belongs to the heading rather than to the section
-/// before it, so the first heading of the panel is not pushed down by a gap with nothing
-/// above it to separate it from.
-fn block(line: usize, setting: &SettingLine<'_>) -> (f32, f32) {
+/// before it, so the heading that opens a page is not pushed down by a gap with nothing
+/// above it to separate it from. `first` is the page's first line rather than the list's,
+/// which is the change the rail made: a heading that used to be the fourth line of the
+/// panel is now the first line of a page.
+fn block(setting: &SettingLine<'_>, first: bool) -> (f32, f32) {
     match setting.row {
         crate::Row::Heading => (
-            if line == 0 { 0.0 } else { SECTION_GAP },
+            if first { 0.0 } else { SECTION_GAP },
             HEADING_BOX + 1.0 + PAD / 2.0,
         ),
         // A problem is a row's height and takes a row's place: it is one line of text, and
@@ -562,27 +762,30 @@ fn block(line: usize, setting: &SettingLine<'_>) -> (f32, f32) {
     }
 }
 
-/// How tall the whole list would be, drawn from the top.
-fn list_height(lines: &[SettingLine<'_>]) -> f32 {
-    lines
-        .iter()
-        .enumerate()
-        .map(|(line, setting)| {
-            let (lead, height) = block(line, setting);
+/// How tall the page would be, drawn from its top.
+fn list_height(lines: &[SettingLine<'_>], page: &Range<usize>) -> f32 {
+    page.clone()
+        .map(|line| {
+            let (lead, height) = block(&lines[line], line == page.start);
             lead + height
         })
         .sum()
 }
 
-/// Where a line's content starts, measured from the top of the list.
+/// Where a line's content starts, measured from the top of the page.
 ///
-/// The gap above a heading is not counted, because this answers "where would the list
+/// The gap above a heading is not counted, because this answers "where would the page
 /// have to be scrolled to for this line to be visible", and scrolling to a blank gap
 /// puts nothing on screen. Every focusable line is a row, which has no gap at all.
-fn content_top(lines: &[SettingLine<'_>], index: usize) -> f32 {
+///
+/// `index` is a line in the whole list, which is what the caller owns; the page it is
+/// measured in is passed along with it, because the scroll this is compared against is the
+/// page's. A focus outside the page measures zero, which is a caller that has not moved the
+/// two together yet.
+fn content_top(lines: &[SettingLine<'_>], page: &Range<usize>, index: usize) -> f32 {
     let mut y = 0.0;
-    for (line, setting) in lines.iter().enumerate().take(index + 1) {
-        let (lead, height) = block(line, setting);
+    for line in page.clone().take_while(|line| *line <= index) {
+        let (lead, height) = block(&lines[line], line == page.start);
         y += lead;
         if line == index {
             break;

@@ -251,6 +251,13 @@ program owns most of the pixels, and the strip is the part that is ours.
 - It is drawn over everything, caption buttons included, and it takes the click:
   a press inside it is answered by the menu and never by what it covers. It covers the
   caption buttons only when it was opened under them.
+- "Over everything" is a fact about the frame rather than a claim about the order of five
+  calls. The chrome is drawn as pairs of batches — every rectangle in one, every glyph in
+  the next — and that rule is what puts a title's text over a control's surface. The menu
+  is the one thing that cannot live under it, so it is drawn as a pair of its own, after
+  all of them: its surface over the chrome's text, and its own labels over its own surface.
+  A menu whose surface shares the chrome's rectangle batch is a menu with a tab's title
+  legible through it, which is what it was before this.
 - The next press anywhere else — on another tab, on the terminal, on a caption button —
   is what dismisses it. No timeout, no click-to-toggle, no fade. A menu that faded
   would be a menu where the click during the fade lands on the window underneath.
@@ -277,15 +284,27 @@ palette and never the chrome's.
 
 ## Window chrome
 
-One 40px row holds the app name, the tabs, the drag region, and the caption buttons.
-Stacking a titlebar above a tab strip wastes 36px of vertical space to say nothing,
-and this is the change that makes zet feel denser than Windows Terminal.
+One 40px row holds the app name, the tabs, the new-tab mark, the settings control, the
+drag region, and the caption buttons. Stacking a titlebar above a tab strip wastes 36px of
+vertical space to say nothing, and this is the change that makes zet feel denser than
+Windows Terminal.
 
 - Caption buttons keep Windows' own metrics: 46px wide, 40px tall, full-height right
   edge, close turning `danger` on hover. Users hit these hundreds of times a day and
   muscle memory is not ours to redesign.
-- The drag region is any horizontal gap between the last tab and the caption
-  buttons. Double-click maximizes.
+- Two controls sit after the last tab: `+` for a new tab, and the settings mark for the
+  panel. Each is one number cell wide, and both are drawn only when they fit — a control
+  is never the thing that overflows, and the tabs stop before them rather than running
+  under them. The settings mark is the one control in the strip that is drawn over the
+  panel it opens, so in a window narrow enough that the panel is the window it stays
+  visible and stays clickable.
+- The settings mark is geometry, like the caption marks and for the same reason: three
+  bars with a tick on each. A gear would be a ring and eight teeth, which is a polygon
+  rasteriser in a module whose whole subject is a one-pixel stroke that lands on exactly
+  one pixel.
+- The drag region is any horizontal gap between the last of those controls and the
+  caption buttons. Double-click maximizes, and restores a window that is already
+  maximized.
 - Maximized: the row loses its bottom hairline and the window loses its rounded
   corners, matching how Windows handles a maximized frame. The rounding itself has to
   be asked of the compositor rather than inherited from it: a frameless window has
@@ -333,17 +352,37 @@ transition exists.
 
 ## Settings
 
-A 380px panel anchored to the right edge, on `surface-raised`, separated from the
+A 560px panel anchored to the right edge, on `surface-raised`, separated from the
 terminal by a `hairline`. Not a modal. It does not block the terminal, does not dim
-it, and does not steal focus from the prompt.
+it, and does not steal focus from the prompt. The panel is opened and closed by the
+settings mark in the strip, and by a chord; both go through the same toggle, because a
+button and a binding that disagreed would be one of them wrong.
+
+The 560 is a rail and a page: 180 of sections down the left, then the 380 the rows are
+laid out in. The rail is what the panel grew by, and the page is the width the rows
+already had — `CONTROL_WIDTH`, the label column and the heading box were all measured
+against it.
 
 The terminal stays visible behind it and updates live as you change things. Theme,
 font, size, opacity, and background all apply to the real terminal the moment they
 change, so the preview is not a preview. This is the reason the panel exists at all
 rather than a config file alone.
 
-Sections, in order: Appearance, Tabs, Terminal, Keys. Each is a heading at 12px
-uppercase with a `hairline` under it, then rows.
+Sections, in order: Appearance, Tabs, Terminal, Keys — plus Problems, which exists only
+while the configuration file has something wrong with it and is why a section is named
+rather than numbered. The rail lists them in the panel's own type, upper case, with the
+one being shown filled in `hairline` and the one under the pointer in `ground`: the same
+pair of fills a control and its hover use, because the rail is part of the surface rather
+than a second thing bolted to its edge. One section is drawn at a time, without its
+heading — the rail says what the section is, and a page repeating the word under the item
+that already says it is a line of nothing.
+
+The rail is drawn only when there is more than one named section. A panel with one
+section, or with rows and no headings at all, is the panel this was before there was a
+rail: no rail, the whole list in the page, and the headings drawn as headings.
+
+A narrow window narrows the rail rather than the rows — it is capped at two fifths of the
+panel — because a truncated section name is legible and a truncated value is not.
 
 Row anatomy: label on the left, control on the right, current value in tabular
 figures. The control is a 118x20 rectangle of `ground` behind a `hairline` — recessed
@@ -380,7 +419,15 @@ Keyboard: `Tab` or `Down` enters the panel and moves to the next row, `Shift+Tab
 `Up` to the previous one, `Left` and `Right` (or `Enter`, or `Space`) adjust the row the
 keyboard is on, and `Tab` past the last row hands the keyboard back to the shell rather
 than wrapping. `Escape` does the same, and a second `Escape` closes the panel. The chord
-that opened it toggles it.
+that opened it toggles it, and so does the settings mark.
+
+The sections follow the keyboard rather than being a place the keyboard can be. The rows
+are one list, and walking off the end of a section lands on the first row of the next one,
+which brings that section to the page with it. That is why the rail needs no key of its
+own: a rail that took `Up` and `Down` and asked `Left` and `Right` to pick a section would
+need those keys to stop meaning what they mean while it had focus, which is a second mode
+inside a panel that is deliberately one list. Clicking a section name switches the page and
+puts the keyboard back where it was, because there is no row where the click landed.
 
 Focus is drawn as the same hairline in `ink` — the brightest edge the chrome has. `signal`
 is the obvious colour for a focus ring and the wrong one: DESIGN.md gives it a 3px by 40px

@@ -15,12 +15,12 @@ use std::collections::BTreeMap;
 
 use zet_config::{Palette, TabPosition, TabSettings, WindowSettings};
 use zet_font::{GlyphSpec, Metrics, Weight};
-use zet_render::{Frame, Placement, Quad};
+use zet_render::{BatchKind, Frame, Placement, Quad};
 
 use crate::fonts::GlyphSource;
 use crate::geometry::{
-    MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, PANEL_SLIDE, PANEL_WIDTH, RAIL_WIDTH, ROW_HEIGHT,
-    menu_rect, menu_width,
+    CAPTION_WIDTH, MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, PANEL_RAIL, PANEL_SLIDE, PANEL_WIDTH,
+    RAIL_WIDTH, ROW_HEIGHT, menu_rect, menu_width,
 };
 use crate::{
     Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, MenuLine, PickerLine, Rect, Row,
@@ -167,6 +167,7 @@ fn input<'a>(palette: &'a Palette, tabs: &'a [TabInfo], size: Size) -> ChromeInp
         settings: &[],
         settings_scroll: 0.0,
         settings_focus: None,
+        settings_section: None,
         find: None,
         picker: None,
         menu: None,
@@ -221,6 +222,22 @@ fn tab_rects(chrome: &Chrome) -> Vec<(u32, Rect)> {
 fn plus_rect(chrome: &Chrome) -> Option<Rect> {
     chrome.regions().iter().find_map(|region| match region {
         crate::Region::NewTab(rect) => Some(*rect),
+        _ => None,
+    })
+}
+
+/// Where the settings control went, if the strip had room for it.
+fn settings_rect(chrome: &Chrome) -> Option<Rect> {
+    chrome.regions().iter().find_map(|region| match region {
+        crate::Region::SettingsButton(rect) => Some(*rect),
+        _ => None,
+    })
+}
+
+/// The draggable gap.
+fn drag_rect(chrome: &Chrome) -> Option<Rect> {
+    chrome.regions().iter().find_map(|region| match region {
+        crate::Region::Drag(rect) => Some(*rect),
         _ => None,
     })
 }
@@ -931,7 +948,7 @@ fn the_settings_panel_is_anchored_to_the_right_and_hit_tests_as_settings() {
             _ => None,
         })
         .expect("the panel is open");
-    assert!((panel.width - 380.0).abs() < f32::EPSILON);
+    assert!((panel.width - PANEL_WIDTH).abs() < f32::EPSILON);
     assert!((panel.right() - size.width).abs() < f32::EPSILON);
     assert!((panel.y - drawn.layout.top).abs() < f32::EPSILON);
 
@@ -1016,6 +1033,59 @@ fn open_panel_at(
     (chrome, drawn)
 }
 
+/// The panel, open on one of its sections, with the pointer at a point.
+///
+/// A section by name rather than by index, because that is how a caller names one: the
+/// headings are the caller's own words and the rail is built from them. `lines` with one
+/// heading, or none, has no rail and ignores this.
+fn open_panel_on(
+    palette: &Palette,
+    lines: &[SettingLine<'_>],
+    section: &'static str,
+    pointer: Option<(f32, f32)>,
+) -> (Chrome, Drawn) {
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let mut input = input(palette, &tabs, window());
+    input.settings_open = true;
+    input.settings = lines;
+    input.settings_section = Some(section);
+    input.pointer = pointer;
+    let drawn = draw(&mut chrome, &input);
+    (chrome, drawn)
+}
+
+/// The rail's items, as the heading line each one shows and where it is.
+fn section_rects(chrome: &Chrome) -> Vec<(usize, Rect)> {
+    chrome
+        .regions()
+        .iter()
+        .filter_map(|region| match region {
+            crate::Region::Section { line, rect } => Some((*line, *rect)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The lines whose controls are on screen, in the order they were drawn.
+///
+/// Which is how a test asks what the page is showing without knowing the geometry: the panel
+/// publishes a region per control it drew, and nothing else. A line appears once however many
+/// regions it publishes — a stepper publishes two, one per half — because the question here is
+/// which rows are on screen rather than which rectangles are.
+fn setting_lines(chrome: &Chrome) -> Vec<usize> {
+    let mut lines: Vec<usize> = chrome
+        .regions()
+        .iter()
+        .filter_map(|region| match region {
+            crate::Region::Setting { line, .. } => Some(*line),
+            _ => None,
+        })
+        .collect();
+    lines.dedup();
+    lines
+}
+
 /// The rectangle of a line's control, the whole of it.
 ///
 /// The union of the regions the line published rather than the first of them, because a
@@ -1061,18 +1131,37 @@ fn the_panel_draws_the_lines_it_is_given() {
     // The panel is handed words and values; it draws them and nothing of its own. The
     // skeleton it used to draw said "Theme" and then left a grey box where the theme
     // would go, which is a settings panel that cannot set anything.
+    //
+    // One section at a time, so this is asked of each: the rows of the section that is not
+    // showing are the rows that are not on screen, which is the whole point of the rail.
     let palette = Palette::instrument();
     let lines = settings_lines();
-    let (_, drawn) = open_panel(&palette, &lines);
+    let (_, first) = open_panel(&palette, &lines);
 
-    let heading: Vec<char> = drawn_at(&drawn.frame, Weight::MEDIUM);
-    for letter in "APPEARANCE".chars() {
-        assert!(heading.contains(&letter), "the heading was not drawn");
+    let heading: Vec<char> = drawn_at(&first.frame, Weight::MEDIUM);
+    for expected in ["APPEARANCE", "TERMINAL"] {
+        for letter in expected.chars() {
+            assert!(
+                heading.contains(&letter),
+                "the rail did not draw the section name {expected}"
+            );
+        }
     }
-    let body: Vec<char> = drawn_at(&drawn.frame, Weight::NORMAL);
-    for expected in ["Theme", "zet dark", "Reduce motion", "Off", "Ctrl+Shift+T"] {
+    let body: Vec<char> = drawn_at(&first.frame, Weight::NORMAL);
+    for expected in ["Theme", "zet dark", "Reduce motion", "Off"] {
         for letter in expected.chars().filter(|ch| !ch.is_whitespace()) {
             assert!(body.contains(&letter), "{expected} was not drawn");
+        }
+    }
+
+    let (_, second) = open_panel_on(&palette, &lines, "TERMINAL", None);
+    let body: Vec<char> = drawn_at(&second.frame, Weight::NORMAL);
+    for expected in ["Size", "13", "Ctrl+Shift+T"] {
+        for letter in expected.chars().filter(|ch| !ch.is_whitespace()) {
+            assert!(
+                body.contains(&letter),
+                "{expected} was not drawn in its own section"
+            );
         }
     }
 }
@@ -1111,10 +1200,12 @@ fn the_hover_fill_covers_the_region_a_click_would_take() {
     );
 
     // Line 4 is the stepper, and the half the pointer is not in stays dark: the two
-    // halves mean opposite things, and a fill over both would say so.
+    // halves mean opposite things, and a fill over both would say so. It is in the section
+    // the rail is not showing, so that is the one this half of the test opens.
+    let (chrome, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
     let step = control_rect(&chrome, 4);
     let (sx, sy) = (step.right() - 4.0, step.center().1);
-    let (_, drawn) = open_panel_at(&palette, &lines, Some((sx, sy)));
+    let (_, drawn) = open_panel_on(&palette, &lines, "TERMINAL", Some((sx, sy)));
     assert_eq!(color_at(&drawn.frame, sx, sy), Some(hairline));
     assert_ne!(
         color_at(&drawn.frame, step.x + 4.0, sy),
@@ -1129,28 +1220,36 @@ fn every_control_is_a_region_that_names_its_line() {
     // naming the line it landed on, or the caller has nothing to apply it to.
     let palette = Palette::instrument();
     let lines = settings_lines();
-    let (chrome, _) = open_panel(&palette, &lines);
 
-    // Lines 1, 2, 4 and 5 have controls; 0 and 3 are headings.
-    for line in [1_usize, 2, 4, 5] {
-        let (part, rect) = chrome
-            .regions()
-            .iter()
-            .find_map(|region| match region {
-                crate::Region::Setting {
-                    line: at,
-                    part,
-                    rect,
-                } if *at == line => Some((*part, *rect)),
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("line {line} has no control"));
-        let (x, y) = rect.center();
-        assert_eq!(
-            chrome.hit(x, y),
-            Hit::Setting { line, part },
-            "line {line} does not hit-test as itself"
-        );
+    // Lines 1, 2, 4 and 5 have controls; 0 and 3 are headings. The panel draws one section
+    // at a time, so each section is opened before its rows are asked about — and the line
+    // numbers are the list's rather than the page's, which is what makes the identity a
+    // click comes back with mean something to the caller.
+    for (section, rows) in [(None::<&str>, [1_usize, 2]), (Some("TERMINAL"), [4, 5])] {
+        let (chrome, _) = match section {
+            Some(section) => open_panel_on(&palette, &lines, section, None),
+            None => open_panel(&palette, &lines),
+        };
+        for line in rows {
+            let (part, rect) = chrome
+                .regions()
+                .iter()
+                .find_map(|region| match region {
+                    crate::Region::Setting {
+                        line: at,
+                        part,
+                        rect,
+                    } if *at == line => Some((*part, *rect)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("line {line} has no control"));
+            let (x, y) = rect.center();
+            assert_eq!(
+                chrome.hit(x, y),
+                Hit::Setting { line, part },
+                "line {line} does not hit-test as itself"
+            );
+        }
     }
 }
 
@@ -1161,7 +1260,7 @@ fn a_stepper_answers_twice_and_everything_else_once() {
     // way the user meant.
     let palette = Palette::instrument();
     let lines = settings_lines();
-    let (chrome, _) = open_panel(&palette, &lines);
+    let (chrome, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
 
     let halves: Vec<(SettingPart, Rect)> = chrome
         .regions()
@@ -1198,7 +1297,9 @@ fn a_stepper_answers_twice_and_everything_else_once() {
         }
     );
 
-    // A toggle is one control, not two.
+    // A toggle is one control, not two — asked of the section the toggle is in, since this
+    // chrome is the one showing Terminal.
+    let (chrome, _) = open_panel(&palette, &lines);
     let toggles = chrome
         .regions()
         .iter()
@@ -2478,15 +2579,24 @@ fn mark_ink(caption: Caption, scale: f32, maximized: bool) -> BTreeMap<(i32, i32
     input.scale = scale;
     input.maximized = maximized;
     let drawn = draw(&mut chrome, &input);
+    ink_in(&drawn, caption_box(caption), scale)
+}
 
-    let button = caption_box(caption);
-    let (cx, cy) = button.center();
+/// The ink of whatever one frame drew inside one box, as offsets from the box's centre.
+///
+/// Split out of [`mark_ink`] because it is the same question about a different button: every
+/// mark in the chrome is a handful of rectangles inside a box the layout decided, and reading
+/// them back into pixels is what lets a test say "three bars" rather than "six rectangles".
+/// `box_` is in logical pixels and the frame's rectangles are in physical ones, so the scale
+/// is what turns one into the other.
+fn ink_in(drawn: &Drawn, box_: Rect, scale: f32) -> BTreeMap<(i32, i32), f32> {
+    let (cx, cy) = box_.center();
     let (cx, cy) = ((cx * scale).round() as i32, (cy * scale).round() as i32);
     let box_ = Rect::new(
-        button.x * scale,
-        button.y * scale,
-        button.width * scale,
-        button.height * scale,
+        box_.x * scale,
+        box_.y * scale,
+        box_.width * scale,
+        box_.height * scale,
     );
 
     let mut ink = BTreeMap::new();
@@ -3106,6 +3216,40 @@ fn menu_rect_of(chrome: &Chrome) -> Rect {
         .expect("a menu was open")
 }
 
+/// One of the window's own buttons, as the last layout put it.
+fn caption_rect(chrome: &Chrome, caption: Caption) -> Rect {
+    chrome
+        .regions()
+        .iter()
+        .find_map(|region| match region {
+            crate::Region::Caption { caption: at, rect } if *at == caption => Some(*rect),
+            _ => None,
+        })
+        .expect("the window has that caption button")
+}
+
+/// Whether a frame's rectangle is a layout rectangle.
+///
+/// Four floats compared one at a time rather than as a struct, because the frame's quad
+/// carries them as an array in physical pixels and the layout works in logical ones: at
+/// scale 1.0 the numbers are the same, which is the only scale these two tests use.
+fn is_rect(quad: &Quad, rect: Rect) -> bool {
+    let wanted = [rect.x, rect.y, rect.width, rect.height];
+    quad.rect
+        .iter()
+        .zip(wanted)
+        .all(|(at, want)| (at - want).abs() < f32::EPSILON)
+}
+
+/// Whether a frame's rectangle lies inside a layout rectangle.
+///
+/// The containment [`ink_in`] asks before it counts a quad as part of a mark: a rectangle
+/// that pokes out of its own button is a rectangle belonging to something else.
+fn within(quad: &Quad, box_: Rect) -> bool {
+    let [x, y, width, height] = quad.rect;
+    box_.contains(x, y) && box_.contains(x + width - 1.0, y + height - 1.0)
+}
+
 /// Draw a chrome with a menu open at a point, and hand back the layout.
 fn open_menu_at(palette: &Palette, tabs: &[TabInfo], items: &[&str], at: (f32, f32)) -> Chrome {
     let size = window();
@@ -3242,4 +3386,497 @@ fn a_menu_is_as_wide_as_what_is_in_it() {
         menu_rect_of(&long).width > menu_rect_of(&short).width,
         "a longer item makes a wider menu"
     );
+}
+
+/// An open menu is drawn, and hit, over everything else on the window.
+///
+/// The layering rule is the frame's batch order: the chrome's rectangles, the chrome's text,
+/// and then the menu's own pair of batches. A menu whose surface shares the chrome's
+/// rectangle batch is a menu drawn *under* the chrome's text, which is what a right-click on
+/// a tab looked like — the tab's title legible straight through the menu.
+///
+/// The hit order is the region list read backwards, and the menu is at the front of it: it is
+/// the thing the user is interacting with, so it takes the click wherever it covers —
+/// caption buttons included, which is the one thing the order used to deny it.
+#[test]
+fn an_open_menu_is_drawn_and_hit_above_everything_else() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let base = input(&palette, &tabs, window());
+    draw(&mut chrome, &base);
+    let close = caption_rect(&chrome, Caption::Close);
+
+    let mut with_menu = input(&palette, &tabs, window());
+    with_menu.menu = Some(MenuLine {
+        items: &["Close tab", "Close other tabs"],
+        at: close.center(),
+    });
+    let drawn = draw(&mut chrome, &with_menu);
+
+    let kinds: Vec<BatchKind> = drawn.frame.batches.iter().map(|batch| batch.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            BatchKind::Quads,
+            BatchKind::Glyphs,
+            BatchKind::Quads,
+            BatchKind::Glyphs,
+        ],
+        "the chrome's pair and then the menu's, and nothing else"
+    );
+
+    // Where the menu's own surface is in the frame's rectangles, so the test can say which
+    // batch it landed in rather than trusting the count above.
+    let menu = menu_rect_of(&chrome);
+    let surface = drawn
+        .frame
+        .quads
+        .iter()
+        .position(|quad| is_rect(quad, menu))
+        .expect("the menu's surface is drawn");
+    assert!(
+        drawn.frame.batches[2].range.contains(&(surface as u32)),
+        "the menu's surface is in the chrome's rectangle batch (index {surface}), so the \
+         chrome's text is painted over it"
+    );
+
+    // A point the menu and a caption button both hold, for the same reason the panel's test
+    // takes one: the menu flipped leftward, so what the two share is a strip rather than a
+    // point, and one in the strip is what the question needs.
+    let point = (close.x + 2.0, close.center().1);
+    assert!(
+        menu.contains(point.0, point.1) && close.contains(point.0, point.1),
+        "the menu has to cover part of a caption button for this to be a test"
+    );
+    assert_eq!(
+        chrome.hit(point.0, point.1),
+        Hit::Menu,
+        "a menu over a caption button is what the click belongs to"
+    );
+}
+
+/// The tab's title is not in the batch the menu is in.
+///
+/// The reported fault written as an assertion. Two characters are enough to tell the layers
+/// apart: the `T` of a tab's title, and the `C` of an open menu's first item. Where they sit
+/// in the frame's two glyph batches *is* the layering rule — a frame that puts both in one
+/// batch is a frame whose order between them is whatever the pushes happened to be.
+#[test]
+fn the_title_under_a_menu_is_not_in_the_batch_the_menu_is() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    let base = input(&palette, &tabs, window());
+    draw(&mut chrome, &base);
+    let cell = tab_rects(&chrome)[0].1;
+
+    let mut with_menu = input(&palette, &tabs, window());
+    with_menu.menu = Some(MenuLine {
+        items: &["Close tab"],
+        at: cell.center(),
+    });
+    let painted = draw(&mut chrome, &with_menu);
+
+    let menu = menu_rect_of(&chrome);
+    assert!(
+        menu.contains(cell.center().0, cell.center().1),
+        "the menu has to cover the tab's title for this to be a test"
+    );
+
+    let chars: Vec<char> = drawn(&painted.frame)
+        .into_iter()
+        .map(|text| text.ch)
+        .collect();
+    let title = chars
+        .iter()
+        .position(|ch| *ch == 'T')
+        .expect("the tab's title is drawn");
+    let label = chars
+        .iter()
+        .position(|ch| *ch == 'C')
+        .expect("the menu's item is drawn");
+    assert!(
+        painted.frame.batches[1].range.contains(&(title as u32)),
+        "the title is not in the chrome's text batch"
+    );
+    assert!(
+        painted.frame.batches[3].range.contains(&(label as u32)),
+        "the menu's label is not in the menu's own batch, so it is text drawn with the \
+         chrome's and the menu's surface cannot be under it"
+    );
+}
+
+/// The settings control sits against the new-tab mark, and the drag region starts after it.
+#[test]
+fn the_settings_control_sits_beside_the_new_tab_mark() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    let plus = plus_rect(&chrome).expect("the strip has room for the new-tab mark");
+    let settings = settings_rect(&chrome).expect("the strip has room for the settings control");
+    assert!(
+        (settings.x - plus.right()).abs() < f32::EPSILON,
+        "the two controls are not side by side: {plus:?} and {settings:?}"
+    );
+    assert!(
+        (settings.width - plus.width).abs() < f32::EPSILON,
+        "the settings control is not the width the new-tab mark is"
+    );
+    assert!((settings.height - ROW_HEIGHT).abs() < f32::EPSILON);
+
+    assert_eq!(
+        chrome.hit(plus.center().0, plus.center().1),
+        Hit::NewTab,
+        "the new-tab mark is still the new-tab mark"
+    );
+    assert_eq!(
+        chrome.hit(settings.center().0, settings.center().1),
+        Hit::SettingsButton
+    );
+
+    // The rest of the row is the window's to drag, which means the drag region begins where
+    // the controls end rather than under them.
+    let drag = drag_rect(&chrome).expect("the row has a drag region");
+    assert!(
+        drag.x >= settings.right() - f32::EPSILON,
+        "the drag region starts under the settings control: {drag:?}"
+    );
+}
+
+/// With room for one control and not for two, the settings control is the one that goes.
+///
+/// The rule the new-tab mark has always had — it is the affordance that must not be the
+/// thing that overflows — extended to the pair. A control drawn into room it does not have
+/// is a mark with its edge cut off, and the chord that opens the panel is still there.
+#[test]
+fn the_settings_control_is_dropped_before_the_new_tab_mark_is() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &tabs, window()));
+    let plus = plus_rect(&chrome).expect("the strip has room for the new-tab mark");
+
+    // Half a control's width past what the new-tab mark alone needs: the row holds the mark
+    // and not the pair, which is exactly the case that decides which of the two gives way.
+    let narrow = Size {
+        width: 3.0 * CAPTION_WIDTH + plus.width * 1.5,
+        height: 800.0,
+    };
+    draw(&mut chrome, &input(&palette, &tabs, narrow));
+
+    assert!(
+        plus_rect(&chrome).is_some(),
+        "the new-tab mark gave up its room to the settings control"
+    );
+    assert_eq!(
+        settings_rect(&chrome),
+        None,
+        "the settings control was drawn in room that is not there"
+    );
+}
+
+/// In the rail, the settings control is the cell under the new-tab mark.
+#[test]
+fn the_settings_control_is_the_cell_under_the_new_tab_mark_in_the_rail() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = rail_chrome();
+    draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    let plus = plus_rect(&chrome).expect("the rail has room for the new-tab mark");
+    let settings = settings_rect(&chrome).expect("the rail has room for the settings control");
+    assert!(
+        (settings.y - plus.bottom()).abs() < f32::EPSILON,
+        "the settings control is not directly under the new-tab mark: {plus:?} and {settings:?}"
+    );
+    assert!((settings.x - plus.x).abs() < f32::EPSILON);
+    assert!((settings.width - RAIL_WIDTH).abs() < f32::EPSILON);
+    assert_eq!(
+        chrome.hit(settings.center().0, settings.center().1),
+        Hit::SettingsButton
+    );
+}
+
+/// The settings control is drawn over the panel it opens, and takes a press while it is open.
+///
+/// The whole reason it is not drawn with the strip: the panel is drawn after the strip, so a
+/// mark drawn there is a control the user cannot see in a window narrow enough that the panel
+/// is the window — and one that still answers a press, which is worse than one that is absent.
+/// The frame's rectangles are in push order, so the index of the mark against the index of the
+/// panel's own surface is the whole question.
+#[test]
+fn the_settings_control_is_drawn_over_the_panel() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let lines = settings_lines();
+    let mut chrome = chrome();
+    let mut with_panel = input(&palette, &tabs, window());
+    with_panel.settings_open = true;
+    with_panel.settings = &lines;
+    let painted = draw(&mut chrome, &with_panel);
+
+    let settings = settings_rect(&chrome).expect("the settings control is drawn");
+    let panel = panel_rect_of(&chrome);
+    let surface = painted
+        .frame
+        .quads
+        .iter()
+        .position(|quad| is_rect(quad, panel))
+        .expect("the panel's own surface is drawn");
+    let mark = painted
+        .frame
+        .quads
+        .iter()
+        .position(|quad| within(quad, settings))
+        .expect("the settings mark is drawn");
+    assert!(
+        mark > surface,
+        "the settings mark is painted before the panel, so the panel covers it"
+    );
+    assert_eq!(
+        chrome.hit(settings.center().0, settings.center().1),
+        Hit::SettingsButton,
+        "the panel swallowed the press on the control it is drawn under"
+    );
+}
+
+/// A count of pixels as the `i32` the ink map is keyed by.
+///
+/// The lint this satisfies is about a pointer width: a `usize` that does not fit in an `i32`
+/// is a count of four billion, and a mark's ink is a few dozen pixels.
+fn pixels(count: usize) -> i32 {
+    i32::try_from(count).expect("a mark is a few dozen pixels")
+}
+
+/// The settings mark is three bars, with a tick standing proud of each.
+///
+/// A gear was the other candidate and this is what rules it out of the module: the marks are
+/// rectangles on the device grid, and three bars and three ticks are rectangles where a ring
+/// and eight teeth would be a polygon rasteriser. What the test holds is the shape of that:
+/// three rows of bar, one tick column near each quarter of the mark, and — the part that says
+/// the mark is not a block — a column at the edge that has the bars and nothing else.
+#[test]
+fn the_settings_mark_is_three_bars_with_a_tick_on_each() {
+    for scale in [1.0_f32, 1.5, 2.0] {
+        let palette = Palette::instrument();
+        let tabs = tabs(&[1]);
+        let mut chrome = chrome();
+        let mut input = input(&palette, &tabs, window());
+        input.scale = scale;
+        let painted = draw(&mut chrome, &input);
+        let button = settings_rect(&chrome).expect("the strip has room for the settings control");
+        let ink = ink_in(&painted, button, scale);
+
+        assert!(!ink.is_empty(), "the settings mark drew nothing at {scale}");
+        let gap = (3.0_f32 * scale).round() as i32;
+        let thickness = (scale.round().max(1.0)) as i32;
+        let side = 2 * ((5.0_f32 * scale).round().max(1.0)) as i32;
+
+        // Three bars, three rows, each one a run across the mark's own width.
+        for row in [-gap, 0, gap] {
+            let across = pixels(ink.keys().filter(|(_, y)| *y == row).count());
+            assert_eq!(
+                across, side,
+                "the bar on row {row} spans {across} pixels and the mark is {side} wide at {scale}"
+            );
+        }
+
+        // A tick on each, which is what a bar alone would not have: some column runs taller
+        // than the bars' own thickness.
+        let tallest = ink
+            .keys()
+            .map(|(x, _)| *x)
+            .map(|column| ink.keys().filter(|(x, _)| *x == column).count())
+            .max()
+            .map_or(0, pixels);
+        assert!(
+            tallest > thickness,
+            "no tick stands proud of its bar at {scale}: the tallest column is {tallest} rows"
+        );
+
+        // And the edge of the mark is the bars and nothing else, which is the difference
+        // between three bars and a filled rectangle.
+        let left = ink.keys().map(|(x, _)| *x).min().unwrap_or(0);
+        let edge = pixels(ink.keys().filter(|(x, _)| *x == left).count());
+        assert_eq!(
+            edge,
+            3 * thickness,
+            "the mark's left column has {edge} rows in it, and three bars of {thickness} \
+             pixel(s) have {thickness} each at {scale}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------
+// The settings rail
+// ---------------------------------------------------------------------------------
+
+/// The rail lists the sections the caller handed over, in its own order, in its own case.
+#[test]
+fn the_rail_lists_the_sections_the_caller_has() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, drawn) = open_panel(&palette, &lines);
+
+    let items = section_rects(&chrome);
+    assert_eq!(
+        items.iter().map(|(line, _)| *line).collect::<Vec<usize>>(),
+        vec![0, 3],
+        "the rail does not name the two headings, in the order they were given in"
+    );
+    // The names are drawn where the rail is, in the heading's own type and upper case, and
+    // the panel is otherwise the same surface as before: the rail is inside it, not beside it.
+    let panel = panel_rect_of(&chrome);
+    assert!((items[0].1.x - (panel.x + 16.0)).abs() < f32::EPSILON);
+    let heading: Vec<char> = drawn_at(&drawn.frame, Weight::MEDIUM);
+    for letter in "TERMINAL".chars() {
+        assert!(heading.contains(&letter), "the rail did not draw TERMINAL");
+    }
+
+    // The chosen item wears the panel's `hairline`, and one that is not chosen does not: the
+    // pair of fills a control and its hover use, so the rail reads as part of the surface.
+    let hairline = color(palette.hairline);
+    let chosen = items[0].1;
+    let other = items[1].1;
+    assert_eq!(
+        color_at(&drawn.frame, chosen.x + 4.0, chosen.center().1),
+        Some(hairline),
+        "the section being shown is not filled"
+    );
+    assert_ne!(
+        color_at(&drawn.frame, other.x + 4.0, other.center().1),
+        Some(hairline),
+        "a section that is not being shown is filled like the one that is"
+    );
+}
+
+/// One section at a time, and the heading of the one being shown is not drawn twice.
+#[test]
+fn only_the_chosen_section_is_drawn() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+
+    let (first, drawn) = open_panel(&palette, &lines);
+    assert_eq!(setting_lines(&first), vec![1, 2]);
+
+    let (second, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
+    assert_eq!(setting_lines(&second), vec![4, 5]);
+
+    // The heading is the rail's. A page that drew its own heading would be saying the section's
+    // name a second time, in the place the rows are.
+    let panel = panel_rect_of(&second);
+    let rail_edge = panel.x + PANEL_RAIL;
+    for glyph in &drawn.frame.glyphs {
+        let [x, y, ..] = glyph.rect;
+        let in_panel = x >= panel.x && y >= panel.y;
+        if !in_panel || glyph.uv[0] as u16 != Weight::MEDIUM.value() {
+            continue;
+        }
+        assert!(
+            x < rail_edge,
+            "a section heading is drawn in the page at x = {x}, past the rail's edge at \
+             {rail_edge}"
+        );
+    }
+}
+
+/// A row is never drawn over the rail, and the rail is never drawn over the page's controls.
+///
+/// The panel's containment rule, which used to be about the top and bottom of the list: the
+/// painter has no scissor, so every rectangle the panel emits has to be a rectangle the panel
+/// has room for. The rail is inside the surface now, which gives that rule a left edge.
+#[test]
+fn a_row_is_never_drawn_over_the_rail() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
+
+    let panel = panel_rect_of(&chrome);
+    let rail_edge = panel.x + PANEL_RAIL;
+    for line in setting_lines(&chrome) {
+        let rect = control_rect(&chrome, line);
+        assert!(
+            rect.x >= rail_edge - f32::EPSILON,
+            "line {line}'s control starts at {} and the rail ends at {rail_edge}",
+            rect.x
+        );
+    }
+    for (line, item) in section_rects(&chrome) {
+        assert!(
+            item.right() <= rail_edge + f32::EPSILON,
+            "the rail item for line {line} runs past the rail's own edge"
+        );
+    }
+}
+
+/// A rail item is what a click lands on there, and the panel is what a click lands on beside it.
+#[test]
+fn a_rail_item_is_hittable_and_the_page_is_not_hit_where_the_rail_is() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, _) = open_panel(&palette, &lines);
+
+    let items = section_rects(&chrome);
+    let (line, item) = items[1];
+    let (x, y) = item.center();
+    assert_eq!(
+        chrome.hit(x, y),
+        Hit::Section(line),
+        "the rail item does not hit-test as the section it names"
+    );
+
+    // Below the last item is the rail and not a row: the panel's own surface, which is what
+    // swallows a click on the panel that is not on a control.
+    let panel = panel_rect_of(&chrome);
+    assert_eq!(
+        chrome.hit(panel.x + 4.0, item.bottom() + 4.0),
+        Hit::Settings,
+        "a click in the rail off the items is not the panel's"
+    );
+
+    // And the section a click names is the heading's line, which is what a caller resolves.
+    assert_eq!((line, item.x >= panel.x), (3, true));
+}
+
+/// A name that matches no heading shows the first section, and the layout says so.
+///
+/// The panel is the side that knows what the headings are, so it is the side that answers; a
+/// caller holding a name the list has moved past — `Problems`, the moment the last diagnostic
+/// is fixed — keeps asking for it until it is told what was actually drawn.
+#[test]
+fn a_section_name_that_is_not_a_heading_shows_the_first_section() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, drawn) = open_panel_on(&palette, &lines, "Nonsense", None);
+
+    assert_eq!(setting_lines(&chrome), vec![1, 2]);
+    assert_eq!(
+        drawn.layout.settings_section,
+        Some(0),
+        "the layout does not name the heading it drew"
+    );
+}
+
+/// The rows of a page name their lines in the whole list, not their places in the page.
+///
+/// What a click has to come back with. The caller resolves it against `App::settings`, which
+/// holds both sections; a page that renumbered its rows would have every click on the second
+/// section land on the first section's rows.
+#[test]
+fn a_page_names_its_rows_by_the_whole_lists_lines() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (chrome, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
+
+    assert_eq!(setting_lines(&chrome), vec![4, 5]);
+    for line in [4_usize, 5] {
+        let rect = control_rect(&chrome, line);
+        assert!(
+            matches!(chrome.hit(rect.x + 2.0, rect.center().1), Hit::Setting { line: at, .. } if at == line),
+            "line {line} does not hit-test as itself"
+        );
+    }
 }

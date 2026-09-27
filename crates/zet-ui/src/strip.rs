@@ -57,6 +57,13 @@ pub(crate) struct Strip {
     pub tabs: Vec<TabCell>,
     /// The new-tab mark's box, when there was room for it.
     pub plus: Option<Rect>,
+    /// The settings control's box, when there was room for it after the new-tab mark.
+    ///
+    /// Its rect is planned here with the rest of the strip, because the two controls share
+    /// the run the tabs do not have — but it is *drawn* from `Chrome::overdraw` rather than
+    /// from [`draw`], because it is the one control in the strip that has to be over the
+    /// settings panel, and the panel is drawn after the strip is. See [`settings_mark`].
+    pub settings: Option<Rect>,
     /// The draggable gap.
     pub drag: Option<Rect>,
     /// The three caption buttons, which exist whether or not anything else does.
@@ -94,6 +101,7 @@ pub(crate) fn plan(
             name: None,
             tabs: Vec::new(),
             plus: None,
+            settings: None,
             drag: None,
             captions,
         };
@@ -143,8 +151,12 @@ fn horizontal(
 
     // The new-tab mark is the width of a tab with nothing to say: a number and its
     // padding. It is the affordance that must not be the thing that overflows, so it
-    // never gives up room and is never the cell that gets squeezed.
+    // never gives up room and is never the cell that gets squeezed. The settings control
+    // beside it is the same width, and shares the guarantee: the run of tabs stops before
+    // both of them.
     let plus_width = number_cell(paint, 1);
+    let settings_width = plus_width;
+    let controls = plus_width + settings_width;
     let natural: f32 = input
         .tabs
         .iter()
@@ -155,22 +167,24 @@ fn horizontal(
     // branding." In arithmetic that is one comparison: the name is drawn only when
     // every tab still fits beside it, and when it is not drawn it takes its inset with
     // it and the run starts at the window's edge.
-    let shows_name = !title.is_empty() && name_block + natural + plus_width <= limit;
+    let shows_name = !title.is_empty() && name_block + natural + controls <= limit;
     let name = shows_name.then(|| Rect::new(NAME_INSET, 0.0, name_width, ROW_HEIGHT));
 
     let start = if shows_name { name_block } else { 0.0 };
-    let cap = tab_cap(paint, input.tabs, (limit - start - plus_width).max(0.0));
+    // Both widths come off the share, not just the new-tab mark's: sizing the tabs against
+    // room the loop below will not give them would shrink every cell towards its number to
+    // make space for a tab that then cannot be drawn at all.
+    let cap = tab_cap(paint, input.tabs, (limit - start - controls).max(0.0));
 
     let mut cursor = start;
     let mut tabs = Vec::with_capacity(input.tabs.len());
     for tab in input.tabs {
         let width = tab_width(paint, tab, cap);
-        // A tab that would run under the new-tab mark is not drawn and cannot be hit.
-        // Sizing has already shrunk every cell towards its number to put that off, so
-        // this is only reached when even a row of bare numbers does not fit: the tab is
-        // still numbered, it simply has nowhere to be until the window grows or a tab
-        // before it closes.
-        if cursor + width + plus_width > limit {
+        // A tab that would run under either control is not drawn and cannot be hit. Sizing
+        // has already shrunk every cell towards its number to put that off, so this is only
+        // reached when even a row of bare numbers does not fit: the tab is still numbered,
+        // it simply has nowhere to be until the window grows or a tab before it closes.
+        if cursor + width + controls > limit {
             break;
         }
         let room = width - number_cell(paint, tab.index) - TAB_GAP;
@@ -184,7 +198,14 @@ fn horizontal(
 
     let plus =
         (cursor + plus_width <= limit).then(|| Rect::new(cursor, 0.0, plus_width, ROW_HEIGHT));
-    let end = plus.map_or(cursor, Rect::right);
+    // The settings control is dropped rather than squeezed when the two do not both fit: a
+    // control drawn a few pixels narrower than its own mark is a mark with its edge cut off,
+    // and the chord that opens the panel is still there. The width it would have taken
+    // becomes drag region, which is where a press on a strip with no room for controls
+    // should land anyway.
+    let settings = (cursor + controls <= limit)
+        .then(|| Rect::new(cursor + plus_width, 0.0, settings_width, ROW_HEIGHT));
+    let end = settings.map_or_else(|| plus.map_or(cursor, Rect::right), Rect::right);
     let drag = Rect::between(end, 0.0, limit, ROW_HEIGHT);
 
     Strip {
@@ -193,6 +214,7 @@ fn horizontal(
         name,
         tabs,
         plus,
+        settings,
         drag: Some(drag),
         captions,
     }
@@ -227,15 +249,17 @@ fn vertical(
     // whole of the rule this crate can honour: what comes next is the rail scrolling
     // under the wheel, and a wheel position is not in `ChromeInput`.
     let available = (input.size.height - ROW_HEIGHT).max(0.0);
-    let cells = input.tabs.len() + 1;
+    // Two cells more than there are tabs: one for the new-tab mark and one for the settings
+    // control beneath it.
+    let cells = input.tabs.len() + 2;
     let cell = (available / cells as f32).clamp(RAIL_CELL_FLOOR, RAIL_CELL);
 
     let mut y = ROW_HEIGHT;
     let mut tabs = Vec::with_capacity(input.tabs.len());
     for tab in input.tabs {
-        // One cell is held back for the new-tab mark, which is the affordance that must
-        // not be the thing that overflows.
-        if y + 2.0 * cell > input.size.height {
+        // Two cells are held back, for the two controls below the tabs: they are the
+        // affordances that must not be the things that overflow.
+        if y + 3.0 * cell > input.size.height {
             break;
         }
         // The rail carries numbers and no names. It is forty-eight pixels wide and the
@@ -249,6 +273,11 @@ fn vertical(
         y += cell;
     }
     let plus = (y + cell <= input.size.height).then(|| Rect::new(0.0, y, RAIL_WIDTH, cell));
+    // Directly below the new-tab mark, and present only when that one is: a settings control
+    // sitting where the new-tab mark would have been, in a window too short for both, would
+    // be the two controls swapping places as the window is resized.
+    let settings = (plus.is_some() && y + 2.0 * cell <= input.size.height)
+        .then(|| Rect::new(0.0, y + cell, RAIL_WIDTH, cell));
 
     Strip {
         position: TabPosition::Left,
@@ -256,9 +285,36 @@ fn vertical(
         name,
         tabs,
         plus,
+        settings,
         drag: Some(drag),
         captions,
     }
+}
+
+/// Draw the settings mark into the box the strip planned for it.
+///
+/// Called from the chrome's overdrawn layer rather than from [`draw`], and that is the whole
+/// reason this is a function of its own: the panel is drawn after the strip and covers it in
+/// a window narrow enough that the panel is the window, so a mark drawn with the strip would
+/// be painted over by the panel while remaining a hit region — a control nobody can see that
+/// answers a press. It goes through [`marks::draw`] like the caption buttons, so it is a
+/// rectangle on the device grid rather than a character in the chrome's face.
+pub(crate) fn settings_mark(paint: &mut Painter<'_>, strip: &Strip, input: &ChromeInput<'_>) {
+    let Some(rect) = strip.settings else {
+        return;
+    };
+    // The captions' own pair of colours rather than the new-tab mark's single one: this is
+    // drawn as a mark beside buttons that step up one ink under the pointer, and a control
+    // in that row that did not would be the one the user is not sure they are over. The `+`
+    // is a character in the chrome's face and does not hover; that is a difference between
+    // the two kinds of control, not between these two.
+    let hovered = input.pointer.is_some_and(|(x, y)| rect.contains(x, y));
+    let color = if hovered {
+        input.palette.ink
+    } else {
+        input.palette.ink_mid
+    };
+    marks::draw(paint, Mark::Sliders, rect, color, input.scale);
 }
 
 /// How wide a tab's number is, in the weight the number is measured in.

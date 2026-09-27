@@ -49,6 +49,23 @@ pub(crate) const MARK_BOX: f32 = 10.0;
 /// How far the restore mark's back square is offset, in logical pixels.
 const RESTORE_OFFSET: f32 = 2.0;
 
+/// How far apart the sliders mark's three bars are, in logical pixels.
+const SLIDER_GAP: f32 = 3.0;
+
+/// The tick on a slider's bar: how wide, and how tall.
+///
+/// A tick rather than a knob the height of the bar, because a knob the height of a
+/// one-pixel bar is a bar with a slightly thicker patch on it and reads as neither a knob
+/// nor a bar. Taller than it is wide, and taller than the bar, so it is unmistakably a
+/// handle standing on a track.
+const SLIDER_TICK: (f32, f32) = (2.0, 4.0);
+
+/// Where each bar's tick sits along it, as a fraction of the bar's length.
+///
+/// Three different places, which is the whole of what the mark says: one control, three
+/// positions, and a window where each of them is set by hand.
+const SLIDER_TICKS: [f32; 3] = [0.25, 0.5, 0.75];
+
 /// One of the window's controls, as a shape rather than as a character.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Mark {
@@ -60,6 +77,8 @@ pub(crate) enum Mark {
     Restore,
     /// A diagonal cross.
     Close,
+    /// Three bars with a tick on each, at a different place on each: settings.
+    Sliders,
 }
 
 /// How thick a mark's strokes are, in whole physical pixels.
@@ -115,6 +134,44 @@ pub(crate) fn draw(paint: &mut Painter<'_>, mark: Mark, button: Rect, color: Rgb
             square(paint, left, top, side, thickness, color);
         }
         Mark::Close => cross(paint, left, top, side, thickness, color),
+        Mark::Sliders => sliders(paint, left, centre_y, side, thickness, color, scale),
+    }
+}
+
+/// Three bars with a tick on each, the mark the settings button wears.
+///
+/// This is what a gear would have been, and the reason it is not a gear is this module's
+/// whole subject: a gear is a ring and eight teeth, which is a coverage-ramped polygon
+/// rasteriser in a module that exists because one-pixel strokes belong on the pixel grid.
+/// Three bars and three ticks are rectangles, they are legible at ten pixels, and they say
+/// the same thing — a thing with several settings, each of them movable.
+///
+/// `left` is the mark's left edge in physical pixels and `centre_y` its middle row, so the
+/// bars grow outward from the centre the way the other marks do.
+fn sliders(
+    paint: &mut Painter<'_>,
+    left: f32,
+    centre_y: f32,
+    side: f32,
+    thickness: f32,
+    color: Rgb,
+    scale: f32,
+) {
+    let gap = (SLIDER_GAP * scale).round().max(1.0);
+    let (tick_width, tick_height) = (
+        (SLIDER_TICK.0 * scale).round().max(1.0),
+        (SLIDER_TICK.1 * scale).round().max(1.0),
+    );
+    // Rows are counted downward from the top bar rather than outward from the middle, so
+    // that the three bars land on three whole rows at every scale instead of drifting half
+    // a pixel apart on the scales where the gap does not divide evenly.
+    let top = centre_y - gap;
+    for (row, at) in SLIDER_TICKS.iter().enumerate() {
+        let bar = top + row as f32 * gap;
+        paint.physical(left, bar, side, thickness, color, 1.0);
+        let tick = left + (side * at).round() - (tick_width / 2.0).floor();
+        let above = (tick_height / 2.0).floor();
+        paint.physical(tick, bar - above, tick_width, tick_height, color, 1.0);
     }
 }
 

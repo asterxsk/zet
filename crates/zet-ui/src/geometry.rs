@@ -176,8 +176,22 @@ pub const RAIL_CELL: f32 = 36.0;
 /// The height a rail cell compresses to before the rail has to overflow.
 pub const RAIL_CELL_FLOOR: f32 = 24.0;
 
-/// The width of the settings panel.
-pub const PANEL_WIDTH: f32 = 380.0;
+/// The width of the settings panel: the rail, and the page beside it.
+///
+/// The panel was 380 and is now 560, which is 180 of rail and a page of exactly the 380 the
+/// rows were already laid out for. That is where both numbers come from rather than from a
+/// taste in panels: `CONTROL_WIDTH`, `LABEL_GAP`, the note's two columns and the heading's
+/// box were all measured against a 380-wide page, so the page keeps that width and the rail
+/// is what the panel grew by.
+pub const PANEL_WIDTH: f32 = PANEL_RAIL + 380.0;
+
+/// The width of the panel's rail of sections, when the panel has one.
+///
+/// Its own item is a section name at a size the eye reads rather than scans, so the width
+/// that matters is "the longest name and its padding": `Appearance` and `Terminal`, at 12px
+/// with the heading's tracking, and not much left over. Narrower windows shrink it — see
+/// `overlays::rail_width` — and a panel that is one section draws no rail at all.
+pub const PANEL_RAIL: f32 = 180.0;
 
 /// How long the settings panel takes to slide in.
 ///

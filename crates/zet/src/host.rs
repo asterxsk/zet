@@ -304,6 +304,18 @@ pub struct Host {
     /// window that grows therefore pulls the list back up on its own instead of leaving
     /// it scrolled past the end of a list that now fits.
     settings_scroll: f32,
+    /// Which section of the panel to show, by its heading's name.
+    ///
+    /// `None` is the first section. A name rather than an index because the headings move
+    /// under the panel: `Problems` is a section only while the configuration has something
+    /// wrong with it, so every index after it shifts the moment a setting fixes the last
+    /// diagnostic, and a window holding an index would find itself on a different section
+    /// without anything having been asked for.
+    ///
+    /// Kept in step with what the panel drew, each frame, the way `settings_scroll` is: the
+    /// panel resolves the name against the headings it was handed, and this is told which one
+    /// that turned out to be.
+    settings_section: Option<String>,
     /// The action waiting for the user to press a key, if the panel asked for one.
     capturing: Option<Action>,
     /// The settings row the keyboard is on: an index into the rows the app answers with.
@@ -388,6 +400,7 @@ impl Host {
             fitted: EMPTY_GRID,
             settings_open: false,
             settings_scroll: 0.0,
+            settings_section: None,
             capturing: None,
             settings_focus: None,
             settings_left: false,
@@ -757,6 +770,7 @@ impl Host {
             settings: &panel,
             settings_scroll: self.settings_scroll,
             settings_focus: focused,
+            settings_section: self.settings_section.as_deref(),
             find: finding.line,
             picker,
             menu,
@@ -824,6 +838,17 @@ impl Host {
         // list back up on its own, instead of leaving it parked past the end of a list
         // that now fits.
         self.settings_scroll = fresh.settings_scroll;
+        // The section the panel actually drew, which is the answer to the name this window
+        // asked for: a name that is no heading in the current list shows the first section,
+        // and a window that kept asking for it would ask again on every frame. Keeping the
+        // answer is what makes the choice survive the list changing under it — a setting that
+        // fixes the last diagnostic takes `Problems` away with it.
+        if let Some(line) = fresh.settings_section
+            && let Some(name) = heading_name(&self.app.settings(), line)
+            && self.settings_section.as_deref() != Some(name)
+        {
+            self.settings_section = Some(name.to_owned());
+        }
         self.placed = fresh;
         if moved {
             window.request_redraw();
@@ -1036,12 +1061,7 @@ impl Host {
         // again on the release, which is one keystroke the user cannot see the effect
         // of.
         if self.app.action_for(&translated) == Some(Action::Settings) {
-            self.settings_open = !self.settings_open;
-            self.settings_scroll = 0.0;
-            self.capturing = None;
-            self.settings_focus = None;
-            self.settings_left = false;
-            self.redraw();
+            self.toggle_settings();
             return;
         }
 
@@ -1208,6 +1228,28 @@ impl Host {
         true
     }
 
+    /// Show the section a heading names, and give the keyboard back.
+    ///
+    /// A method of its own rather than four lines inside the press arm, because a press is the
+    /// one thing about the rail the window cannot be asked to do without an HWND: `chrome_press`
+    /// answers "not mine" for everything until there is a window to draw into and a layout to
+    /// hit-test against, and this is the part that is worth a test.
+    ///
+    /// The keyboard goes back where it was, which is what "a click on a name, not on a row"
+    /// means: there is nowhere in the new page for the old highlight to be, and the panel's rule
+    /// is that it holds the arrow keys only when it has been asked to.
+    fn show_section(&mut self, line: usize) -> bool {
+        let lines = self.app.settings();
+        let Some(name) = heading_name(&lines, line) else {
+            return false;
+        };
+        self.settings_section = Some(name.to_owned());
+        self.settings_scroll = 0.0;
+        self.settings_focus = None;
+        self.settings_left = false;
+        true
+    }
+
     /// Move the panel's keyboard focus one row, or off the end of the list.
     fn step_focus(&mut self, rows: &[usize], here: Option<usize>, forward: bool) {
         let next = next_focus(rows.len(), here, forward);
@@ -1215,6 +1257,61 @@ impl Host {
         // back until something takes it again.
         self.settings_left = next.is_none();
         self.settings_focus = next.map(|at| rows[at]);
+        if let Some(line) = self.settings_focus {
+            self.follow_section(line);
+        }
+    }
+
+    /// Show the section the keyboard has walked into.
+    ///
+    /// The rows are one list and the sections are drawn one at a time, so walking off the end
+    /// of a section lands on the first row of the next one — which is a row that is not on
+    /// screen unless the page moves with it. It moves here, and the scroll goes back to the
+    /// top with it: the position the old page was scrolled to is a position in a list that is
+    /// no longer being drawn.
+    ///
+    /// Which section a row is in is read from the headings above it, because that is exactly
+    /// what a section is, and the alternative — a second index kept in step with the first —
+    /// is a second thing to be wrong.
+    fn follow_section(&mut self, line: usize) {
+        let lines = self.app.settings();
+        let Some(name) = lines
+            .iter()
+            .take(line + 1)
+            .rev()
+            .find_map(|line| match line {
+                zet_app::Line::Heading(name) => Some(*name),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        if self.settings_section.as_deref() == Some(name) {
+            return;
+        }
+        self.settings_section = Some(name.to_owned());
+        self.settings_scroll = 0.0;
+    }
+
+    /// Open the settings panel, or close it.
+    ///
+    /// The window's state rather than the app's, for the reason the field is: an overlay is
+    /// something the window draws and the app draws nothing. One function rather than two
+    /// call sites, because the chord and the strip's own control are two ways to ask for one
+    /// thing — a button that opened the panel and a chord that toggled it would leave a user
+    /// pressing the button again to get rid of it and being handed a second panel.
+    ///
+    /// Everything the panel was holding is let go: the scroll, the row the keyboard was on,
+    /// whether it had walked off the end, and a chord waiting to be captured. A panel that
+    /// opened with the last session's highlight still on a row would take the arrow keys the
+    /// moment it appeared.
+    fn toggle_settings(&mut self) {
+        self.settings_open = !self.settings_open;
+        self.settings_scroll = 0.0;
+        self.capturing = None;
+        self.settings_focus = None;
+        self.settings_left = false;
+        self.redraw();
     }
 
     /// Write the configuration back, and say so when it could not be.
@@ -1493,6 +1590,13 @@ impl Host {
                 self.carry_out(loop_, commands);
                 true
             }
+            Hit::SettingsButton => {
+                // The chord's own function, because a button and a binding that did different
+                // things would be one of them wrong.
+                self.toggle_settings();
+                true
+            }
+            Hit::Section(line) => self.show_section(line),
             Hit::Caption(caption) => {
                 match caption {
                     Caption::Minimize => window.set_minimized(true),
@@ -1774,10 +1878,14 @@ impl Host {
     /// width is the chrome's business and a second copy of it here is a second place for
     /// it to be wrong. The chrome hit-tests what it actually drew, which is also what
     /// the user is looking at.
+    ///
+    /// The strip's own settings control counts: it is drawn over the panel and it is the
+    /// panel's to answer for, so a wheel over it that scrolled the terminal behind the panel
+    /// would be the one pixel of the panel that scrolled something else.
     fn over_panel(&self, x: f64, y: f64) -> bool {
         matches!(
             self.chrome.hit(x as f32, y as f32),
-            Hit::Settings | Hit::Setting { .. }
+            Hit::Settings | Hit::Setting { .. } | Hit::SettingsButton | Hit::Section(_)
         )
     }
 
@@ -1850,6 +1958,20 @@ impl Host {
         {
             window.request_redraw();
         }
+    }
+}
+
+/// The name of the section a line begins, if that line is a heading.
+///
+/// What a section is called, asked two ways: the panel answers with the line it drew and the
+/// window turns that back into the name it holds, and a click on the rail arrives as a line and
+/// has to become a name. Both go through here so that "a section is a heading" is written once,
+/// which is the same reason the panel derives its rail from the headings rather than being
+/// told about them.
+fn heading_name(lines: &[zet_app::Line], line: usize) -> Option<&str> {
+    match lines.get(line)? {
+        zet_app::Line::Heading(name) => Some(name),
+        _ => None,
     }
 }
 
@@ -2395,6 +2517,108 @@ mod tests {
         assert!(
             (text_scale(&config, 3.0) - 2.0).abs() < f32::EPSILON,
             "a value the user set is not the system's to override"
+        );
+    }
+
+    /// A key press, which is the only kind of event the panel's own keys are.
+    fn press(key: Key) -> KeyEvent {
+        KeyEvent {
+            key,
+            mods: Modifiers::empty(),
+            text: None,
+            kind: KeyKind::Press,
+            base: None,
+            unshifted: None,
+        }
+    }
+
+    #[test]
+    fn the_panels_sections_are_the_apps_own_headings() {
+        // The seam the rail stands on. `zet-ui` derives its sections from the heading rows it
+        // is handed and knows nothing else about them, so a conversion that dropped them — or
+        // turned them into something else on the way past — would leave a panel with no rail
+        // at all and nothing anywhere to say why. These are the app's own names.
+        let app = app();
+        let rows = app.settings();
+        let lines = panel_lines(&rows, None);
+        let headings: Vec<&str> = lines
+            .iter()
+            .filter(|line| line.row == zet_ui::Row::Heading)
+            .map(|line| line.text)
+            .collect();
+        assert_eq!(headings, ["Appearance", "Tabs", "Terminal", "Keys"]);
+    }
+
+    #[test]
+    fn walking_past_a_sections_last_row_brings_the_next_one_to_the_page() {
+        // The sections follow the keyboard rather than being a place the keyboard can be:
+        // the rows are one list, and the row a `Tab` lands on has to be a row on screen. The
+        // scroll goes back to the top with the page, because the position the old page was
+        // scrolled to is a position in a list that is no longer being drawn.
+        let mut host = Host::new(app());
+        host.settings_open = true;
+        let lines = host.app.settings();
+        let next = lines
+            .iter()
+            .position(|line| matches!(line, zet_app::Line::Heading("Tabs")))
+            .expect("the panel has a Tabs section");
+        let last = (0..next)
+            .rev()
+            .find(|line| lines[*line].kind().is_some())
+            .expect("the section before it has rows");
+        host.settings_focus = Some(last);
+        host.settings_scroll = 40.0;
+
+        assert!(
+            host.panel_key(&press(Key::Tab)),
+            "a Tab on a row is the panel's"
+        );
+        assert_eq!(
+            host.settings_section.as_deref(),
+            Some("Tabs"),
+            "the page did not follow the keyboard into the next section"
+        );
+        assert!(
+            host.settings_scroll.abs() < f32::EPSILON,
+            "the new page opened part-way down"
+        );
+        assert!(
+            host.settings_focus.is_some_and(|line| line > last),
+            "the focus did not move past the row it was on"
+        );
+    }
+
+    #[test]
+    fn clicking_a_section_shows_it_and_gives_the_keyboard_back() {
+        // A click on the rail is a click on a name, not on a row: there is nowhere in the new
+        // page for the old highlight to be, and the panel's rule is that it holds the keyboard
+        // only when it has been asked to.
+        let mut host = Host::new(app());
+        host.settings_open = true;
+        let lines = host.app.settings();
+        let keys = lines
+            .iter()
+            .position(|line| matches!(line, zet_app::Line::Heading("Keys")))
+            .expect("the panel has a Keys section");
+        host.settings_focus = Some(0);
+        host.settings_scroll = 40.0;
+
+        assert!(
+            host.show_section(keys),
+            "a click on a heading names a section"
+        );
+        assert_eq!(host.settings_section.as_deref(), Some("Keys"));
+        assert!(
+            host.settings_focus.is_none(),
+            "the keyboard was left on a row that is not on the new page"
+        );
+        assert!(host.settings_scroll.abs() < f32::EPSILON);
+        assert!(!host.settings_left, "the next Tab enters the page again");
+
+        // And a line that is not a heading names nothing.
+        assert!(
+            !host.show_section(keys + 1),
+            "the row under a heading is not one"
         );
     }
 }
