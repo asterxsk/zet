@@ -11,6 +11,22 @@ counts as a breaking change in a terminal, is in
 
 ### Fixed
 
+- **`zet-ui`** — right-clicking a tab drew the context menu under the tab's title, so the title
+  was legible through the menu.
+  - The chrome is submitted as two frame batches — every rectangle in one, every glyph in the next
+    — and the frame draws its batches in the order they were opened, so "the chrome's text is over
+    the chrome's surfaces" was a rule the whole crate relied on. The menu cannot live under that
+    rule, so it is now submitted as a pair of batches of its own, after both: its surface over the
+    chrome's text, and its own labels over its own surface. Nothing is drawn after the menu, which
+    is what makes its output the tail of both arrays.
+  - The same fault was latent in the profile picker, whose surface could not cover the settings
+    panel's text either. It is not fixed here, and the comment left in `overdraw` names the shape
+    that would fix it: an ordered list of layers rather than a single boundary.
+- **`zet-ui`** — an open menu lost a click to the caption buttons and to the tab strip, which is
+  the opposite of what the code's own comment and DESIGN.md both said. The regions are published
+  in the reverse of paint order and the first one that holds the point wins, so pushing the menu
+  after the captions meant the captions won. It is pushed first now, and a test covers a menu
+  opened over a caption button.
 - **`zet`** — every launch opened a second, empty console window behind the window zet was
   drawing.
   - `zet.exe` was built as a console-subsystem application, so Windows allocated a console

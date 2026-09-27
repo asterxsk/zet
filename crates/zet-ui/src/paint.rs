@@ -63,7 +63,9 @@ impl TextStyle {
 /// A pair of arrays rather than the frame itself, because the layout is free to
 /// interleave a surface with the text on it and the frame is not: its batches are drawn
 /// in the order they were opened, so all of the chrome's rectangles go in one batch and
-/// all of its glyphs in the next, one draw call each.
+/// all of its glyphs in the next, one draw call each — and the menu, which has to be over
+/// the chrome's text as well as its surfaces, is submitted from a boundary recorded here
+/// as one more such pair. Which is why the painter can be asked how far it has got.
 pub(crate) struct Painter<'a> {
     fonts: &'a mut dyn GlyphSource,
     quads: &'a mut Vec<Quad>,
@@ -85,6 +87,20 @@ impl<'a> Painter<'a> {
             glyphs,
             scale,
         }
+    }
+
+    /// How many rectangles have been pushed so far.
+    ///
+    /// Read to record where a layer begins: the menu's output is the tail of both of these
+    /// arrays, and the chrome's layout submits that tail as its own pair of batches. See
+    /// [`crate::Chrome::layout`], which is where the two are separated again.
+    pub(crate) fn quads(&self) -> usize {
+        self.quads.len()
+    }
+
+    /// How many glyphs have been pushed so far, by the argument of [`Painter::quads`].
+    pub(crate) fn glyphs(&self) -> usize {
+        self.glyphs.len()
     }
 
     /// A rectangle of one colour.
