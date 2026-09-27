@@ -105,12 +105,26 @@ impl<'a> Painter<'a> {
 
     /// A rectangle of one colour.
     pub(crate) fn fill(&mut self, rect: Rect, color: Rgb) {
+        self.fill_at(rect, color, 1.0);
+    }
+
+    /// A rectangle at a coverage, which is what a hover fading in is made of.
+    ///
+    /// A draw at nothing is not a draw, and that is a rule rather than a saving: the colour
+    /// of a fully transparent quad is premultiplied down to zero, so it is no longer any
+    /// colour in the palette — and the crate's rule is that every quad is one of them. A
+    /// resting control therefore emits exactly what it emitted before hover existed, which
+    /// is also why [`crate::Hover`] reports zero rather than a small number.
+    pub(crate) fn fill_at(&mut self, rect: Rect, color: Rgb, alpha: f32) {
+        if alpha <= 0.0 {
+            return;
+        }
         self.quads.push(Quad::new(
             rect.x * self.scale,
             rect.y * self.scale,
             rect.width * self.scale,
             rect.height * self.scale,
-            premultiplied(color, 1.0),
+            premultiplied(color, alpha),
         ));
     }
 

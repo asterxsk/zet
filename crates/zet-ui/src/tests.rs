@@ -19,12 +19,12 @@ use zet_render::{BatchKind, Frame, Placement, Quad};
 
 use crate::fonts::GlyphSource;
 use crate::geometry::{
-    CAPTION_WIDTH, MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, PANEL_RAIL, PANEL_SLIDE, PANEL_WIDTH,
-    RAIL_WIDTH, ROW_HEIGHT, menu_rect, menu_width,
+    CAPTION_WIDTH, MENU_MIN_WIDTH, MENU_PAD, MENU_ROW, PANEL_RAIL, RAIL_WIDTH, ROW_HEIGHT,
+    SETTINGS_CELL, menu_rect, menu_width,
 };
 use crate::{
     Caption, Chrome, ChromeInput, Control, FindLine, Hit, Layout, MenuLine, PickerLine, Rect, Row,
-    ScrollState, Scrollbar, SettingLine, SettingPart, Size, TabInfo, thumb_offset,
+    ScrollState, Scrollbar, SettingLine, SettingPart, Size, TabId, TabInfo, thumb_offset,
 };
 
 /// A font source with no font in it.
@@ -139,13 +139,50 @@ fn digits_at(frame: &Frame, weight: Weight) -> Vec<char> {
         .collect()
 }
 
+/// How many numbers the strip drew at one weight.
+///
+/// The hash rather than the digits, because a cell's title carries digits of its own: what says
+/// a cell is numbered is the `#` in front of them.
+fn hashes(frame: &Frame, weight: Weight) -> usize {
+    drawn_at(frame, weight)
+        .into_iter()
+        .filter(|ch| *ch == '#')
+        .count()
+}
+
 /// A tab with a number and nothing else interesting about it.
 fn tab(index: u32) -> TabInfo {
     TabInfo {
-        index,
+        id: TabId::Terminal(index),
         title: format!("Terminal {index}"),
         hovered: false,
     }
+}
+
+/// The settings tab, titled the way the host titles it.
+fn settings_tab() -> TabInfo {
+    TabInfo {
+        id: TabId::Settings,
+        title: "settings".to_owned(),
+        hovered: false,
+    }
+}
+
+/// A run of terminals with the settings tab after them, which is the shape the host hands
+/// over whenever the tab is open.
+fn terminals_and_settings(indices: &[u32]) -> Vec<TabInfo> {
+    let mut tabs = tabs(indices);
+    tabs.push(settings_tab());
+    tabs
+}
+
+/// Put the settings page on screen in `input`, given tabs that already have the settings tab
+/// in them — which `terminals_and_settings` is for.
+///
+/// One field, because there is one field: the chrome draws the page exactly when the active tab
+/// is the settings tab. The old `settings_open` flag is gone, and this is what replaced it.
+fn show_settings(input: &mut ChromeInput<'_>) {
+    input.active = Some(TabId::Settings);
 }
 
 fn tabs(indices: &[u32]) -> Vec<TabInfo> {
@@ -162,8 +199,7 @@ fn input<'a>(palette: &'a Palette, tabs: &'a [TabInfo], size: Size) -> ChromeInp
     ChromeInput {
         palette,
         tabs,
-        active: tabs.first().map(|tab| tab.index),
-        settings_open: false,
+        active: tabs.first().map(|tab| tab.id),
         settings: &[],
         settings_scroll: 0.0,
         settings_focus: None,
@@ -206,13 +242,42 @@ fn draw(chrome: &mut Chrome, input: &ChromeInput<'_>) -> Drawn {
     Drawn { layout, frame }
 }
 
+/// Draw the frame a hover lands on.
+///
+/// A hover is a transition, so the frame the pointer arrives on is the frame the fade starts
+/// on and nothing is lit yet — an animated hover that was already lit on that frame would not
+/// be an animation. This draws that frame and then one more, a whole span later, which is
+/// where a control sits for as long as the pointer stays where it is. `now` is where the clock
+/// had got to.
+///
+/// Two frames and one span rather than sixty frames, because a transition here is a function
+/// of its start time: past the span, the value is the one it is heading for, and there is
+/// nothing left to arrive.
+fn settled(chrome: &mut Chrome, input: &ChromeInput<'_>, now: f32) -> Drawn {
+    let mut at = now;
+    let mut drawn = draw(chrome, input);
+    // The first frame is not thrown away idly: it is the frame that publishes the region the
+    // hover is decided from. From there it is one span per frame until the chrome stops
+    // saying something is moving — a whole span in one step, because past the span a
+    // transition is at the value it was heading for and there is nothing left to land.
+    for _ in 0..4 {
+        at += crate::geometry::HOVER;
+        chrome.set_time(at);
+        drawn = draw(chrome, input);
+        if !chrome.moving() {
+            break;
+        }
+    }
+    drawn
+}
+
 /// The tab cells, in the order they were laid out.
-fn tab_rects(chrome: &Chrome) -> Vec<(u32, Rect)> {
+fn tab_rects(chrome: &Chrome) -> Vec<(TabId, Rect)> {
     chrome
         .regions()
         .iter()
         .filter_map(|region| match region {
-            crate::Region::Tab { index, rect } => Some((*index, *rect)),
+            crate::Region::Tab { id, rect } => Some((*id, *rect)),
             _ => None,
         })
         .collect()
@@ -242,11 +307,21 @@ fn drag_rect(chrome: &Chrome) -> Option<Rect> {
     })
 }
 
-/// A tab's cell.
+/// A terminal tab's cell.
 fn tab_rect(chrome: &Chrome, index: u32) -> Rect {
+    cell_of(chrome, TabId::Terminal(index))
+}
+
+/// The cell of the settings tab.
+fn settings_cell(chrome: &Chrome) -> Rect {
+    cell_of(chrome, TabId::Settings)
+}
+
+/// One tab's cell, by id.
+fn cell_of(chrome: &Chrome, id: TabId) -> Rect {
     tab_rects(chrome)
         .into_iter()
-        .find(|(number, _)| *number == index)
+        .find(|(cell, _)| *cell == id)
         .expect("the tab was laid out")
         .1
 }
@@ -330,12 +405,12 @@ fn a_second_digit_makes_a_tab_wider() {
     // halves have to be separable for either to be checkable.
     let palette = Palette::instrument();
     let one = vec![TabInfo {
-        index: 1,
+        id: TabId::Terminal(1),
         title: "Terminal".to_owned(),
         hovered: false,
     }];
     let ten = vec![TabInfo {
-        index: 10,
+        id: TabId::Terminal(10),
         title: "Terminal".to_owned(),
         hovered: false,
     }];
@@ -494,7 +569,7 @@ fn all_text(frame: &Frame) -> String {
 /// One tab with a name, which is what a shell that sets `OSC 0` produces.
 fn named(index: u32, title: &str) -> Vec<TabInfo> {
     vec![TabInfo {
-        index,
+        id: TabId::Terminal(index),
         title: title.to_owned(),
         hovered: false,
     }]
@@ -566,12 +641,15 @@ fn a_crowded_strip_squeezes_every_tab_by_the_same_amount() {
     // the strip degrades evenly and the tab the user is looking at is not the one that
     // happens to be first.
     let palette = Palette::instrument();
-    let many = tabs(&(1..=12).collect::<Vec<u32>>());
+    // Eleven, not twelve: the settings control holds sixteen pixels of the row whether or
+    // not it is the mark the pointer is over, and the twelfth tab is what those sixteen
+    // pixels cost.
+    let many = tabs(&(1..=11).collect::<Vec<u32>>());
     let mut chrome = chrome();
     draw(&mut chrome, &input(&palette, &many, window()));
 
     let rects = tab_rects(&chrome);
-    assert_eq!(rects.len(), 12, "all twelve should still be on the row");
+    assert_eq!(rects.len(), 11, "all eleven should still be on the row");
     let width = rects[0].1.width;
     assert!(
         width < 180.0,
@@ -580,7 +658,7 @@ fn a_crowded_strip_squeezes_every_tab_by_the_same_amount() {
     for (index, rect) in &rects {
         assert!(
             (rect.width - width).abs() < 1.0e-4,
-            "#{index} is {} wide and #1 is {width}",
+            "{index:?} is {} wide and the first is {width}",
             rect.width
         );
     }
@@ -590,7 +668,7 @@ fn a_crowded_strip_squeezes_every_tab_by_the_same_amount() {
     let drawn = draw(&mut chrome, &input(&palette, &many, window()));
     let text = all_text(&drawn.frame);
     assert!(
-        text.matches('T').count() == 12,
+        text.matches('T').count() == 11,
         "not every name survived the squeeze: {text:?}"
     );
 }
@@ -728,12 +806,12 @@ fn numbering_survives_a_close() {
     // every decimal the strip happens to be showing.
     let tabs = vec![
         TabInfo {
-            index: 1,
+            id: TabId::Terminal(1),
             title: "Shell".to_owned(),
             hovered: false,
         },
         TabInfo {
-            index: 3,
+            id: TabId::Terminal(3),
             title: "Shell".to_owned(),
             hovered: false,
         },
@@ -741,15 +819,19 @@ fn numbering_survives_a_close() {
     let mut chrome = chrome();
     let drawn = draw(&mut chrome, &input(&palette, &tabs, window()));
 
-    let numbers: Vec<u32> = tab_rects(&chrome).iter().map(|(index, _)| *index).collect();
-    assert_eq!(numbers, vec![1, 3]);
+    let ids: Vec<TabId> = tab_rects(&chrome).iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids, vec![TabId::Terminal(1), TabId::Terminal(3)]);
     // The active tab is #1, so it is the medium one; #3 is the one at rest.
     assert_eq!(digits_at(&drawn.frame, Weight::MEDIUM), vec!['1']);
     assert_eq!(digits_at(&drawn.frame, Weight::NORMAL), vec!['3']);
 
     for index in [1, 3] {
         let (x, y) = tab_rect(&chrome, index).center();
-        assert_eq!(chrome.hit(x, y), Hit::Tab(index), "tab {index}");
+        assert_eq!(
+            chrome.hit(x, y),
+            Hit::Tab(TabId::Terminal(index)),
+            "tab {index}"
+        );
     }
 }
 
@@ -762,7 +844,7 @@ fn hit_testing_the_center_of_a_tab_returns_that_tab() {
 
     for index in [1, 2, 3] {
         let (x, y) = tab_rect(&chrome, index).center();
-        assert_eq!(chrome.hit(x, y), Hit::Tab(index));
+        assert_eq!(chrome.hit(x, y), Hit::Tab(TabId::Terminal(index)));
     }
     // A point above the rows is not the strip's at all.
     assert_eq!(chrome.hit(20.0, -5.0), Hit::None);
@@ -801,8 +883,10 @@ fn a_hovered_tab_gains_a_bar_and_nothing_else() {
     let mut chrome = chrome();
     let calm = draw(&mut chrome, &input(&palette, &tabs, window()));
 
+    // Asked about once the hover has arrived, because what this test is about is the state it
+    // lands in rather than the frame it starts on.
     tabs[1].hovered = true;
-    let hovered = draw(&mut chrome, &input(&palette, &tabs, window()));
+    let hovered = settled(&mut chrome, &input(&palette, &tabs, window()), 0.0);
 
     let mut extra = quads_only_in(&hovered.frame, &calm.frame);
     assert_eq!(
@@ -898,7 +982,7 @@ fn the_grid_gets_what_is_left() {
     let size = window();
     let mut chrome = chrome();
     let mut input = input(&palette, &tabs, size);
-    input.settings_open = true;
+    show_settings(&mut input);
     input.find = Some(FindLine::default());
     let drawn = draw(&mut chrome, &input);
 
@@ -931,40 +1015,56 @@ fn the_grid_gets_what_is_left() {
 // ---------------------------------------------------------------------------------
 
 #[test]
-fn the_settings_panel_is_anchored_to_the_right_and_hit_tests_as_settings() {
+fn the_settings_page_is_the_content_area_and_hit_tests_as_settings() {
     let palette = Palette::instrument();
-    let tabs = tabs(&[1]);
+    let tabs = terminals_and_settings(&[1]);
     let size = window();
     let mut chrome = chrome();
     let mut input = input(&palette, &tabs, size);
-    input.settings_open = true;
+    show_settings(&mut input);
     let drawn = draw(&mut chrome, &input);
 
-    let panel = chrome
+    let page = chrome
         .regions()
         .iter()
         .find_map(|region| match region {
             crate::Region::Settings(rect) => Some(*rect),
             _ => None,
         })
-        .expect("the panel is open");
-    assert!((panel.width - PANEL_WIDTH).abs() < f32::EPSILON);
-    assert!((panel.right() - size.width).abs() < f32::EPSILON);
-    assert!((panel.y - drawn.layout.top).abs() < f32::EPSILON);
+        .expect("the settings page is on screen");
+    // The page is the content area: the same rectangle the grid would have had. That is what
+    // makes it a tab rather than an overlay — there is no sliver of terminal beside it, above
+    // it or under it, because the terminal is not drawn at all.
+    assert_eq!(page, drawn.layout.grid, "the page is not the content area");
+    assert!((page.y - drawn.layout.top).abs() < f32::EPSILON);
+    assert!((page.bottom() - (size.height - drawn.layout.bottom)).abs() < f32::EPSILON);
+    assert!((page.right() - size.width).abs() < f32::EPSILON);
+    assert!(
+        page.x.abs() < f32::EPSILON,
+        "no rail, so it starts at the edge"
+    );
 
-    assert_eq!(chrome.hit(panel.x + 10.0, panel.y + 10.0), Hit::Settings);
+    assert_eq!(chrome.hit(page.x + 10.0, page.y + 10.0), Hit::Settings);
     assert_eq!(
         chrome.hit(size.width - 20.0, 20.0),
         Hit::Caption(Caption::Close),
-        "the captions are over the panel, not under it"
+        "the strip is over the page that begins below it"
     );
     assert_eq!(
-        chrome.hit(100.0, 400.0),
-        Hit::None,
-        "the grid is not the chrome's"
+        chrome.hit(100.0, size.height - 4.0),
+        Hit::Settings,
+        "and the page reaches the window's bottom edge"
+    );
+    assert_eq!(
+        chrome.hit(
+            size.width - 3.0 * CAPTION_WIDTH - 20.0,
+            drawn.layout.top - 4.0
+        ),
+        Hit::Drag,
+        "the strip above the page is the strip's own rather than the page's"
     );
 
-    // The panel's own surface is in the frame.
+    // The page's own surface is in the frame.
     let raised = color(palette.surface_raised);
     assert!(
         drawn
@@ -980,7 +1080,7 @@ fn the_settings_panel_is_anchored_to_the_right_and_hit_tests_as_settings() {
 fn settings_lines() -> Vec<SettingLine<'static>> {
     vec![
         SettingLine {
-            text: "APPEARANCE",
+            text: "Appearance",
             row: Row::Heading,
             value: "",
         },
@@ -995,7 +1095,7 @@ fn settings_lines() -> Vec<SettingLine<'static>> {
             value: "Off",
         },
         SettingLine {
-            text: "TERMINAL",
+            text: "Terminal",
             row: Row::Heading,
             value: "",
         },
@@ -1012,12 +1112,16 @@ fn settings_lines() -> Vec<SettingLine<'static>> {
     ]
 }
 
-/// The panel, open on a test window, drawn once.
+/// The settings page, on screen in a test window, drawn once.
 fn open_panel(palette: &Palette, lines: &[SettingLine<'_>]) -> (Chrome, Drawn) {
     open_panel_at(palette, lines, None)
 }
 
-/// The panel, open with the pointer at a point.
+/// The settings page, on screen with the pointer at a point.
+///
+/// A pointer that is over something draws the frame *after* the hover has landed, so that a
+/// caller asking what is lit is told the state a control holds rather than the frame it starts
+/// fading on. See [`settled`].
 fn open_panel_at(
     palette: &Palette,
     lines: &[SettingLine<'_>],
@@ -1026,14 +1130,18 @@ fn open_panel_at(
     let tabs = tabs(&[1]);
     let mut chrome = chrome();
     let mut input = input(palette, &tabs, window());
-    input.settings_open = true;
+    show_settings(&mut input);
     input.settings = lines;
     input.pointer = pointer;
-    let drawn = draw(&mut chrome, &input);
+    let drawn = if pointer.is_some() {
+        settled(&mut chrome, &input, 0.0)
+    } else {
+        draw(&mut chrome, &input)
+    };
     (chrome, drawn)
 }
 
-/// The panel, open on one of its sections, with the pointer at a point.
+/// The settings page, on screen in one of its sections, with the pointer at a point.
 ///
 /// A section by name rather than by index, because that is how a caller names one: the
 /// headings are the caller's own words and the rail is built from them. `lines` with one
@@ -1047,11 +1155,15 @@ fn open_panel_on(
     let tabs = tabs(&[1]);
     let mut chrome = chrome();
     let mut input = input(palette, &tabs, window());
-    input.settings_open = true;
+    show_settings(&mut input);
     input.settings = lines;
     input.settings_section = Some(section);
     input.pointer = pointer;
-    let drawn = draw(&mut chrome, &input);
+    let drawn = if pointer.is_some() {
+        settled(&mut chrome, &input, 0.0)
+    } else {
+        draw(&mut chrome, &input)
+    };
     (chrome, drawn)
 }
 
@@ -1139,7 +1251,7 @@ fn the_panel_draws_the_lines_it_is_given() {
     let (_, first) = open_panel(&palette, &lines);
 
     let heading: Vec<char> = drawn_at(&first.frame, Weight::MEDIUM);
-    for expected in ["APPEARANCE", "TERMINAL"] {
+    for expected in ["Appearance", "Terminal"] {
         for letter in expected.chars() {
             assert!(
                 heading.contains(&letter),
@@ -1154,7 +1266,7 @@ fn the_panel_draws_the_lines_it_is_given() {
         }
     }
 
-    let (_, second) = open_panel_on(&palette, &lines, "TERMINAL", None);
+    let (_, second) = open_panel_on(&palette, &lines, "Terminal", None);
     let body: Vec<char> = drawn_at(&second.frame, Weight::NORMAL);
     for expected in ["Size", "13", "Ctrl+Shift+T"] {
         for letter in expected.chars().filter(|ch| !ch.is_whitespace()) {
@@ -1202,10 +1314,10 @@ fn the_hover_fill_covers_the_region_a_click_would_take() {
     // Line 4 is the stepper, and the half the pointer is not in stays dark: the two
     // halves mean opposite things, and a fill over both would say so. It is in the section
     // the rail is not showing, so that is the one this half of the test opens.
-    let (chrome, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
+    let (chrome, _) = open_panel_on(&palette, &lines, "Terminal", None);
     let step = control_rect(&chrome, 4);
     let (sx, sy) = (step.right() - 4.0, step.center().1);
-    let (_, drawn) = open_panel_on(&palette, &lines, "TERMINAL", Some((sx, sy)));
+    let (_, drawn) = open_panel_on(&palette, &lines, "Terminal", Some((sx, sy)));
     assert_eq!(color_at(&drawn.frame, sx, sy), Some(hairline));
     assert_ne!(
         color_at(&drawn.frame, step.x + 4.0, sy),
@@ -1225,7 +1337,7 @@ fn every_control_is_a_region_that_names_its_line() {
     // at a time, so each section is opened before its rows are asked about — and the line
     // numbers are the list's rather than the page's, which is what makes the identity a
     // click comes back with mean something to the caller.
-    for (section, rows) in [(None::<&str>, [1_usize, 2]), (Some("TERMINAL"), [4, 5])] {
+    for (section, rows) in [(None::<&str>, [1_usize, 2]), (Some("Terminal"), [4, 5])] {
         let (chrome, _) = match section {
             Some(section) => open_panel_on(&palette, &lines, section, None),
             None => open_panel(&palette, &lines),
@@ -1260,7 +1372,7 @@ fn a_stepper_answers_twice_and_everything_else_once() {
     // way the user meant.
     let palette = Palette::instrument();
     let lines = settings_lines();
-    let (chrome, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
+    let (chrome, _) = open_panel_on(&palette, &lines, "Terminal", None);
 
     let halves: Vec<(SettingPart, Rect)> = chrome
         .regions()
@@ -1339,7 +1451,7 @@ fn a_row_that_does_not_fit_is_scrolled_to_rather_than_dropped() {
         height: 200.0,
     };
     let mut input = input(&palette, &tabs, short);
-    input.settings_open = true;
+    show_settings(&mut input);
     input.settings = &lines;
 
     // Unscrolled, the list starts at the top and the first row is on screen.
@@ -1419,14 +1531,14 @@ fn the_row_the_keyboard_is_on_wears_the_brightest_edge_and_the_others_do_not() {
 
     let plain = {
         let mut input = input(&palette, &tabs, window());
-        input.settings_open = true;
+        show_settings(&mut input);
         input.settings = &lines;
         let drawn = draw(&mut chrome, &input);
         edge_of(&chrome, &drawn, 1)
     };
     let focused = {
         let mut input = input(&palette, &tabs, window());
-        input.settings_open = true;
+        show_settings(&mut input);
         input.settings = &lines;
         input.settings_focus = Some(1);
         let drawn = draw(&mut chrome, &input);
@@ -1440,7 +1552,7 @@ fn the_row_the_keyboard_is_on_wears_the_brightest_edge_and_the_others_do_not() {
     // And the row that is not focused is untouched by it, which is the half a test that
     // only compared two frames would miss.
     let mut input = input(&palette, &tabs, window());
-    input.settings_open = true;
+    show_settings(&mut input);
     input.settings = &lines;
     input.settings_focus = Some(1);
     let drawn = draw(&mut chrome, &input);
@@ -1466,7 +1578,7 @@ fn a_focused_row_below_the_fold_is_scrolled_to_rather_than_hidden() {
         height: 200.0,
     };
     let mut input = input(&palette, &tabs, short);
-    input.settings_open = true;
+    show_settings(&mut input);
     input.settings = &lines;
     input.settings_scroll = 0.0;
     input.settings_focus = Some(39);
@@ -1518,7 +1630,7 @@ fn a_row_scrolled_half_off_the_list_is_not_drawn_over_the_chrome_above_it() {
         height: 300.0,
     };
     let mut input = input(&palette, &tabs, short);
-    input.settings_open = true;
+    show_settings(&mut input);
     input.settings = &lines;
     // Two wheel notches. Small enough that the list does not reach its end, so the rows
     // straddle the panel's top edge rather than all fitting inside it.
@@ -1564,11 +1676,11 @@ fn a_row_scrolled_half_off_the_list_is_not_drawn_over_the_chrome_above_it() {
 }
 
 // ---------------------------------------------------------------------------------
-// The panel's arrival
+// The settings page as a tab
 // ---------------------------------------------------------------------------------
 
-/// The rectangle of the settings panel the last layout published.
-fn panel_rect_of(chrome: &Chrome) -> Rect {
+/// The rectangle of the settings page the last layout published.
+fn page_rect_of(chrome: &Chrome) -> Rect {
     chrome
         .regions()
         .iter()
@@ -1576,159 +1688,54 @@ fn panel_rect_of(chrome: &Chrome) -> Rect {
             crate::Region::Settings(rect) => Some(*rect),
             _ => None,
         })
-        .expect("the panel is open")
+        .expect("the settings page is on screen")
 }
 
-/// A chrome that has drawn one frame with the panel shut, so that the next frame with it
-/// open is the frame it opens on rather than the first time the chrome has ever been asked.
-fn panel_chrome(palette: &Palette, tabs: &[TabInfo], size: Size) -> Chrome {
+/// The page is the content area, and the height the strip and the find bar take off it is the
+/// grid's own answer rather than the page's: one rectangle, two readers.
+///
+/// This is the whole of what replaced the slide. The slide measured where the page's left edge
+/// was between two places; a page is not between two places, it is the place, and the thing to
+/// check is that it is the same place the terminal would have been.
+#[test]
+fn the_settings_page_takes_the_content_area_and_the_grid_gets_nothing() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let tabs = terminals_and_settings(&[1]);
+    let size = window();
     let mut chrome = chrome();
-    let shut = input(palette, tabs, size);
-    draw(&mut chrome, &shut);
-    chrome
+    let mut shown = input(&palette, &tabs, size);
+    show_settings(&mut shown);
+    shown.settings = &lines;
+    let drawn = draw(&mut chrome, &shown);
+
+    let page = page_rect_of(&chrome);
+    assert_eq!(page, drawn.layout.grid);
+    assert!(
+        (drawn.layout.top - ROW_HEIGHT).abs() < f32::EPSILON,
+        "the strip still takes its row: the page begins {} from the top",
+        drawn.layout.top
+    );
+
+    // And with the find bar open the page gives up its height the way the grid would, because
+    // it is the same rectangle.
+    let mut searching = input(&palette, &tabs, size);
+    show_settings(&mut searching);
+    searching.settings = &lines;
+    searching.find = Some(FindLine::default());
+    let drawn = draw(&mut chrome, &searching);
+    assert!(drawn.layout.bottom > 0.0, "the find bar took nothing");
+    assert_eq!(page_rect_of(&chrome), drawn.layout.grid);
 }
 
-/// The panel slides in from the right edge over the 180ms DESIGN.md gives it.
+/// A section heading is drawn exactly as it was written, in the case it was written in.
 ///
-/// The measurement is the panel's own left edge, because that is the edge that moves: the
-/// right edge is the window's and stays there, which is what makes this a slide rather
-/// than a grow. A panel that appeared at full width on the frame it opened would satisfy
-/// every other test in this file.
+/// The heading used to be upper-cased here, which meant the page and the rail beside it —
+/// which took its names from the same strings — disagreed about what a section was called
+/// unless both shouted. The case is the app's now: the words arrive as they are spelled and
+/// the panel draws them, and a heading that came in lower case arrives lower case.
 #[test]
-fn the_panel_slides_in_over_the_time_the_document_gives_it() {
-    let palette = Palette::instrument();
-    let lines = settings_lines();
-    let tabs = tabs(&[1]);
-    let size = window();
-    let mut chrome = panel_chrome(&palette, &tabs, size);
-    let mut open = input(&palette, &tabs, size);
-    open.settings_open = true;
-    open.settings = &lines;
-
-    // The frame it opens on: the whole panel is off the window, because it starts at the
-    // right edge and slides leftward into place.
-    let _ = draw(&mut chrome, &open);
-    assert!(
-        (panel_rect_of(&chrome).x - size.width).abs() < f32::EPSILON,
-        "the panel was on the window on the frame it opened"
-    );
-    // Nothing of it is clickable either: the regions come from the same rectangle, so a
-    // panel that is off the window cannot be pressed through.
-    assert_eq!(chrome.hit(size.width - 20.0, 300.0), Hit::None);
-
-    // Halfway: on the window, and not yet in place.
-    chrome.set_time(PANEL_SLIDE / 2.0);
-    draw(&mut chrome, &open);
-    let midway = panel_rect_of(&chrome);
-    assert!(
-        midway.x > size.width - PANEL_WIDTH && midway.x < size.width,
-        "halfway through the slide the panel is at {}, which is neither off the window nor in place",
-        midway.x
-    );
-
-    // Arrived, and it stays arrived however long the caller waits.
-    chrome.set_time(PANEL_SLIDE);
-    draw(&mut chrome, &open);
-    let settled = panel_rect_of(&chrome);
-    assert!(
-        (settled.right() - size.width).abs() < f32::EPSILON
-            && (settled.width - PANEL_WIDTH).abs() < f32::EPSILON,
-        "the panel did not reach the right edge: {settled:?}"
-    );
-    chrome.set_time(PANEL_SLIDE * 20.0);
-    draw(&mut chrome, &open);
-    assert_eq!(
-        panel_rect_of(&chrome),
-        settled,
-        "the panel kept moving after it arrived"
-    );
-}
-
-/// Reduce motion means the panel is simply there, on the frame it opens.
-///
-/// The document's rule for the whole app: "Everything still works, nothing moves." A panel
-/// that slid under reduce motion would be the one transition the setting did not reach.
-#[test]
-fn reduce_motion_puts_the_panel_in_place_on_the_frame_it_opens() {
-    let palette = Palette::instrument();
-    let lines = settings_lines();
-    let tabs = tabs(&[1]);
-    let size = window();
-    let mut chrome = panel_chrome(&palette, &tabs, size);
-    let mut open = input(&palette, &tabs, size);
-    open.settings_open = true;
-    open.settings = &lines;
-    open.reduce_motion = true;
-
-    draw(&mut chrome, &open);
-    let rect = panel_rect_of(&chrome);
-    assert!(
-        (rect.right() - size.width).abs() < f32::EPSILON
-            && (rect.width - PANEL_WIDTH).abs() < f32::EPSILON,
-        "reduce motion still slid the panel: {rect:?}"
-    );
-}
-
-/// Closing the panel is instant, and opening it again slides from the edge once more.
-///
-/// A slide *out* would be a panel that is still on the window after the app has stopped
-/// drawing it as open, so every control in it would take a click for the length of the
-/// animation. The second opening is the one that says the state was reset rather than
-/// left arrived.
-#[test]
-fn closing_the_panel_is_instant_and_reopening_slides_again() {
-    let palette = Palette::instrument();
-    let lines = settings_lines();
-    let tabs = tabs(&[1]);
-    let size = window();
-    let mut chrome = panel_chrome(&palette, &tabs, size);
-    let mut open = input(&palette, &tabs, size);
-    open.settings_open = true;
-    open.settings = &lines;
-
-    // The frame it opens on, and then the frame its slide is over: the slide starts on the
-    // first of those, so the clock being past 180ms already makes no difference to it.
-    draw(&mut chrome, &open);
-    chrome.set_time(PANEL_SLIDE);
-    draw(&mut chrome, &open);
-    assert!(
-        (panel_rect_of(&chrome).right() - size.width).abs() < f32::EPSILON,
-        "the panel never arrived"
-    );
-
-    // Shut: on the frame the caller stops offering it, it is gone.
-    let shut = input(&palette, &tabs, size);
-    chrome.set_time(PANEL_SLIDE * 2.0);
-    draw(&mut chrome, &shut);
-    assert!(
-        !chrome
-            .regions()
-            .iter()
-            .any(|region| matches!(region, crate::Region::Settings(_))),
-        "the panel left a region behind after it closed"
-    );
-
-    // Open again, on a later frame, and the slide starts over from the edge.
-    chrome.set_time(PANEL_SLIDE * 3.0);
-    draw(&mut chrome, &open);
-    assert!(
-        (panel_rect_of(&chrome).x - size.width).abs() < f32::EPSILON,
-        "a panel opened a second time did not slide: it was already in place"
-    );
-}
-
-/// A section heading is drawn in upper case whatever case it was written in.
-///
-/// DESIGN.md fixes a heading as "12px uppercase with a hairline under it", and the size,
-/// the tracking, the weight and the rule are all the panel's. The case is the same kind of
-/// property and belongs in the same place: the app owns the words, and "upper case" is a
-/// treatment the panel gives a heading rather than a spelling the configuration has.
-///
-/// The third assertion is the one that matters as much as the first two. Upper-casing
-/// everything would satisfy "the heading is upper case" and would shout every row label in
-/// the panel, so a test that only looked for the heading would not notice.
-#[test]
-fn a_section_heading_is_drawn_upper_case() {
+fn a_section_heading_is_drawn_in_the_case_it_was_written_in() {
     let palette = Palette::instrument();
     let lines = vec![
         SettingLine {
@@ -1746,12 +1753,12 @@ fn a_section_heading_is_drawn_upper_case() {
     let text = all_text(&drawn.frame);
 
     assert!(
-        text.contains("APPEARANCE"),
-        "the heading was not drawn in upper case: {text:?}"
+        text.contains("Appearance"),
+        "the heading was not drawn as it was written: {text:?}"
     );
     assert!(
-        !text.contains("Appearance"),
-        "the heading kept the case it was written in: {text:?}"
+        !text.contains("APPEARANCE"),
+        "the heading was still shouted: {text:?}"
     );
     // Without its space: a space draws no glyph, so the frame's text runs the words of a
     // label together and the assertion can only be about the letters.
@@ -1771,7 +1778,7 @@ fn a_heading_scrolled_off_the_panel_takes_its_rule_with_it() {
     let palette = Palette::instrument();
     let hairline = color(palette.hairline);
     let mut lines = vec![SettingLine {
-        text: "APPEARANCE",
+        text: "Appearance",
         row: Row::Heading,
         value: "",
     }];
@@ -1787,7 +1794,7 @@ fn a_heading_scrolled_off_the_panel_takes_its_rule_with_it() {
         height: 300.0,
     };
     let mut input = input(&palette, &tabs, short);
-    input.settings_open = true;
+    show_settings(&mut input);
     input.settings = &lines;
 
     // Only this fixture's one section rule spans the whole panel: the panel's own left
@@ -1816,7 +1823,12 @@ fn a_heading_scrolled_off_the_panel_takes_its_rule_with_it() {
                 // apart from the one-pixel edge beside it and from a control's 118-pixel
                 // border. Half a pixel is a tolerance this cannot need and the lint asks
                 // for; the three widths differ by two orders of magnitude.
-                quad.color.map(f32::to_bits) == hairline && (quad.rect[2] - panel.width).abs() < 0.5
+                quad.color.map(f32::to_bits) == hairline
+                    && (quad.rect[2] - panel.width).abs() < 0.5
+                    // The strip's own rule is the window's width, and with the page no
+                    // longer inset from the left edge that is the same number. It sits
+                    // above the page's top edge; every section rule is below it.
+                    && quad.rect[1] > panel.y
             })
             .count();
         let controls = drawn
@@ -2100,7 +2112,7 @@ fn the_rail_is_forty_eight_wide_with_the_bar_on_the_left() {
 
     // The row's own hit regions are still the row's.
     let (x, y) = rects[0].1.center();
-    assert_eq!(chrome.hit(x, y), Hit::Tab(1));
+    assert_eq!(chrome.hit(x, y), Hit::Tab(TabId::Terminal(1)));
 }
 
 #[test]
@@ -2193,7 +2205,7 @@ fn the_scrollbar_is_still_reachable_with_the_settings_panel_open() {
         })
         .collect::<Vec<_>>();
     let mut with_panel = input(&palette, &tabs, size);
-    with_panel.settings_open = true;
+    show_settings(&mut with_panel);
     with_panel.settings = &lines;
     draw(&mut chrome, &with_panel);
 
@@ -2347,7 +2359,9 @@ fn the_chrome_only_ever_draws_the_chrome_palette() {
                 visible: 0.5,
             });
             let mut input = input(&palette, &tabs, window());
-            input.settings_open = settings_open;
+            if settings_open {
+                show_settings(&mut input);
+            }
             input.find = Some(FindLine::default());
             let drawn = draw(&mut chrome, &input);
 
@@ -2387,13 +2401,13 @@ fn the_indicator_travels_between_tabs() {
     let tabs = tabs(&[1, 2]);
     let mut chrome = chrome();
     let mut input = input(&palette, &tabs, window());
-    input.active = Some(1);
+    input.active = Some(TabId::Terminal(1));
     chrome.set_time(0.0);
     draw(&mut chrome, &input);
     let first = tab_rect(&chrome, 1);
 
     // Switch, and look seventy milliseconds into a hundred-and-forty millisecond move.
-    input.active = Some(2);
+    input.active = Some(TabId::Terminal(2));
     draw(&mut chrome, &input);
     chrome.set_time(0.070);
     let drawn = draw(&mut chrome, &input);
@@ -2426,11 +2440,11 @@ fn reduce_motion_makes_the_indicator_jump() {
     let mut chrome = chrome();
     let mut input = input(&palette, &tabs, window());
     input.reduce_motion = true;
-    input.active = Some(1);
+    input.active = Some(TabId::Terminal(1));
     chrome.set_time(0.0);
     draw(&mut chrome, &input);
 
-    input.active = Some(2);
+    input.active = Some(TabId::Terminal(2));
     chrome.set_time(0.070);
     let drawn = draw(&mut chrome, &input);
 
@@ -2451,11 +2465,11 @@ fn a_change_mid_travel_carries_on_from_where_the_bar_is() {
     let tabs = tabs(&[1, 2, 3]);
     let mut chrome = chrome();
     let mut input = input(&palette, &tabs, window());
-    input.active = Some(1);
+    input.active = Some(TabId::Terminal(1));
     chrome.set_time(0.0);
     draw(&mut chrome, &input);
 
-    input.active = Some(3);
+    input.active = Some(TabId::Terminal(3));
     chrome.set_time(0.0);
     draw(&mut chrome, &input);
     chrome.set_time(0.070);
@@ -2464,7 +2478,7 @@ fn a_change_mid_travel_carries_on_from_where_the_bar_is() {
         .expect("an indicator")
         .rect[0];
 
-    input.active = Some(2);
+    input.active = Some(TabId::Terminal(2));
     let after = draw(&mut chrome, &input);
     let bar = indicator(&after.frame, &palette).expect("an indicator");
 
@@ -2997,14 +3011,13 @@ fn a_click_under_the_popover_reaches_the_grid() {
 
 #[test]
 fn a_popover_row_is_still_reachable_with_the_settings_panel_open_behind_it() {
-    // The two overlays can be up at once — the panel is a view the user left open and the
-    // question about a new tab is a thing they just did — and in a window narrow enough
-    // they overlap: the panel is anchored to the right edge and is 380 wide, the popover to
-    // the left and is 300. The popover is drawn after the panel, so it is the one the user
-    // can see, and a click on a row has to land on the row. It did not: `Chrome::hit`
-    // answers with the first region that holds the point, the panel's surface was pushed
-    // before the popover's rows, and a click on a row in the overlap was swallowed by a
-    // panel the row was drawn on top of.
+    // The two overlays can be up at once — the page is a view the user left open and the
+    // question about a new tab is a thing they just did — and the page is the whole content
+    // area, so the popover is always opened over it rather than beside it. The popover is
+    // drawn after the page, so it is the one the user can see, and a click on a row has to
+    // land on the row. It did not: `Chrome::hit` answers with the first region that holds
+    // the point, the page's surface was pushed before the popover's rows, and a click on a
+    // row in the overlap was swallowed by a page the row was drawn on top of.
     let palette = Palette::instrument();
     let tabs = tabs(&[1]);
     let shells = vec!["PowerShell 7".to_owned(), "cmd".to_owned()];
@@ -3022,7 +3035,7 @@ fn a_popover_row_is_still_reachable_with_the_settings_panel_open_behind_it() {
         .collect::<Vec<_>>();
     let mut chrome = chrome();
     let mut input = input(&palette, &tabs, size);
-    input.settings_open = true;
+    show_settings(&mut input);
     input.settings = &lines;
     input.picker = Some(PickerLine {
         profiles: &profiles,
@@ -3043,11 +3056,11 @@ fn a_popover_row_is_still_reachable_with_the_settings_panel_open_behind_it() {
         .next()
         .expect("the popover drew a row");
     assert!(
-        row.x < panel.x && panel.x < row.right(),
-        "the two do not overlap in this window, so this is not the conflict it tests"
+        panel.x <= row.x && row.right() <= panel.right(),
+        "the popover is not drawn over the page, so this is not the conflict it tests"
     );
 
-    let x = panel.x + 4.0;
+    let x = row.x + 4.0;
     assert_eq!(
         chrome.hit(x, row.center().1),
         Hit::Profile(0),
@@ -3335,7 +3348,7 @@ fn an_open_menu_wins_the_point_it_covers() {
     let tabs = tabs(&[1]);
     let mut chrome = chrome();
     let mut base = input(&palette, &tabs, window());
-    base.settings_open = true;
+    show_settings(&mut base);
     base.settings = &lines;
     // Where a control is has to be drawn to be known, so the panel is drawn once without
     // the menu to find one, and again with the menu opened on top of it.
@@ -3508,6 +3521,11 @@ fn the_title_under_a_menu_is_not_in_the_batch_the_menu_is() {
 }
 
 /// The settings control sits against the new-tab mark, and the drag region starts after it.
+///
+/// It is not a cell of the strip's kind and is not measured like one: the new-tab mark is a
+/// tab's width because it stands where a tab would, and the settings mark is a fixed sixteen
+/// pixels with no number and no padding, which is what puts its centre twenty-five and a half
+/// pixels from the new-tab mark's rather than a whole cell away.
 #[test]
 fn the_settings_control_sits_beside_the_new_tab_mark() {
     let palette = Palette::instrument();
@@ -3522,10 +3540,16 @@ fn the_settings_control_sits_beside_the_new_tab_mark() {
         "the two controls are not side by side: {plus:?} and {settings:?}"
     );
     assert!(
-        (settings.width - plus.width).abs() < f32::EPSILON,
-        "the settings control is not the width the new-tab mark is"
+        (settings.width - SETTINGS_CELL).abs() < f32::EPSILON,
+        "the settings control is {} wide and does not take the fixed sixteen pixels: {settings:?}",
+        settings.width
     );
     assert!((settings.height - ROW_HEIGHT).abs() < f32::EPSILON);
+    assert!(
+        (settings.center().0 - plus.center().0 - 25.5).abs() < 0.05,
+        "the two marks are {} apart centre to centre: {plus:?} and {settings:?}",
+        settings.center().0 - plus.center().0
+    );
 
     assert_eq!(
         chrome.hit(plus.center().0, plus.center().1),
@@ -3550,7 +3574,11 @@ fn the_settings_control_sits_beside_the_new_tab_mark() {
 ///
 /// The rule the new-tab mark has always had — it is the affordance that must not be the
 /// thing that overflows — extended to the pair. A control drawn into room it does not have
-/// is a mark with its edge cut off, and the chord that opens the panel is still there.
+/// is a mark with its edge cut off, and the chord that opens the page is still there.
+///
+/// Sixteen pixels is the whole difference between the width that holds both controls and the
+/// width that holds one, and the two ordinary cases are a tenth of a pixel apart: the mark
+/// gives up its room and the settings mark is the one that goes.
 #[test]
 fn the_settings_control_is_dropped_before_the_new_tab_mark_is() {
     let palette = Palette::instrument();
@@ -3559,14 +3587,27 @@ fn the_settings_control_is_dropped_before_the_new_tab_mark_is() {
     draw(&mut chrome, &input(&palette, &tabs, window()));
     let plus = plus_rect(&chrome).expect("the strip has room for the new-tab mark");
 
-    // Half a control's width past what the new-tab mark alone needs: the row holds the mark
-    // and not the pair, which is exactly the case that decides which of the two gives way.
-    let narrow = Size {
-        width: 3.0 * CAPTION_WIDTH + plus.width * 1.5,
+    // The narrowest row that holds both controls. The pair reserves its room before the run of
+    // tabs is sized, so the two only ever compete in a strip with no room for a tab at all —
+    // which is this one, and is the strip where the question of which control gives way is
+    // asked. One tenth of a pixel less is the other side of the line.
+    let both = 3.0 * CAPTION_WIDTH + plus.width + SETTINGS_CELL;
+    let at = |width: f32| Size {
+        width,
         height: 800.0,
     };
-    draw(&mut chrome, &input(&palette, &tabs, narrow));
+    draw(&mut chrome, &input(&palette, &tabs, at(both)));
+    assert!(
+        plus_rect(&chrome).is_some(),
+        "the new-tab mark did not fit at the width worked out to hold both controls"
+    );
+    let settings = settings_rect(&chrome).expect("the settings control fits at that width");
+    assert!(
+        (settings.x - plus.width).abs() < f32::EPSILON,
+        "the settings control is not against the new-tab mark: {settings:?}"
+    );
 
+    draw(&mut chrome, &input(&palette, &tabs, at(both - 0.1)));
     assert!(
         plus_rect(&chrome).is_some(),
         "the new-tab mark gave up its room to the settings control"
@@ -3614,12 +3655,12 @@ fn the_settings_control_is_drawn_over_the_panel() {
     let lines = settings_lines();
     let mut chrome = chrome();
     let mut with_panel = input(&palette, &tabs, window());
-    with_panel.settings_open = true;
+    show_settings(&mut with_panel);
     with_panel.settings = &lines;
     let painted = draw(&mut chrome, &with_panel);
 
     let settings = settings_rect(&chrome).expect("the settings control is drawn");
-    let panel = panel_rect_of(&chrome);
+    let panel = page_rect_of(&chrome);
     let surface = painted
         .frame
         .quads
@@ -3729,11 +3770,11 @@ fn the_rail_lists_the_sections_the_caller_has() {
     );
     // The names are drawn where the rail is, in the heading's own type and upper case, and
     // the panel is otherwise the same surface as before: the rail is inside it, not beside it.
-    let panel = panel_rect_of(&chrome);
+    let panel = page_rect_of(&chrome);
     assert!((items[0].1.x - (panel.x + 16.0)).abs() < f32::EPSILON);
     let heading: Vec<char> = drawn_at(&drawn.frame, Weight::MEDIUM);
-    for letter in "TERMINAL".chars() {
-        assert!(heading.contains(&letter), "the rail did not draw TERMINAL");
+    for letter in "Terminal".chars() {
+        assert!(heading.contains(&letter), "the rail did not draw Terminal");
     }
 
     // The chosen item wears the panel's `hairline`, and one that is not chosen does not: the
@@ -3762,12 +3803,12 @@ fn only_the_chosen_section_is_drawn() {
     let (first, drawn) = open_panel(&palette, &lines);
     assert_eq!(setting_lines(&first), vec![1, 2]);
 
-    let (second, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
+    let (second, _) = open_panel_on(&palette, &lines, "Terminal", None);
     assert_eq!(setting_lines(&second), vec![4, 5]);
 
     // The heading is the rail's. A page that drew its own heading would be saying the section's
     // name a second time, in the place the rows are.
-    let panel = panel_rect_of(&second);
+    let panel = page_rect_of(&second);
     let rail_edge = panel.x + PANEL_RAIL;
     for glyph in &drawn.frame.glyphs {
         let [x, y, ..] = glyph.rect;
@@ -3792,9 +3833,9 @@ fn only_the_chosen_section_is_drawn() {
 fn a_row_is_never_drawn_over_the_rail() {
     let palette = Palette::instrument();
     let lines = settings_lines();
-    let (chrome, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
+    let (chrome, _) = open_panel_on(&palette, &lines, "Terminal", None);
 
-    let panel = panel_rect_of(&chrome);
+    let panel = page_rect_of(&chrome);
     let rail_edge = panel.x + PANEL_RAIL;
     for line in setting_lines(&chrome) {
         let rect = control_rect(&chrome, line);
@@ -3830,7 +3871,7 @@ fn a_rail_item_is_hittable_and_the_page_is_not_hit_where_the_rail_is() {
 
     // Below the last item is the rail and not a row: the panel's own surface, which is what
     // swallows a click on the panel that is not on a control.
-    let panel = panel_rect_of(&chrome);
+    let panel = page_rect_of(&chrome);
     assert_eq!(
         chrome.hit(panel.x + 4.0, item.bottom() + 4.0),
         Hit::Settings,
@@ -3869,7 +3910,7 @@ fn a_section_name_that_is_not_a_heading_shows_the_first_section() {
 fn a_page_names_its_rows_by_the_whole_lists_lines() {
     let palette = Palette::instrument();
     let lines = settings_lines();
-    let (chrome, _) = open_panel_on(&palette, &lines, "TERMINAL", None);
+    let (chrome, _) = open_panel_on(&palette, &lines, "Terminal", None);
 
     assert_eq!(setting_lines(&chrome), vec![4, 5]);
     for line in [4_usize, 5] {
@@ -3878,5 +3919,739 @@ fn a_page_names_its_rows_by_the_whole_lists_lines() {
             matches!(chrome.hit(rect.x + 2.0, rect.center().1), Hit::Setting { line: at, .. } if at == line),
             "line {line} does not hit-test as itself"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------------
+// The hover transition
+// ---------------------------------------------------------------------------------
+
+/// The colours of the quads in a frame that are exactly `rect`.
+///
+/// A control's own fill is the one rectangle in the frame that *is* the control: the strip's
+/// surface is the whole window's width, the panel's is the whole panel, and everything else
+/// a hover draws is a mark or a bar *inside* a control. So a quad that matches a control's
+/// box to the pixel is the fill that control wore and nothing else's.
+fn fills(frame: &Frame, rect: Rect) -> Vec<[f32; 4]> {
+    frame
+        .quads
+        .iter()
+        .filter(|quad| is_rect(quad, rect))
+        .map(|quad| quad.color)
+        .collect()
+}
+
+/// How lit a control is, read out of the fill it drew, or `None` when it drew none.
+///
+/// The one number a fade is: everything else about a hover is the state it lands in, and the
+/// state it lands in is a curve this has to be able to sample partway along.
+fn lit_at(frame: &Frame, rect: Rect, full: f32) -> Option<f32> {
+    fills(frame, rect).first().map(|fill| fill[3] / full)
+}
+
+/// Whether a quad's colour is `wanted` at `alpha`, which is the whole of what a fade says.
+fn is_fill_of(got: [f32; 4], wanted: zet_config::Rgb, alpha: f32) -> bool {
+    (got[3] - alpha).abs() < 1e-3 && same(stripped(got), wanted.to_linear())
+}
+
+/// Whether two rectangles share a pixel.
+fn overlaps(quad: &Quad, box_: Rect) -> bool {
+    let [x, y, width, height] = quad.rect;
+    x < box_.right() && box_.x < x + width && y < box_.bottom() && box_.y < y + height
+}
+
+/// Every rectangle and every glyph in a frame is one of the chrome's twelve colours, allowing
+/// for whatever coverage a fade or an antialiased edge put on it.
+///
+/// The same rule as [`the_chrome_only_ever_draws_the_chrome_palette`], asked of a frame with a
+/// hover live in it — which is the frame the rule is easiest to break in. A quad at *no* alpha
+/// is no colour at all: `stripped` cannot divide nothing back out, so a fade that overshot
+/// zero would arrive here as black and fail.
+fn assert_palette_only(palette: &Palette, frame: &Frame) {
+    let allowed: Vec<[f32; 4]> = palette
+        .all()
+        .iter()
+        .map(|(_, color)| color.to_linear())
+        .collect();
+    assert!(!frame.quads.is_empty(), "nothing was drawn");
+    for quad in &frame.quads {
+        let colour = stripped(quad.color);
+        assert!(
+            allowed.iter().any(|one| same(colour, *one)),
+            "{:?} is not a chrome colour",
+            quad.color
+        );
+    }
+    for glyph in &frame.glyphs {
+        let colour = stripped(glyph.color);
+        assert!(
+            allowed.iter().any(|one| same(colour, *one)),
+            "{:?} is not a chrome colour",
+            glyph.color
+        );
+    }
+}
+
+#[test]
+fn a_caption_button_fills_under_the_pointer_and_only_that_one() {
+    // The button fills, which is what Windows does with the same three and what a window
+    // control with no hover state was missing. The other two are the assertion that matters:
+    // a fill that reached its neighbour would light a control the pointer is not on, and a
+    // caption button is pressed hundreds of times a day.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    let minimize = caption_box(Caption::Minimize);
+    input.pointer = Some(minimize.center());
+    let drawn = settled(&mut chrome, &input, 0.0);
+
+    let wash = fills(&drawn.frame, minimize);
+    assert_eq!(wash.len(), 1, "the pointer's own button did not fill");
+    assert!(
+        is_fill_of(wash[0], palette.ink, crate::strip::CAPTION_WASH),
+        "the wash is not a tenth of `ink`: {:?}",
+        wash[0]
+    );
+    for other in [Caption::Maximize, Caption::Close] {
+        assert!(
+            fills(&drawn.frame, caption_box(other)).is_empty(),
+            "{other:?} filled with the pointer on another button"
+        );
+    }
+}
+
+#[test]
+fn the_close_button_fills_danger_and_takes_a_mark_that_is_readable_on_it() {
+    // The one button in the chrome that fills a colour rather than a wash, and the one mark
+    // that changes colour to go with it. `ink` on `danger` measures 2.15:1, so a close mark
+    // that stayed white would be a mark the user cannot see — the failure this test exists to
+    // catch is a fill added without the mark being turned over.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    let close = caption_box(Caption::Close);
+    input.pointer = Some(close.center());
+    let drawn = settled(&mut chrome, &input, 0.0);
+
+    let fill = fills(&drawn.frame, close);
+    assert_eq!(fill.len(), 1, "close did not fill");
+    assert!(
+        is_fill_of(fill[0], palette.danger, 1.0),
+        "close fills `danger`, not {:?}",
+        fill[0]
+    );
+
+    // Inside the button there is the fill and the mark, and the mark is the dark one. The
+    // resting mark's colour is asked for by name, because the failure is a cross drawn twice
+    // over the same pixels: one at full `ink-mid` under a fill is a cross that is still there
+    // and no longer readable.
+    let inside: Vec<[f32; 4]> = drawn
+        .frame
+        .quads
+        .iter()
+        .filter(|quad| within(quad, close))
+        .map(|quad| quad.color)
+        .collect();
+    assert!(
+        inside
+            .iter()
+            .any(|one| same(stripped(*one), palette.ground.to_linear())),
+        "the close mark did not turn over to `ground`"
+    );
+    assert!(
+        !inside
+            .iter()
+            .any(|one| same(stripped(*one), palette.ink_mid.to_linear())),
+        "the resting mark is still drawn under the fill"
+    );
+}
+
+#[test]
+fn a_hover_fades_in_over_the_time_the_document_gives_it() {
+    // DESIGN.md gives a hover 110ms and an exponential ease-out. Both halves of that are
+    // assertable here because a transition is a function of its start time rather than a
+    // value stepped once per frame: sampling the same chrome at the eighth, the half and the
+    // whole of the span is the curve, and an instant flip would satisfy the endpoints while
+    // failing every sample between them.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    let minimize = caption_box(Caption::Minimize);
+    let wash = crate::strip::CAPTION_WASH;
+
+    // The frame before the pointer arrives is the frame that publishes the button's region,
+    // because a hover is decided from the layout the window was last drawn with. That is what
+    // makes the next frame the one the fade starts on.
+    draw(&mut chrome, &input);
+    input.pointer = Some(minimize.center());
+    let started = draw(&mut chrome, &input);
+    assert!(
+        fills(&started.frame, minimize).is_empty(),
+        "a hover was already lit on the frame it started"
+    );
+
+    let at = |chrome: &mut Chrome, now: f32| {
+        chrome.set_time(now);
+        lit_at(&draw(chrome, &input).frame, minimize, wash)
+    };
+    let early = at(&mut chrome, crate::geometry::HOVER / 8.0).expect("a hover that is fading");
+    let late = at(&mut chrome, crate::geometry::HOVER / 2.0).expect("a hover that is still fading");
+    let arrived = at(&mut chrome, crate::geometry::HOVER).expect("a hover that has landed");
+
+    assert!(early > 0.0, "the fade does not start from nothing");
+    assert!(early < late, "the fade is not ahead after longer");
+    assert!(late < 1.0, "the fade arrived before its span was up");
+    assert!((arrived - 1.0).abs() < 1e-3, "the fade overshot: {arrived}");
+}
+
+#[test]
+fn a_hover_fades_back_out_when_the_pointer_leaves() {
+    // Out is a transition too, and it turns around from where it is rather than from one:
+    // a pointer swept across a row of buttons leaves each one fading from whatever it had
+    // reached, which is what makes the whole sweep one movement rather than several.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    let minimize = caption_box(Caption::Minimize);
+    let wash = crate::strip::CAPTION_WASH;
+    let span = crate::geometry::HOVER;
+
+    draw(&mut chrome, &input);
+    input.pointer = Some(minimize.center());
+    draw(&mut chrome, &input);
+    chrome.set_time(span);
+    let landed = draw(&mut chrome, &input);
+    assert!((lit_at(&landed.frame, minimize, wash).unwrap_or(0.0) - 1.0).abs() < 1e-3);
+
+    input.pointer = None;
+    let leaving = lit_at(&draw(&mut chrome, &input).frame, minimize, wash);
+    assert!(
+        leaving.is_some_and(|lit| (lit - 1.0).abs() < 1e-3),
+        "the fill vanished on the frame the pointer left, rather than fading"
+    );
+
+    chrome.set_time(span * 1.5);
+    let half = lit_at(&draw(&mut chrome, &input).frame, minimize, wash).expect("a fade on its way");
+    assert!(
+        half > 0.0 && half < 1.0,
+        "the fade out is not gradual: {half}"
+    );
+
+    chrome.set_time(span * 2.0);
+    let gone = draw(&mut chrome, &input);
+    assert!(
+        fills(&gone.frame, minimize).is_empty(),
+        "the fill is still there after the span it fades out over"
+    );
+    assert!(
+        !chrome.moving(),
+        "the chrome is still animating a hover of nothing"
+    );
+}
+
+/// The new-tab mark's cross, and the colour this frame drew it in.
+fn plus_glyph(frame: &Frame, box_: Rect) -> [f32; 4] {
+    frame
+        .glyphs
+        .iter()
+        .find(|glyph| {
+            let [x, y, width, height] = glyph.rect;
+            box_.contains(x, y)
+                && box_.contains(x + width - 1.0, y + height - 1.0)
+                && char::from_u32(glyph.uv[1] as u32) == Some('+')
+        })
+        .expect("the new-tab mark's cross")
+        .color
+}
+
+/// Every rectangle one of the marks drew, which is what says which colour it is wearing.
+fn mark_quads(frame: &Frame, box_: Rect) -> Vec<[f32; 4]> {
+    frame
+        .quads
+        .iter()
+        .filter(|quad| within(quad, box_))
+        .map(|quad| quad.color)
+        .collect()
+}
+
+/// Neither mark has a rectangle of its own, and the hover is the mark's own ink going white.
+///
+/// The two used to light a stack of rings around themselves, which is a haze behind a mark
+/// that is otherwise nothing but rectangles. What the pointer does now is one colour step —
+/// the cross from `ink-dim` to `ink`, the settings bars from `ink-mid` to `ink` — and the
+/// second half of the test is the part that is easy to lose: no third thing is drawn at all.
+/// A fill the size of the control is a button, and both of these are marks.
+#[test]
+fn the_plus_and_the_settings_mark_turn_white_with_nothing_behind_them() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    draw(&mut chrome, &input);
+    let plus = plus_rect(&chrome).expect("the strip drew the new-tab mark");
+    let settings = settings_rect(&chrome).expect("the strip had room for the settings control");
+
+    // At rest the mark is the dim one and there is nothing under it.
+    let rest = draw(&mut chrome, &input);
+    assert!(
+        fills(&rest.frame, plus).is_empty(),
+        "the new-tab mark has a rectangle behind it"
+    );
+    assert!(
+        fills(&rest.frame, settings).is_empty(),
+        "the settings mark has a rectangle behind it"
+    );
+    assert!(
+        same(
+            stripped(plus_glyph(&rest.frame, plus)),
+            palette.ink_dim.to_linear()
+        ),
+        "the new-tab mark at rest is not `ink-dim`"
+    );
+    let bars = mark_quads(&rest.frame, settings);
+    assert!(!bars.is_empty(), "the settings mark drew nothing");
+    for bar in bars {
+        assert!(
+            same(stripped(bar), palette.ink_mid.to_linear()),
+            "a resting bar is `ink-mid`, not {bar:?}"
+        );
+    }
+
+    // Under the pointer it is white, and the only thing that changed is the colour.
+    input.pointer = Some(plus.center());
+    let drawn = settled(&mut chrome, &input, 0.0);
+    assert!(
+        fills(&drawn.frame, plus).is_empty(),
+        "the hover put a rectangle behind the new-tab mark"
+    );
+    assert!(
+        same(
+            stripped(plus_glyph(&drawn.frame, plus)),
+            palette.ink.to_linear()
+        ),
+        "the new-tab mark under the pointer is not white"
+    );
+
+    input.pointer = Some(settings.center());
+    let drawn = settled(&mut chrome, &input, 0.0);
+    assert!(
+        fills(&drawn.frame, settings).is_empty(),
+        "the hover put a rectangle behind the settings mark"
+    );
+    for bar in mark_quads(&drawn.frame, settings) {
+        assert!(
+            same(stripped(bar), palette.ink.to_linear()),
+            "a bar under the pointer is `ink`, not {bar:?}"
+        );
+    }
+}
+
+/// The settings mark is white for as long as the settings tab exists, pointer or no pointer.
+///
+/// The strip's rule for the active tab, applied to the view it opens: what is open is the
+/// thing that is bright. It is what makes the tab and the mark one control rather than two —
+/// the mark is the tab's handle in the strip — and it is why closing the tab rather than
+/// clicking the mark is what puts the mark back to `ink-mid`.
+#[test]
+fn the_settings_mark_is_ink_while_the_tab_is_open() {
+    let palette = Palette::instrument();
+    let tabs = terminals_and_settings(&[1]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    show_settings(&mut input);
+    let drawn = draw(&mut chrome, &input);
+    let settings = settings_rect(&chrome).expect("the strip drew the settings control");
+
+    let bars = mark_quads(&drawn.frame, settings);
+    assert!(!bars.is_empty(), "the settings mark drew nothing");
+    for bar in bars {
+        assert!(
+            same(stripped(bar), palette.ink.to_linear()),
+            "the mark is still resting while its tab is open: {bar:?}"
+        );
+    }
+}
+
+/// The settings tab takes a cell at the end of the run, and that cell has no number on it.
+///
+/// A tab's number is a position in the list and the settings tab is not in that list: it is a
+/// view of the app rather than a program running in a shell, and numbering it would either
+/// number it `#3` beside two shells and break the run, or leave a gap where a shell used to be.
+/// So it has no number at all, and the terminals' own numbering stays unbroken from `#1`
+/// however many times the page has been opened and closed.
+#[test]
+fn the_settings_tab_is_the_last_cell_and_has_no_number() {
+    let palette = Palette::instrument();
+    let tabs = terminals_and_settings(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    show_settings(&mut input);
+    let drawn = draw(&mut chrome, &input);
+
+    let cells = tab_rects(&chrome);
+    assert_eq!(cells.len(), 3, "the settings tab is not a cell of its own");
+    assert_eq!(
+        cells[2].0,
+        TabId::Settings,
+        "the settings tab is not the last cell"
+    );
+    assert!(
+        (tab_rect(&chrome, 2).right() - settings_cell(&chrome).x).abs() < f32::EPSILON,
+        "the settings tab does not follow the last terminal"
+    );
+
+    // The settings tab is the active one, so it is the cell drawn at the heavy weight, and it
+    // has no number: the hashes the strip drew are the two on the terminals' cells and there is
+    // none on the settings cell. A title carries digits of its own, so the numbers are counted
+    // by their hashes rather than by the digits on the row.
+    assert_eq!(
+        hashes(&drawn.frame, Weight::NORMAL),
+        2,
+        "the terminals are not numbered with two hashes"
+    );
+    assert_eq!(
+        hashes(&drawn.frame, Weight::MEDIUM),
+        0,
+        "the settings tab drew itself a number"
+    );
+    // Its name is on it, and nothing else is: the cell is the name and no number, which is the
+    // whole of what makes it read as a view rather than as a shell.
+    assert!(
+        all_text(&drawn.frame).contains("settings"),
+        "the settings tab's own name is not on it"
+    );
+}
+
+/// A click on the settings tab is the settings tab, and the mark beside it is still the mark.
+///
+/// The two controls sit next to each other and answer differently: the cell in the run is the
+/// view, and the mark past the run is the button that opens it or closes it. A press on either
+/// has to land on the one the user pointed at.
+#[test]
+fn a_click_on_the_settings_tab_is_the_settings_tab() {
+    let palette = Palette::instrument();
+    let tabs = terminals_and_settings(&[1]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    show_settings(&mut input);
+    draw(&mut chrome, &input);
+
+    let cell = settings_cell(&chrome);
+    let plus = plus_rect(&chrome).expect("the strip drew the new-tab mark");
+    assert_eq!(
+        chrome.hit(cell.center().0, cell.center().1),
+        Hit::Tab(TabId::Settings),
+        "the settings tab does not answer as the settings tab"
+    );
+    assert_eq!(
+        chrome.hit(plus.center().0, plus.center().1),
+        Hit::NewTab,
+        "the settings tab swallowed the press on the mark beside it"
+    );
+}
+
+/// The page is the active tab, so the terminal under it is not drawn and its numbers are not
+/// written in the heavy weight.
+///
+/// The strip is the whole of what says which view the user is looking at: the active cell is
+/// the one drawn at the heavy weight, and with the settings tab open that cell is the settings
+/// tab and no terminal's number is heavy anywhere on the row. The page's own rows are in the
+/// frame instead, in their place.
+#[test]
+fn the_page_is_the_active_tab_and_the_terminals_are_not_drawn_under_it() {
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let tabs = terminals_and_settings(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    show_settings(&mut input);
+    input.settings = &lines;
+    let drawn = draw(&mut chrome, &input);
+
+    let heavy: String = drawn_at(&drawn.frame, Weight::MEDIUM).into_iter().collect();
+    assert!(
+        heavy.contains("Appearance"),
+        "the page's own heading is not the heavy text on screen: {heavy:?}"
+    );
+    assert_eq!(
+        hashes(&drawn.frame, Weight::MEDIUM),
+        0,
+        "a terminal's number is still drawn at the heavy weight: {heavy:?}"
+    );
+    assert_eq!(
+        hashes(&drawn.frame, Weight::NORMAL),
+        2,
+        "the terminals' own numbers are not on the row"
+    );
+    assert_eq!(
+        chrome.hit(drawn.layout.grid.center().0, drawn.layout.grid.center().1),
+        Hit::Settings,
+        "the content area does not answer as the page"
+    );
+}
+
+#[test]
+fn a_hovered_mark_reaches_no_further_than_the_control_that_owns_it() {
+    // A light that means "here" and lands next door is worse than no hover at all, and the one
+    // hover in the chrome that could is the pair beside the tabs: the new-tab mark is the last
+    // thing on the row before the settings control. Nothing may be drawn over the tab the
+    // pointer is not on — the mark is inside its own cell and the ink stops at the cell's edge.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    draw(&mut chrome, &input);
+    let plus = plus_rect(&chrome).expect("the strip drew the new-tab mark");
+    let next = tab_rect(&chrome, 2);
+
+    input.pointer = Some(plus.center());
+    let drawn = settled(&mut chrome, &input, 0.0);
+    let stray: Vec<Quad> = drawn
+        .frame
+        .quads
+        .iter()
+        .filter(|quad| overlaps(quad, next))
+        .filter(|quad| same(stripped(quad.color), palette.ink.to_linear()))
+        .copied()
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "the hovered mark reached the tab beside it: {stray:?}"
+    );
+    assert!(
+        plus.x >= next.right() - f32::EPSILON,
+        "the tab is not the one beside the mark, so this asserted nothing: plus {plus:?} tab {next:?}"
+    );
+}
+
+#[test]
+fn reduce_motion_lights_a_control_on_the_frame_the_pointer_arrives() {
+    // DESIGN.md's rule for the whole app: everything still works, nothing moves. A hover that
+    // faded under reduce motion would be the one transition the setting did not reach, and it
+    // is the one it is easiest to forget, because the hover is drawn by the crate rather than
+    // by the host that owns the setting.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    input.reduce_motion = true;
+    let minimize = caption_box(Caption::Minimize);
+
+    draw(&mut chrome, &input);
+    input.pointer = Some(minimize.center());
+    let arrived = draw(&mut chrome, &input);
+
+    let wash = fills(&arrived.frame, minimize);
+    assert_eq!(wash.len(), 1, "reduce motion still waited for the fade");
+    assert!(is_fill_of(wash[0], palette.ink, crate::strip::CAPTION_WASH));
+    assert!(
+        !chrome.moving(),
+        "reduce motion started a transition it will not finish"
+    );
+}
+
+#[test]
+fn the_chrome_says_it_is_moving_until_every_hover_has_landed() {
+    // What the window's frame clock is built on. The host asks this on every idle turn: while
+    // it is true the loop wakes for another frame, and once it is false the loop waits. A
+    // chrome that never said "landed" would spin a redraw forever, and one that said it too
+    // early would leave a fade frozen partway.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+
+    draw(&mut chrome, &input);
+    assert!(
+        !chrome.moving(),
+        "a chrome with the pointer nowhere is not animating"
+    );
+
+    input.pointer = Some(caption_box(Caption::Minimize).center());
+    draw(&mut chrome, &input);
+    assert!(
+        chrome.moving(),
+        "a hover that has just started is not reported as moving"
+    );
+
+    settled(&mut chrome, &input, crate::geometry::HOVER * 2.0);
+    assert!(
+        !chrome.moving(),
+        "a hover that has landed is still reported as moving"
+    );
+}
+
+#[test]
+fn a_menu_row_and_a_picker_row_fill_under_the_pointer() {
+    // Both are lists of things to press, and neither lights what is *chosen* with a fill —
+    // the picker's chosen row wears a lamp and the menu has no chosen row at all — so the
+    // fill is the only thing that says what a click is about to do.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let hairline = color(palette.hairline);
+
+    let items = ["New tab", "New window"];
+    let mut menu = open_menu_at(&palette, &tabs, &items, (40.0, 60.0));
+    let rect = menu_rect_of(&menu);
+    let row = Rect::new(rect.x, rect.y + MENU_PAD + MENU_ROW, rect.width, MENU_ROW);
+    let mut input = input(&palette, &tabs, window());
+    input.menu = Some(MenuLine {
+        items: &items,
+        at: (40.0, 60.0),
+    });
+    input.pointer = Some(row.center());
+    let drawn = settled(&mut menu, &input, 0.0);
+    assert_eq!(
+        color_at(&drawn.frame, row.center().0, row.center().1),
+        Some(hairline),
+        "the row under the pointer did not fill"
+    );
+    assert_ne!(
+        color_at(&drawn.frame, row.center().0, rect.y + MENU_PAD + 4.0),
+        Some(hairline),
+        "the row above it filled with the pointer below"
+    );
+
+    // The picker's rows, through a chrome of the picker's own so that the popover is drawn
+    // from the frame it is first asked for in.
+    let profiles = ["pwsh", "wsl"];
+    let mut picker = chrome();
+    input.menu = None;
+    input.picker = Some(PickerLine {
+        profiles: &profiles,
+        at: 0,
+    });
+    draw(&mut picker, &input);
+    let rows = picker_rows(&picker);
+    let second = rows
+        .iter()
+        .find(|(at, _)| *at == 1)
+        .expect("the picker drew its second row")
+        .1;
+    let first = rows
+        .iter()
+        .find(|(at, _)| *at == 0)
+        .expect("the picker drew its first row")
+        .1;
+    input.pointer = Some(second.center());
+    let drawn = settled(&mut picker, &input, 0.0);
+    assert_eq!(
+        color_at(&drawn.frame, second.center().0, second.center().1),
+        Some(hairline),
+        "the profile under the pointer did not fill"
+    );
+    assert_eq!(
+        color_at(&drawn.frame, first.center().0, first.center().1),
+        Some(color(palette.surface_raised)),
+        "the chosen row filled as well, which is the lamp's job and not the pointer's"
+    );
+}
+
+#[test]
+fn the_scrollbar_grows_over_the_time_the_hover_takes() {
+    // The one hover in the chrome that moves a distance rather than a colour: 8px to 10px.
+    // It is also the one whose hit region is wider than the thing it lights, so the question
+    // this asks is whether the *drawn* width is the transition and not the band.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let mut chrome = chrome();
+    chrome.set_scroll(ScrollState {
+        offset: 0.0,
+        visible: 0.5,
+    });
+    let mut input = input(&palette, &tabs, window());
+    let calm = draw(&mut chrome, &input);
+    let (track, thumb) = scrollbar(&chrome);
+    let rest = |chrome: &Chrome| scrollbar(chrome).1.width;
+    assert!((thumb.width - crate::geometry::SCROLLBAR).abs() < 1e-3);
+    assert!(!calm.frame.quads.is_empty());
+
+    input.pointer = Some((window().width - 4.0, track.center().1));
+    draw(&mut chrome, &input);
+    assert!(
+        (rest(&chrome) - crate::geometry::SCROLLBAR).abs() < 1e-3,
+        "the bar grew on the frame the hover started"
+    );
+
+    chrome.set_time(crate::geometry::HOVER / 2.0);
+    draw(&mut chrome, &input);
+    let part = scrollbar(&chrome).1.width;
+    assert!(
+        part > crate::geometry::SCROLLBAR && part < crate::geometry::SCROLLBAR_HOVER,
+        "the bar does not move across the span: {part}"
+    );
+
+    chrome.set_time(crate::geometry::HOVER);
+    draw(&mut chrome, &input);
+    assert!(
+        (scrollbar(&chrome).1.width - crate::geometry::SCROLLBAR_HOVER).abs() < 1e-3,
+        "the bar did not finish growing"
+    );
+}
+
+#[test]
+fn a_hovered_active_tab_keeps_its_ink_and_gains_no_bar() {
+    // The active tab outranks the pointer, for the same reason focus outranks it in the
+    // panel: the tab that is open is where the shell is, and a tab that dimmed to `ink-mid`
+    // because a mouse crossed it would be lying about that. Its bar is already there, at
+    // `signal` rather than `signal-dim`, so the hover has nothing left to say and draws
+    // nothing at all.
+    let palette = Palette::instrument();
+    let mut tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let calm = draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    tabs[0].hovered = true;
+    let hovered = settled(&mut chrome, &input(&palette, &tabs, window()), 0.0);
+
+    assert!(
+        quads_only_in(&hovered.frame, &calm.frame).is_empty(),
+        "hovering the active tab drew something"
+    );
+    let x = tab_rect(&chrome, 1).x + 12.0;
+    let number = hovered
+        .frame
+        .glyphs
+        .iter()
+        .find(|glyph| (glyph.rect[0] - x).abs() < 0.01)
+        .expect("the active tab drew its number");
+    assert!(
+        same(stripped(number.color), palette.ink.to_linear()),
+        "a hovered active tab dimmed its number"
+    );
+}
+
+#[test]
+fn every_hover_is_a_palette_colour_at_a_coverage() {
+    // The palette rule with a hover live in the frame, which is the frame it is easiest to
+    // break in: a fade is a palette colour at less than full alpha, and nothing else. A quad
+    // at *no* alpha is not a colour at all, which is why every complementary draw in the
+    // chrome returns early rather than filling at zero.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    draw(&mut chrome, &input);
+    let plus = plus_rect(&chrome).expect("the new-tab mark");
+    let settings = settings_rect(&chrome).expect("the settings control");
+
+    // Every control that fades, at the instant its fade starts and once it has landed. The
+    // frame in between is the one with a partial alpha in it, so it is the one that matters.
+    for at in [
+        caption_box(Caption::Minimize).center(),
+        caption_box(Caption::Close).center(),
+        caption_box(Caption::Maximize).center(),
+        plus.center(),
+        settings.center(),
+    ] {
+        input.pointer = Some(at);
+        for now in [0.0, crate::geometry::HOVER / 8.0, crate::geometry::HOVER] {
+            chrome.set_time(now);
+            assert_palette_only(&palette, &draw(&mut chrome, &input).frame);
+        }
     }
 }

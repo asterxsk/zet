@@ -65,6 +65,7 @@
 
 pub mod fonts;
 mod geometry;
+mod hover;
 mod marks;
 mod overlays;
 mod paint;
@@ -76,6 +77,9 @@ use std::mem;
 
 use zet_config::{TabPosition, TabSettings, WindowSettings};
 use zet_render::{GlyphQuad, Quad};
+
+use crate::geometry::SCROLLBAR_HOVER;
+use crate::hover::Hover;
 
 pub use crate::fonts::GlyphSource;
 pub use crate::geometry::{Rect, Size};
@@ -93,48 +97,50 @@ pub struct ChromeInput<'a> {
     pub palette: &'a zet_config::Palette,
     /// The tabs, in the order they are shown.
     pub tabs: &'a [TabInfo],
-    /// The number of the active tab, or `None` when nothing is open.
-    pub active: Option<u32>,
-    /// Whether the settings panel is open.
-    pub settings_open: bool,
-    /// What the settings panel shows: headings and rows, in order.
+    /// The id of the tab that is on screen, or `None` when nothing is open.
+    ///
+    /// The settings page is on screen exactly when this is [`TabId::Settings`], and there
+    /// is no second flag for it: a page that is drawn but is not the active tab, or is the
+    /// active tab and is not drawn, is a bug that only exists because two values said two
+    /// things.
+    pub active: Option<TabId>,
+    /// What the settings page shows: headings and rows, in order.
     ///
     /// Supplied by the caller rather than decided here, and that is the crate's rule
     /// about the configuration — this crate is not given it, and a second copy of what a
-    /// setting *is* living next to the painter is exactly how a panel and a file start
-    /// disagreeing. The panel owns the geometry and the chrome's type; the caller owns
+    /// setting *is* living next to the painter is exactly how a page and a file start
+    /// disagreeing. The page owns the geometry and the chrome's type; the caller owns
     /// the words and the values.
     ///
-    /// Ignored unless [`ChromeInput::settings_open`].
+    /// Ignored unless the settings tab is the one on screen: see [`ChromeInput::active`].
     pub settings: &'a [SettingLine<'a>],
-    /// How far the settings panel is scrolled, in logical pixels.
+    /// How far the settings page is scrolled, in logical pixels.
     ///
-    /// The caller owns it for the same reason it owns the rows: a wheel over the panel
-    /// arrives at the window, and the window is not this crate's. The panel clamps it to
+    /// The caller owns it for the same reason it owns the rows: a wheel over the page
+    /// arrives at the window, and the window is not this crate's. The page clamps it to
     /// what actually overflows and reports the clamped value back through
     /// [`Layout::settings_scroll`].
     pub settings_scroll: f32,
     /// The settings row the keyboard is on, if any.
     ///
-    /// An index into [`ChromeInput::settings`], and `None` while the panel is open but
+    /// An index into [`ChromeInput::settings`], and `None` while the page is up but
     /// the keyboard has not been asked for. The two are different states and the
-    /// difference is the point: a panel that took the arrow keys the moment it opened
-    /// would have stolen them from the shell, and the terminal behind it is supposed to
-    /// still be usable.
+    /// difference is the point: a page that took the arrow keys the moment it opened
+    /// would have stolen them before the user had decided what they wanted to change.
     pub settings_focus: Option<usize>,
-    /// Which section of the panel to show, by its heading's name.
+    /// Which section of the page to show, by its heading's name.
     ///
     /// `None` is the first section, so a caller with no opinion asks for nothing. A name that
     /// matches no heading shows the first section as well, and the answer comes back in
-    /// [`Layout::settings_section`] — the panel is the side that knows what the headings are,
+    /// [`Layout::settings_section`] — the page is the side that knows what the headings are,
     /// and a caller holding a name it was given is a caller that cannot check it.
     ///
     /// A name rather than an index, because the headings move: `Problems` is a section that
     /// exists only while the configuration has something wrong with it, so every index after
     /// it shifts the moment the last diagnostic is fixed.
     ///
-    /// Ignored unless [`ChromeInput::settings_open`], and ignored when the list has fewer than
-    /// two named sections: one section is not a choice.
+    /// Ignored unless the settings tab is the one on screen, and ignored when the list has
+    /// fewer than two named sections: one section is not a choice.
     pub settings_section: Option<&'a str>,
     /// What the find bar is showing, or `None` when it is closed.
     ///
@@ -298,17 +304,33 @@ pub enum SettingPart {
     More,
 }
 
+/// Which tab a cell in the strip is.
+///
+/// An enum rather than a number, because a tab is no longer always a numbered shell: the
+/// settings page is a tab that has no number and cannot have one — numbering it would either
+/// break the run's 1..=N or make the settings page `#4` and hole-punch the sequence the moment
+/// a terminal closed. What the strip wants from a tab is an identity, and this is it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TabId {
+    /// A shell, by its number: its place in the run, from one, with no gaps. Closing a tab
+    /// renumbers the ones behind it, and this is the new number.
+    Terminal(u32),
+    /// The settings page. At most one, always the last cell, and it has no number.
+    Settings,
+}
+
 /// One tab, as the strip needs to know it.
 pub struct TabInfo {
-    /// The tab's number: its place in the strip, from one, with no gaps. Closing a tab
-    /// renumbers the ones behind it, and this is the new number.
-    pub index: u32,
+    /// Which tab this is.
+    pub id: TabId,
     /// The tab's own title: what the program set with `OSC 0`/`OSC 2`, or the profile's
     /// name when it set nothing.
     ///
     /// The strip draws it after the number, truncated to whatever the cell has room for.
-    /// An empty title is not an error and is the one case where a tab is a number and
-    /// nothing else, which is what every tab was before names existed.
+    /// An empty title is not an error and is the one case where a terminal tab is a number and
+    /// nothing else, which is what every tab was before names existed. A settings tab has no
+    /// number, so its title is its whole cell and an empty one is an empty cell — the caller
+    /// that opens it is the caller that names it.
     pub title: String,
     /// Whether the pointer is over this tab's cell.
     pub hovered: bool,
@@ -330,14 +352,14 @@ pub struct Layout {
     pub bottom: f32,
     /// The rect the terminal grid occupies, in logical pixels.
     pub grid: Rect,
-    /// How far the settings panel is actually scrolled, after clamping.
+    /// How far the settings page is actually scrolled, after clamping.
     ///
-    /// Reported back because the panel is the only thing that knows how tall its content
+    /// Reported back because the page is the only thing that knows how tall its content
     /// is: a caller that kept its own scroll would let the user scroll past the end of a
     /// list it cannot measure, and the wheel would then do nothing for a while before
     /// the content caught up.
     pub settings_scroll: f32,
-    /// The heading line of the section the panel actually drew, when it drew a rail.
+    /// The heading line of the section the settings page actually drew, when it drew a rail.
     ///
     /// `None` when there is no rail — no headings, or one — in which case the whole list is
     /// the page and there is no section to name. A line index rather than the name, because
@@ -349,8 +371,8 @@ pub struct Layout {
 /// What the user hit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hit {
-    /// A tab, by its number.
-    Tab(u32),
+    /// A tab, by its id.
+    Tab(TabId),
     /// The new-tab mark.
     NewTab,
     /// A tab's close affordance.
@@ -369,16 +391,17 @@ pub enum Hit {
     Drag,
     /// The settings control in the strip, beside the new-tab mark.
     ///
-    /// Not [`Hit::Settings`], which is the panel's own surface: this one is the window's
-    /// control that opens and closes it, and it is the reason the panel has a button at all.
+    /// Not [`Hit::Settings`], which is the page's own surface: this one is the window's
+    /// control that opens and closes the tab, and it is the reason the settings tab has a
+    /// mark of its own in every window, not only while it is open.
     SettingsButton,
-    /// A section of the panel's rail, by the line its heading is on.
+    /// A section of the settings page's rail, by the line its heading is on.
     ///
     /// The heading's line index, the same identity [`Hit::Setting`] uses for a row: a click
     /// on the rail names a heading and a click on a row names a row, and both are resolved
     /// against the list the caller handed over.
     Section(usize),
-    /// The settings panel is open and the point is inside it, but not on a control.
+    /// The settings page is on screen and the point is inside it, but not on a control.
     Settings,
     /// A settings row's control, by the line it is on and the part of it that was hit.
     Setting {
@@ -400,8 +423,8 @@ pub enum Hit {
     MenuItem(usize),
     /// A context menu is open and the point is inside it, but not on a row.
     ///
-    /// The surface takes the click for the reason the panel's and the picker's do: a
-    /// popover with holes in it is one where a click in the padding reaches the shell.
+    /// The surface takes the click for the reason the picker's does: a popover with holes in it
+    /// is one where a click in the padding reaches the shell.
     Menu,
     /// The scrollbar.
     Scrollbar(Scrollbar),
@@ -489,7 +512,7 @@ impl Default for ScrollState {
 /// What the chrome remembered from one frame to the next.
 enum Region {
     Tab {
-        index: u32,
+        id: TabId,
         rect: Rect,
     },
     NewTab(Rect),
@@ -529,7 +552,7 @@ impl Region {
     /// Whether the point is in this region, and what it is if so.
     fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         match self {
-            Self::Tab { index, rect } if rect.contains(x, y) => Some(Hit::Tab(*index)),
+            Self::Tab { id, rect } if rect.contains(x, y) => Some(Hit::Tab(*id)),
             Self::NewTab(rect) if rect.contains(x, y) => Some(Hit::NewTab),
             Self::SettingsButton(rect) if rect.contains(x, y) => Some(Hit::SettingsButton),
             Self::Caption { caption, rect } if rect.contains(x, y) => Some(Hit::Caption(*caption)),
@@ -590,7 +613,7 @@ pub struct Chrome {
     /// What the caller last said the time was. The chrome never reads a clock.
     now: f32,
     /// The active tab as of the last layout, which is how a change is noticed.
-    active: Option<u32>,
+    active: Option<TabId>,
     /// The indicator's travel, while one is in flight.
     travel: Option<strip::Travel>,
     /// Where the indicator was drawn last frame.
@@ -600,18 +623,6 @@ pub struct Chrome {
     /// `Ctrl+Tab` and watching one bar move, and holding it down and watching a bar
     /// snap backwards on every step.
     indicator: Option<Rect>,
-    /// When the settings panel started sliding in, while a slide is in flight.
-    ///
-    /// `None` once it has arrived, which is the state the panel spends almost all of its
-    /// life in: the slide is a fifth of a second and the panel is open for minutes.
-    panel_slide: Option<f32>,
-    /// Whether the panel was open on the frame before this one.
-    ///
-    /// `None` until the chrome has drawn once. A panel that is already open the first time
-    /// the chrome is asked about it did not open — there is nothing to slide it in from,
-    /// and drawing it off the window would be the panel missing for a fifth of a second on
-    /// a window that started with it up.
-    panel_was_open: Option<bool>,
     scroll: ScrollState,
     /// The scrollbar's track and thumb as of the last layout, for the one caller that
     /// has to turn a drag into a position.
@@ -636,6 +647,13 @@ pub struct Chrome {
     /// own surface. Written by [`Chrome::overdraw`], read by [`Chrome::layout`], and the two
     /// are the same fact about one frame.
     menu_split: (usize, usize),
+    /// How lit each control is, and the transition carrying it there.
+    ///
+    /// The chrome's third transition and the only one that is not a change of place. It is
+    /// kept here rather than handed in because it is what the *painter* reads: every control
+    /// asks this for a number instead of comparing a rectangle against the pointer, which is
+    /// what turns ten hard cuts in the chrome into one mechanism.
+    hover: Hover,
 }
 
 /// Everything one frame drew over the terminal, in the order it was drawn.
@@ -648,7 +666,7 @@ pub struct Chrome {
 struct Overdrawn {
     menu: Option<overlays::Menu>,
     popover: Option<overlays::Popover>,
-    panel: Option<overlays::Panel>,
+    page: Option<overlays::Page>,
     scroll: Option<(Rect, Rect)>,
 }
 
@@ -669,8 +687,6 @@ impl Chrome {
             active: None,
             travel: None,
             indicator: None,
-            panel_slide: None,
-            panel_was_open: None,
             scroll: ScrollState::default(),
             scrollbar: None,
             layout: Layout::default(),
@@ -679,6 +695,7 @@ impl Chrome {
             glyphs: Vec::new(),
             // Both totals: with nothing drawn yet and no menu, the tail is empty.
             menu_split: (0, 0),
+            hover: Hover::default(),
         }
     }
 
@@ -717,6 +734,11 @@ impl Chrome {
         let mut glyphs = mem::take(&mut self.glyphs);
         quads.clear();
         glyphs.clear();
+        // The pointer's answer comes out of the regions the *last* frame published, so it is
+        // read here, before they are cleared to be built again. Everything else about the
+        // hover is settled in `plan`, alongside the other two transitions.
+        let target = self.hover_target(input);
+        self.hover.step(self.now, target, input.reduce_motion);
         self.regions.clear();
 
         let layout = {
@@ -751,8 +773,8 @@ impl Chrome {
     ///
     /// Answers from the layout of the most recent [`Chrome::layout`] call. Regions are
     /// tested in the order the later ones would be drawn over the earlier ones, so a
-    /// caption button wins over the panel it floats above and a tab wins over the
-    /// settings panel it is never underneath.
+    /// caption button wins over the settings mark it sits beside and a tab wins over the
+    /// page it is never underneath.
     #[must_use]
     pub fn hit(&self, x: f32, y: f32) -> Hit {
         self.regions
@@ -765,6 +787,21 @@ impl Chrome {
     #[must_use]
     pub const fn last_layout(&self) -> &Layout {
         &self.layout
+    }
+
+    /// Whether a control is still lighting up or fading out.
+    ///
+    /// The one question a window has to ask between frames. A hover is the third thing in
+    /// this crate that moves and the only one that begins on a pointer move rather than on a
+    /// change the caller knows about, so whoever owns the loop has nothing else to go on: it
+    /// is true while a fade is in flight and false once every one of them has landed, which
+    /// is what makes a loop that redraws while it is true come to rest.
+    ///
+    /// False for a machine that has asked for reduced motion, because there the transition is
+    /// over on the frame it starts.
+    #[must_use]
+    pub fn moving(&self) -> bool {
+        self.hover.moving()
     }
 
     /// The scrollbar's track and thumb as of the most recent [`Chrome::layout`] call.
@@ -805,19 +842,23 @@ impl Chrome {
         };
 
         // The indicator's motion is settled before anything is drawn, because the
-        // indicator is what reads it. The panel's is settled here for the same reason: the
-        // frame the panel opens on is the frame its slide starts, and only this call
-        // knows which frame that was.
+        // indicator is what reads it.
         self.retarget(input, &strip_plan);
-        self.retarget_panel(input.settings_open);
         let fade = self.travel.as_ref().map(|travel| {
             (
-                travel.from_index,
+                travel.from_id,
                 strip::progress(self.now - travel.start, crate::geometry::TRAVEL),
             )
         });
 
-        strip::draw(paint, &strip_plan, input, fade);
+        // The hover was settled by the caller, one frame's worth of `set_time` ago, because
+        // the question of what the pointer is over is answered by the regions this call is
+        // about to replace. It is moved out of `self` for the length of the drawing, so that
+        // the planner can keep borrowing itself mutably while the painters hold it — the same
+        // trade the two arrays make, made for the same reason.
+        let hover = mem::take(&mut self.hover);
+
+        strip::draw(paint, &strip_plan, input, fade, &hover);
         if let Some((rect, color)) =
             strip::indicator(&strip_plan, input, self.travel.as_ref(), self.now)
         {
@@ -826,13 +867,15 @@ impl Chrome {
         } else {
             self.indicator = None;
         }
-        if let Some(rect) = strip::hover_preview(&strip_plan, input, self.travel.is_some()) {
-            paint.fill(rect, input.palette.signal_dim);
+        if let Some((rect, lit)) =
+            strip::hover_preview(&strip_plan, input, self.travel.is_some(), &hover)
+        {
+            paint.fill_at(rect, input.palette.signal_dim, lit);
         }
 
-        let over = self.overdraw(input, paint, &strip_plan, left, top, bottom);
-        let settings_scroll = over.panel.as_ref().map_or(0.0, |panel| panel.scroll);
-        let settings_section = over.panel.as_ref().and_then(|panel| panel.shown);
+        let over = self.overdraw(input, paint, &strip_plan, left, top, bottom, &hover);
+        let settings_scroll = over.page.as_ref().map_or(0.0, |page| page.scroll);
+        let settings_section = over.page.as_ref().and_then(|page| page.shown);
 
         self.publish(&strip_plan, &over);
 
@@ -845,6 +888,7 @@ impl Chrome {
             settings_scroll,
             settings_section,
         };
+        self.hover = hover;
         self.layout
     }
 
@@ -852,6 +896,12 @@ impl Chrome {
     ///
     /// The order is the whole content of this function, so it is written down rather than
     /// left to whatever a reader infers from six consecutive calls.
+    // Eight arguments, and they are eight different things rather than a struct that has not
+    // been written: the input the frame was asked for, the painter, the strip's plan, the
+    // three edges the strip and the find bar take off the grid, and the hover. The edges are
+    // the only three that could be grouped, and they are grouped by `Layout` a few lines later
+    // — which needs this function to have run first.
+    #[allow(clippy::too_many_arguments)]
     fn overdraw(
         &mut self,
         input: &ChromeInput<'_>,
@@ -860,11 +910,15 @@ impl Chrome {
         left: f32,
         top: f32,
         bottom: f32,
+        hover: &Hover,
     ) -> Overdrawn {
-        let arrival = self.panel_arrival(input);
-        let panel = input
-            .settings_open
-            .then(|| overlays::panel(paint, input, top, bottom, arrival));
+        // The page is the content area, so it is given the content area's rect — the same
+        // rectangle `plan` hands back as `Layout::grid`. A tab is one thing on screen at a
+        // time, and this is the chrome's half of that: the grid is drawn by the host under
+        // the chrome, and while this is up the host does not draw it at all.
+        let content = Rect::between(left, top, input.size.width, input.size.height - bottom);
+        let page = (input.active == Some(TabId::Settings))
+            .then(|| overlays::page(paint, input, content, hover));
         if bottom > 0.0 {
             overlays::find_bar(paint, input, bottom);
         }
@@ -875,20 +929,20 @@ impl Chrome {
         let popover = input
             .picker
             .as_ref()
-            .map(|picker| overlays::profile_picker(paint, input, picker, left, top, bottom));
-        let scroll = overlays::scrollbar(paint, input, top, bottom, self.scroll);
+            .map(|picker| overlays::profile_picker(paint, input, picker, left, top, bottom, hover));
+        let scroll = overlays::scrollbar(paint, input, top, bottom, self.scroll, hover);
 
-        // The settings control, drawn here rather than with the rest of the strip because the
-        // panel is drawn over the strip: in a window narrow enough that the panel is the
-        // window, a mark drawn with the strip is under the panel — a hit region one can press
-        // and not see. It is the window's control and it belongs with the window's controls,
-        // so it goes over everything the panel put down and under the captions.
-        strip::settings_mark(paint, strip_plan, input);
+        // The settings control, still drawn here rather than with the rest of the strip. It
+        // used to be here because the panel covered the strip, and the page no longer does —
+        // the page begins where the strip ends — so this is now only about staying with the
+        // window's own controls: the mark goes over the page and under the captions, and its
+        // comment in `strip.rs` carries the rest.
+        strip::settings_mark(paint, strip_plan, input, hover);
 
         // Last but the menu, because these are the window's own controls and nothing in zet
         // may cover them: with no tabs there is no row, and they are the only thing left on
         // the window that can be clicked.
-        strip::captions(paint, strip_plan, input);
+        strip::captions(paint, strip_plan, input, hover);
 
         // After the captions, which is the one thing in the crate drawn over them, and the
         // exception is the argument: a menu is not chrome, it is a thing the user has just
@@ -908,13 +962,13 @@ impl Chrome {
         let menu = input
             .menu
             .as_ref()
-            .map(|menu| overlays::context_menu(paint, input, menu));
+            .map(|menu| overlays::context_menu(paint, input, menu, hover));
         self.menu_split = split;
 
         Overdrawn {
             menu,
             popover,
-            panel,
+            page,
             scroll,
         }
     }
@@ -943,8 +997,11 @@ impl Chrome {
             self.regions.push(Region::Menu(menu.rect));
         }
         // Then the window's own controls, under the menu and over everything else: they are
-        // what is left of the window when there are no tabs, and the panel the gear floats
-        // above is drawn below it.
+        // what is left of the window when there are no tabs, and the page the settings mark
+        // floats above is drawn below it. Only the mark, though, and not by much: the page
+        // begins where the strip ends, so the two regions are adjacent rather than stacked,
+        // and the order here is a rule about the window's controls rather than a fight over
+        // two of them.
         for (caption, rect) in &strip_plan.captions {
             self.regions.push(Region::Caption {
                 caption: *caption,
@@ -953,7 +1010,7 @@ impl Chrome {
         }
         for cell in &strip_plan.tabs {
             self.regions.push(Region::Tab {
-                index: cell.index,
+                id: cell.id,
                 rect: cell.rect,
             });
         }
@@ -967,10 +1024,11 @@ impl Chrome {
             self.regions.push(Region::Drag(rect));
         }
         // The scrollbar next, because it is drawn last of the three below the strip: it is the
-        // one thing on the window that is still visible over an open panel, being eight pixels
-        // of the right edge, so it is what a click there has to land on. Then the popover,
-        // which is drawn over the panel and under the scrollbar. Then the panel, its controls
-        // before the surface that holds them for the same reason again one level down.
+        // one thing on the window that is still visible over the settings page, being eight
+        // pixels of the right edge — the page is the content area and the bar is drawn over
+        // it — so it is what a click there has to land on. Then the popover, which is drawn
+        // over the page and under the scrollbar. Then the page, its controls before the
+        // surface that holds them for the same reason again one level down.
         self.scrollbar = over.scroll;
         if let Some((track, thumb)) = over.scroll {
             self.regions.push(Region::Scrollbar { track, thumb });
@@ -984,68 +1042,62 @@ impl Chrome {
             }
             self.regions.push(Region::Picker(popover.rect));
         }
-        if let Some(panel) = &over.panel {
-            // The rail first of the panel's own regions, for the reason the controls come
+        if let Some(page) = &over.page {
+            // The rail first of the page's own regions, for the reason the controls come
             // before the surface that holds them: the thing drawn on top is what a click
-            // lands on. A rail item and a row cannot overlap — the page is laid out beside
+            // lands on. A rail item and a row cannot overlap — the rows are laid out beside
             // the rail, and both are culled to it — so this is the order made explicit rather
             // than an order anything depends on.
-            for (line, rect) in &panel.sections {
+            for (line, rect) in &page.sections {
                 self.regions.push(Region::Section {
                     line: *line,
                     rect: *rect,
                 });
             }
-            for (line, part, rect) in &panel.controls {
+            for (line, part, rect) in &page.controls {
                 self.regions.push(Region::Setting {
                     line: *line,
                     part: *part,
                     rect: *rect,
                 });
             }
-            self.regions.push(Region::Settings(panel.rect));
+            self.regions.push(Region::Settings(page.rect));
         }
     }
 
-    /// Notice the panel opening, and start its slide.
+    /// What the pointer is over, as the one control a hover lights.
     ///
-    /// A slide is a transition and a transition needs two states, so this is the frame the
-    /// panel goes from shut to open and not the first frame it is seen open. That is the
-    /// difference between a panel that slides in and a window that starts with its panel
-    /// off the right edge and drags it in.
+    /// Answered from the *previous* frame's regions, because that is the only answer there is
+    /// before this frame is planned, and the regions move only when the layout does. Two
+    /// things are not simply `hit`:
     ///
-    /// Closing starts nothing. A slide *out* would leave the panel drawn — and therefore
-    /// hit-testable, since the regions come from the same rectangle — for the length of the
-    /// animation after the app had stopped considering it open, and every control in it
-    /// would take a click that the user meant for whatever was behind it.
-    fn retarget_panel(&mut self, open: bool) {
-        let was = self.panel_was_open.replace(open);
-        match (was, open) {
-            (Some(false), true) => self.panel_slide = Some(self.now),
-            // Open on this frame and on the one before it: a slide in flight is left
-            // alone, and one that has arrived is over.
-            (Some(true), true) => {
-                if self
-                    .panel_slide
-                    .is_some_and(|start| self.now - start >= crate::geometry::PANEL_SLIDE)
-                {
-                    self.panel_slide = None;
-                }
-            }
-            // Shut, or on the first frame the chrome has ever drawn. There is no
-            // transition to be in the middle of either way.
-            (None, _) | (_, false) => self.panel_slide = None,
+    /// - The scrollbar lights a ten-pixel band down the right edge and publishes the
+    ///   eight-pixel track it draws, so a point in the outer two pixels is over the bar and
+    ///   not over its region. The band is the behaviour and it is what is asked about here.
+    ///   The key is also normalised: `Hit::Scrollbar` answers with where *down* the track the
+    ///   point is, which would make the three bands three controls and restart the width's
+    ///   transition every time the pointer moved.
+    /// - A tab's own hover arrives from the caller as [`TabInfo::hovered`], which is what the
+    ///   window's own `hit` call already answered. It is used only when nothing else is under
+    ///   the pointer, so the two cannot disagree about a tab behind an open menu.
+    fn hover_target(&self, input: &ChromeInput<'_>) -> Hit {
+        if let Some((track, _)) = self.scrollbar
+            && let Some((x, y)) = input.pointer
+            && x >= input.size.width - SCROLLBAR_HOVER
+            && y >= track.y
+            && y < track.bottom()
+        {
+            return Hit::Scrollbar(Scrollbar::Thumb);
         }
-    }
-
-    /// How far the panel has slid in: zero off the window, one in place.
-    fn panel_arrival(&self, input: &ChromeInput<'_>) -> f32 {
-        if input.reduce_motion {
-            return 1.0;
+        match input.pointer.map_or(Hit::None, |(x, y)| self.hit(x, y)) {
+            Hit::None => input
+                .tabs
+                .iter()
+                .find(|tab| tab.hovered)
+                .map_or(Hit::None, |tab| Hit::Tab(tab.id)),
+            Hit::Scrollbar(_) => Hit::Scrollbar(Scrollbar::Thumb),
+            hit => hit,
         }
-        self.panel_slide.map_or(1.0, |start| {
-            strip::progress(self.now - start, crate::geometry::PANEL_SLIDE)
-        })
     }
 
     /// Notice a change of active tab, and start the indicator moving if it is one.
@@ -1078,8 +1130,8 @@ impl Chrome {
         let arrives = strip_plan
             .tabs
             .iter()
-            .any(|cell| Some(cell.index) == input.active);
-        let leaves = strip_plan.tabs.iter().any(|cell| cell.index == previous);
+            .any(|cell| Some(cell.id) == input.active);
+        let leaves = strip_plan.tabs.iter().any(|cell| cell.id == previous);
         if input.reduce_motion || !arrives || !leaves {
             self.travel = None;
             return;
@@ -1089,7 +1141,7 @@ impl Chrome {
             position: self.position,
             start: self.now,
             from,
-            from_index: previous,
+            from_id: previous,
         });
     }
 }

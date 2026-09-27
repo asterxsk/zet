@@ -90,12 +90,30 @@ fn stroke(scale: f32) -> f32 {
     scale.round().max(1.0)
 }
 
-/// Draw one mark, centred in `button`.
+/// Draw one mark, centred in `button`, at a coverage.
 ///
 /// `button` is the whole clickable rectangle in logical pixels — 46 by 40, Windows'
 /// metric — and the mark is centred inside it, which is why this takes the button rather
 /// than a box.
-pub(crate) fn draw(paint: &mut Painter<'_>, mark: Mark, button: Rect, color: Rgb, scale: f32) {
+///
+/// The coverage is the hover's cross-fade, which is the one caller that wants a mark at
+/// anything but full strength: it draws the resting mark and the hovered one over each other,
+/// each at the share of the transition it has, which is the same pair of draws the tab strip's
+/// numbers have always used. Nothing else about the mark changes, and the strokes stay whole
+/// pixels because the coverage rides in the colour rather than in the geometry. A mark drawn
+/// at nothing is not a mark — see [`Painter::fill_at`] for why that is a rule and not a
+/// saving.
+pub(crate) fn draw(
+    paint: &mut Painter<'_>,
+    mark: Mark,
+    button: Rect,
+    color: Rgb,
+    alpha: f32,
+    scale: f32,
+) {
+    if alpha <= 0.0 {
+        return;
+    }
     // The centre snapped to a pixel boundary, and the box measured out from it in whole
     // pixels. Everything straight below is then a whole number of pixels wide and lands
     // on the grid, which is the entire difference between a caption glyph and a grey
@@ -114,27 +132,27 @@ pub(crate) fn draw(paint: &mut Painter<'_>, mark: Mark, button: Rect, color: Rgb
         Mark::Minimize => {
             // Centred on the middle row, and one row tall at 100% DPI.
             let bar = centre_y - (thickness / 2.0).floor();
-            paint.physical(left, bar, side, thickness, color, 1.0);
+            paint.physical(left, bar, side, thickness, color, alpha);
         }
-        Mark::Maximize => square(paint, left, top, side, thickness, color),
+        Mark::Maximize => square(paint, left, top, side, thickness, color, alpha),
         Mark::Restore => {
             let offset = (RESTORE_OFFSET * scale).round().max(1.0);
             // The back square shows only the two edges the front one does not cover. A
             // full outline behind a full outline puts both strokes on the same pixels in
             // the corner where they overlap, which draws a blot rather than two windows.
-            paint.physical(left + offset, top - offset, side, thickness, color, 1.0);
+            paint.physical(left + offset, top - offset, side, thickness, color, alpha);
             paint.physical(
                 left + offset + side - thickness,
                 top - offset,
                 thickness,
                 side,
                 color,
-                1.0,
+                alpha,
             );
-            square(paint, left, top, side, thickness, color);
+            square(paint, left, top, side, thickness, color, alpha);
         }
-        Mark::Close => cross(paint, left, top, side, thickness, color),
-        Mark::Sliders => sliders(paint, left, centre_y, side, thickness, color, scale),
+        Mark::Close => cross(paint, left, top, side, thickness, color, alpha),
+        Mark::Sliders => sliders(paint, left, centre_y, side, thickness, color, scale, alpha),
     }
 }
 
@@ -148,6 +166,11 @@ pub(crate) fn draw(paint: &mut Painter<'_>, mark: Mark, button: Rect, color: Rgb
 ///
 /// `left` is the mark's left edge in physical pixels and `centre_y` its middle row, so the
 /// bars grow outward from the centre the way the other marks do.
+// Eight arguments, and every one of them is a number [`draw`] has already snapped: where the
+// box is, how big it is, how thick a stroke is, what it is drawn in, and at what coverage. A
+// struct holding them would be a struct with one caller, which is the arity it is avoiding
+// wearing a different hat.
+#[allow(clippy::too_many_arguments)]
 fn sliders(
     paint: &mut Painter<'_>,
     left: f32,
@@ -156,6 +179,7 @@ fn sliders(
     thickness: f32,
     color: Rgb,
     scale: f32,
+    alpha: f32,
 ) {
     let gap = (SLIDER_GAP * scale).round().max(1.0);
     let (tick_width, tick_height) = (
@@ -168,35 +192,51 @@ fn sliders(
     let top = centre_y - gap;
     for (row, at) in SLIDER_TICKS.iter().enumerate() {
         let bar = top + row as f32 * gap;
-        paint.physical(left, bar, side, thickness, color, 1.0);
+        paint.physical(left, bar, side, thickness, color, alpha);
         let tick = left + (side * at).round() - (tick_width / 2.0).floor();
         let above = (tick_height / 2.0).floor();
-        paint.physical(tick, bar - above, tick_width, tick_height, color, 1.0);
+        paint.physical(tick, bar - above, tick_width, tick_height, color, alpha);
     }
 }
 
 /// A hollow square, stroked `thickness`, as four bars.
-fn square(paint: &mut Painter<'_>, left: f32, top: f32, side: f32, thickness: f32, color: Rgb) {
+fn square(
+    paint: &mut Painter<'_>,
+    left: f32,
+    top: f32,
+    side: f32,
+    thickness: f32,
+    color: Rgb,
+    alpha: f32,
+) {
     // The top and bottom bars run the full width so that the corners are covered exactly
     // once; the sides then only have to span what is between them.
     let inner = side - thickness * 2.0;
-    paint.physical(left, top, side, thickness, color, 1.0);
-    paint.physical(left, top + side - thickness, side, thickness, color, 1.0);
+    paint.physical(left, top, side, thickness, color, alpha);
+    paint.physical(left, top + side - thickness, side, thickness, color, alpha);
     if inner > 0.0 {
-        paint.physical(left, top + thickness, thickness, inner, color, 1.0);
+        paint.physical(left, top + thickness, thickness, inner, color, alpha);
         paint.physical(
             left + side - thickness,
             top + thickness,
             thickness,
             inner,
             color,
-            1.0,
+            alpha,
         );
     }
 }
 
 /// Two diagonals across the box, antialiased one pixel at a time.
-fn cross(paint: &mut Painter<'_>, left: f32, top: f32, side: f32, thickness: f32, color: Rgb) {
+fn cross(
+    paint: &mut Painter<'_>,
+    left: f32,
+    top: f32,
+    side: f32,
+    thickness: f32,
+    color: Rgb,
+    alpha: f32,
+) {
     let (right, bottom) = (left + side, top + side);
     let half = thickness / 2.0;
     let reach = half + 1.0;
@@ -214,6 +254,7 @@ fn cross(paint: &mut Painter<'_>, left: f32, top: f32, side: f32, thickness: f32
                 (right, top),
                 half,
             ));
+            let coverage = coverage * alpha;
             if coverage > 0.0 {
                 paint.physical(x as f32, y as f32, 1.0, 1.0, color, coverage);
             }

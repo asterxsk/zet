@@ -151,6 +151,11 @@ mod tests {
             ("signal on surface", p.signal, p.surface, 4.5),
             ("danger on surface-raised", p.danger, p.surface_raised, 4.5),
             ("ok on surface-raised", p.ok, p.surface_raised, 4.5),
+            // The close button under the pointer: it fills `danger` and draws its mark in
+            // `ground`, so the pair has to be readable the other way round from every other
+            // control in the app. `ink` on `danger` measures 2.15:1, which is why the mark
+            // turns over rather than staying white — this floor is what that turn is for.
+            ("ground on danger", p.ground, p.danger, 4.5),
         ];
         for (name, fg, bg, minimum) in floors {
             let ratio = fg.contrast_ratio(bg);

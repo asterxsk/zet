@@ -11,22 +11,30 @@ counts as a breaking change in a terminal, is in
 
 ### Added
 
-- **`zet-ui`, `zet`** — the settings panel is opened by a control of its own in the tab strip,
-  beside the new-tab mark, and its contents are split into sections down a rail at its left edge.
-  - The control is the same square the new-tab mark is, directly after it, and it goes through the
-    same toggle as the `settings` chord rather than a second one — a button that opened the panel
-    and a binding that toggled it would leave a user pressing the button again to be rid of it and
-    being handed a second panel. It is the one thing in the strip drawn over the panel it opens, so
-    in a window narrow enough that the panel is the window it is still visible and still clickable;
-    it is drawn only when the row has room for it, and never at the expense of a tab's.
+- **`zet-ui`, `zet`** — the settings are a tab. They are opened by a control of their own in the tab
+  strip, they take the content area rather than a panel over it, and their contents are split into
+  sections down a rail at their left edge.
+  - The control sits directly after the new-tab mark and goes through the same toggle as the
+    `settings` chord rather than a second one — a button that opened the page and a binding that
+    toggled it would leave a user pressing the button again to be rid of it and being handed a
+    second one. It is a fixed 16 pixels wide rather than a tab's cell: it has no number and no name
+    to make room for, and a cell-wide control put the two marks 35 pixels apart, far enough to lose
+    the pointer between them. It is drawn only when the row has room for it, and it is the first of
+    the pair to go.
   - Its mark is geometry like the caption buttons' — three bars with a tick on each, in the same
     hinted whole-pixel idiom. A gear would have meant a polygon rasteriser in a module whose whole
     subject is a one-pixel stroke landing on exactly one pixel.
-  - The panel is 560 pixels wide, which is a 180-pixel rail and a 380-pixel page: the page is
-    exactly the width the rows were already laid out for, so the rail is what the panel grew by.
+  - The page is the content area: from the bottom of the strip to the window's bottom edge, and from
+    the window's left edge to its right. The grid draws nothing at all while it is up, so there is
+    no sliver of terminal beside, above or under it, and the page's rectangle is the same one the
+    terminal would have had — which is why the find bar takes height off both.
+  - Its tab appears at the end of the run of tabs, titled `settings`, with no number on it: it is a
+    view of the app rather than a program in a shell, and `#3` beside two shells would say
+    otherwise. The tab stays in the strip, with its mark lit, while another tab is in front of it.
+  - The page is a 180-pixel rail and the rows beside it, so a wide window gives the rows the room.
     One section is drawn at a time and without its heading, because the rail is the heading.
-  - The rail is drawn only when there are two or more named sections. A panel with one section, or
-    with rows and no headings at all, is the panel this was before there was a rail.
+  - The rail is drawn only when there are two or more named sections. A page with one section, or
+    with rows and no headings at all, is the page this was before there was a rail.
   - Sections are named rather than numbered, and the window remembers the name. `Problems` is a
     section only while the configuration file has something wrong with it, so every index after it
     moves the moment a setting fixes the last diagnostic, and a window holding an index would find
@@ -35,6 +43,33 @@ counts as a breaking change in a terminal, is in
     the next, which brings that section to the page with it. No key was invented for the rail, and
     none was taken from the shell. Clicking a section name switches the page and puts the keyboard
     back where it was.
+  - The tab is closed by the settings mark, by `Escape`, by the `close-tab` chord, and by a
+    middle-click on its cell. The chord is intercepted while the page is on screen rather than
+    handed to the app: `close-tab` means "close the tab I am looking at", the app's active tab is
+    still the shell it was, and a chord that reached the app would kill a shell the user cannot see
+    and leave the page up.
+  - Unbound keys do not reach the shell while the page is up. The panel let a letter through because
+    the shell was on screen beside it and typing into it was the point; a page has no prompt behind
+    it, so a letter typed there would reach a shell the user cannot see with the answer arriving on
+    a screen that is not being shown. Chords still go through, because a chord is the user asking
+    zet itself for something. The mouse is held back for the same reason: a program in reporting
+    mode would be told about a click at a coordinate on a screen it is not on.
+
+### Changed
+
+- **`zet-ui`** — the new-tab mark and the settings mark no longer light a haze around themselves
+  under the pointer. Each one's own ink goes white instead — `ink-dim` to `ink` for the `+`,
+  `ink-mid` to `ink` for the settings bars — over the same 110ms fade. Three flat rings of `ink` at
+  12%, 6% and 4% were a stack of rectangles drawn beside a mark that is otherwise nothing but
+  rectangles, and at the size of a strip control they read as a fill behind the mark rather than as
+  a light on it. The settings mark is white for as long as its tab exists, pointer or no pointer:
+  the strip's rule that what is open is what is bright applies to the view as well as to the tab.
+- **`zet-ui`** — settings section headings and rail items are drawn in the case they are spelled in,
+  rather than upper-cased by the page. Nothing in the chrome shouts; a heading is a heading because
+  of its size, its tracking and the rule under it.
+- **`zet-ui`** — the settings panel's 180ms slide in from the right edge is gone with the panel.
+  A tab is a change of what is on screen rather than a change of place, and one that animated into
+  existence would delay the actions inside it by the length of the animation.
 
 ### Fixed
 

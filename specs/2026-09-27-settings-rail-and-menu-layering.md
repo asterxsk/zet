@@ -449,3 +449,19 @@ Three deviations from the plan above, all deliberate:
   glyph source, and a hand-rolled one that draws no real ink would pass with the bug present. The
   batch assertions pin the same property exactly. Eyeballing the menu over a tab is the manual step
   left over, and it is the one thing here that no test checks.
+
+## Superseded in part (2026-09-27, later the same day)
+
+The panel is a tab now. `specs/2026-09-27-settings-tab.md` is the change and the reasons are there;
+what this document has to say about the rail, the section names, the keyboard walking across a
+section boundary and the menu's layering all still stands. Three things here do not:
+
+- **The 560-pixel panel anchored to the right edge.** The page is the content area: from the bottom
+  of the strip to the window's bottom edge, and from the window's left edge to its right. The rail
+  is still 180 pixels, and the rows take the rest.
+- **The settings mark being a square the width of the new-tab mark, drawn over the panel it opens.**
+  It is a fixed 16 pixels, and it does not need to be drawn over anything: the page ends where the
+  strip begins.
+- **The mark's hover being `ink-mid` to `ink`, matching the captions.** The same pair of inks, but
+  the reason has changed: it is now the mark's own ink going white under the pointer, and the mark
+  is `ink` for as long as its tab exists rather than only while the pointer is over it.

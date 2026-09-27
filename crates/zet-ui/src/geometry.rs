@@ -176,31 +176,37 @@ pub const RAIL_CELL: f32 = 36.0;
 /// The height a rail cell compresses to before the rail has to overflow.
 pub const RAIL_CELL_FLOOR: f32 = 24.0;
 
-/// The width of the settings panel: the rail, and the page beside it.
-///
-/// The panel was 380 and is now 560, which is 180 of rail and a page of exactly the 380 the
-/// rows were already laid out for. That is where both numbers come from rather than from a
-/// taste in panels: `CONTROL_WIDTH`, `LABEL_GAP`, the note's two columns and the heading's
-/// box were all measured against a 380-wide page, so the page keeps that width and the rail
-/// is what the panel grew by.
-pub const PANEL_WIDTH: f32 = PANEL_RAIL + 380.0;
-
-/// The width of the panel's rail of sections, when the panel has one.
+/// The width of the settings page's rail of sections, when the page has one.
 ///
 /// Its own item is a section name at a size the eye reads rather than scans, so the width
 /// that matters is "the longest name and its padding": `Appearance` and `Terminal`, at 12px
 /// with the heading's tracking, and not much left over. Narrower windows shrink it — see
-/// `overlays::rail_width` — and a panel that is one section draws no rail at all.
+/// `overlays::rail_width` — and a page that is one section draws no rail at all.
 pub const PANEL_RAIL: f32 = 180.0;
 
-/// How long the settings panel takes to slide in.
+/// The width of the settings control in the strip.
 ///
-/// Milliseconds for the same reason [`TRAVEL_MS`] is: DESIGN.md says "180ms", and this is
-/// the one other transition the document asks for.
-pub const PANEL_SLIDE_MS: f32 = 180.0;
+/// Sixteen, which is the mark's own ten plus three pixels either side: the cell is a hit
+/// target and a margin, and not a tab. The control sits directly after the new-tab mark, so
+/// what this buys is the distance between two marks a user aims at one after the other — at
+/// one cell of a tab's width they were 35 pixels apart, which is far enough to lose the
+/// pointer between them. The cost is a 16 by 40 hit target, which is narrow, and it is what
+/// the request asked for: the two marks read as one pair of window controls.
+pub const SETTINGS_CELL: f32 = 16.0;
+
+/// How long a control takes to light up under the pointer, and to let go of it again.
+///
+/// Shorter than the indicator's travel and shorter than the 150ms a person takes to move a
+/// pointer to a target: a hover that is still arriving when the pointer has already got where
+/// it was going is a hover that arrives late to say nothing. Long enough to be motion rather
+/// than a cut, and the reason it exists at all is a pointer crossing a row of controls, where
+/// ten hard cuts in a row is a strip that flickers.
+///
+/// Milliseconds for the same reason [`TRAVEL_MS`] is.
+pub const HOVER_MS: f32 = 110.0;
 
 /// The same span in the seconds [`Chrome::set_time`](crate::Chrome::set_time) counts in.
-pub const PANEL_SLIDE: f32 = PANEL_SLIDE_MS / 1000.0;
+pub const HOVER: f32 = HOVER_MS / 1000.0;
 
 /// The height of a row of a menu.
 pub const MENU_ROW: f32 = 28.0;

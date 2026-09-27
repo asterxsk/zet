@@ -41,7 +41,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -55,7 +55,7 @@ use zet_config::{Config, FontSettings, Palette, TabSettings, WindowSettings};
 use zet_font::{FontError, FontStack};
 use zet_input::{Chord, Key, KeyEvent, KeyKind, Modifiers, MouseEvent, encode_focus, encode_mouse};
 use zet_render::{Frame, Picture, Renderer, RendererError, View};
-use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabInfo};
+use zet_ui::{Caption, Chrome, ChromeInput, Hit, Layout, ScrollState, Size, TabId, TabInfo};
 
 use crate::keys;
 use crate::mouse;
@@ -65,6 +65,14 @@ use crate::waker::Wake;
 
 /// The app's own name, as the titlebar's name slot shows it.
 const APP_NAME: &str = "zet";
+
+/// What the settings tab is called, in the strip and in the window's title.
+///
+/// Lower case, because the strip's own names are whatever a program set and there is no rule
+/// that makes an app's own tab shout when the shells' do not. It is also the whole of the cell:
+/// a settings tab has no number in front of it, so this word is the only thing that says which
+/// tab it is.
+const SETTINGS_TAB: &str = "settings";
 
 /// The window's background, as the frame wants it: a thing to draw or nothing at all.
 ///
@@ -132,6 +140,15 @@ const PRESS_A_KEY: &str = "Press a key";
 /// are, so the host scrolls in pixels too. A little under two rows, so that a notch
 /// always visibly moves the list and never skips past a row the user was aiming at.
 const PANEL_WHEEL: f32 = 48.0;
+
+/// How long a frame lasts while a hover is fading, in the event loop's own deadline.
+///
+/// The chrome's hover is a transition of a hundred and ten milliseconds, and this is the
+/// rate it is sampled at: two frames more than the sixty a second a display is likely to
+/// draw, so that a fade is never the frames missing rather than the curve. The loop only ever
+/// asks for them while `Chrome::moving` says something is in flight, which is a tenth of a
+/// second per control the pointer crosses and nothing at all while it sits still.
+const HOVER_FRAME: Duration = Duration::from_millis(16);
 
 /// The find bar, gathered up for one frame.
 struct FindView<'a> {
@@ -204,6 +221,13 @@ pub struct Host {
     held: ModifiersState,
     /// Where the pointer last was, in logical pixels.
     pointer: Option<(f64, f64)>,
+    /// What the chrome said was under the pointer when it last drew.
+    ///
+    /// A move that lands on the same control is a move that changes nothing anyone can see,
+    /// so it is not a frame. Only a move that changes this is: a terminal that repainted for
+    /// every motion event would be repainting sixty times a second while the pointer crossed
+    /// the grid, which is the idle cost that makes a terminal feel expensive.
+    hover_at: Hit,
     /// The cursor currently shown, so it is only set when it changes.
     cursor: CursorIcon,
     /// The cell a left button went down on, so a click with no drag can be told from one
@@ -291,50 +315,80 @@ pub struct Host {
     /// change it does not resize every one of them again.
     fitted: (u16, u16),
 
-    /// Whether the settings panel is open.
+    /// Where the settings tab is: shut, behind, or on screen.
     ///
-    /// The window's state rather than the app's, because an overlay is something the
-    /// window draws and the app is the thing that draws nothing. The app already says as
-    /// much where it declines to act on the binding.
-    settings_open: bool,
-    /// How far the panel is scrolled, in logical pixels from the top of its list.
+    /// The window's state rather than the app's, because a page of settings is something the
+    /// window draws and the app is the thing that draws nothing. The app already says as much
+    /// where it declines to act on the binding.
+    settings_tab: SettingsTab,
+    /// How far the settings page is scrolled, in logical pixels from the top of its list.
     ///
-    /// The number the caller asks for; the panel answers each frame with the number it
+    /// The number the caller asks for; the page answers each frame with the number it
     /// actually used, clamped to what overflows, and that answer is what is kept. A
     /// window that grows therefore pulls the list back up on its own instead of leaving
     /// it scrolled past the end of a list that now fits.
     settings_scroll: f32,
-    /// Which section of the panel to show, by its heading's name.
+    /// Which section of the page to show, by its heading's name.
     ///
     /// `None` is the first section. A name rather than an index because the headings move
-    /// under the panel: `Problems` is a section only while the configuration has something
+    /// under the page: `Problems` is a section only while the configuration has something
     /// wrong with it, so every index after it shifts the moment a setting fixes the last
     /// diagnostic, and a window holding an index would find itself on a different section
     /// without anything having been asked for.
     ///
-    /// Kept in step with what the panel drew, each frame, the way `settings_scroll` is: the
-    /// panel resolves the name against the headings it was handed, and this is told which one
+    /// Kept in step with what the page drew, each frame, the way `settings_scroll` is: the
+    /// page resolves the name against the headings it was handed, and this is told which one
     /// that turned out to be.
     settings_section: Option<String>,
-    /// The action waiting for the user to press a key, if the panel asked for one.
+    /// The action waiting for the user to press a key, if the page asked for one.
     capturing: Option<Action>,
     /// The settings row the keyboard is on: an index into the rows the app answers with.
     ///
-    /// `None` while the panel is open but the keyboard has not been asked for, which is
+    /// `None` while the page is up but the keyboard has not been asked for, which is
     /// a different state from "no row is focused" in the same way that a window with no
     /// focus is different from a window whose focus is nowhere in particular. The arrow
-    /// keys belong to the shell until this is set.
+    /// keys belong to the page until this is set.
     settings_focus: Option<usize>,
 
-    /// Whether the keyboard has been walked off the end of the panel's rows.
+    /// Whether the keyboard has been walked off the end of the page's rows.
     ///
     /// `settings_focus` alone cannot say which of the two `None`s it is, and the two
-    /// want opposite things from the next `Tab`: a panel that has just opened takes it
-    /// as a request to enter at the top row, and a panel the user has already tabbed
-    /// out of has to let it reach the shell or the panel is a place you can only leave
+    /// want opposite things from the next `Tab`: a page that has just opened takes it
+    /// as a request to enter at the top row, and a page the user has already tabbed
+    /// out of has to let it reach the shell or the page is a place you can only leave
     /// by remembering the chord that opened it. Cleared whenever focus is taken again,
     /// by the chord or by a click.
     settings_left: bool,
+}
+
+/// Where the settings tab is.
+///
+/// Three states and not two, because "the tab exists" and "the tab is what you are looking at"
+/// are different facts and a pair of bools would let one of them lie: a window with the tab open
+/// and a terminal on screen is a window where the mark has to stay lit, a click on the tab has
+/// to bring the page back, and the close chord has to close the tab rather than the shell the
+/// user is not looking at.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum SettingsTab {
+    /// No settings tab.
+    #[default]
+    Shut,
+    /// The tab is in the strip and a terminal is the tab on screen.
+    Behind,
+    /// The tab is in the strip and is the tab on screen.
+    Shown,
+}
+
+impl SettingsTab {
+    /// Whether the settings page is the thing on screen.
+    const fn shows(self) -> bool {
+        matches!(self, Self::Shown)
+    }
+
+    /// Whether the tab exists at all, on screen or not.
+    const fn open(self) -> bool {
+        !matches!(self, Self::Shut)
+    }
 }
 
 impl Host {
@@ -376,6 +430,7 @@ impl Host {
             frame: Frame::new(),
             held: ModifiersState::empty(),
             pointer: None,
+            hover_at: Hit::None,
             cursor: CursorIcon::Default,
             pressed_at: None,
             mouse_held: None,
@@ -398,7 +453,7 @@ impl Host {
             // What `resumed` opens the first tab at, before any frame has been laid out
             // and therefore before anything knows how big the window really is.
             fitted: EMPTY_GRID,
-            settings_open: false,
+            settings_tab: SettingsTab::Shut,
             settings_scroll: 0.0,
             settings_section: None,
             capturing: None,
@@ -708,10 +763,27 @@ impl Host {
         let (width, height) = self.logical_size();
         let now = Instant::now();
         let tabs = self.tabs();
-        let scroll = self.scroll_state();
+        // No bar while the settings page is up: the page is the content area, so a scrollbar
+        // down its right edge would be a picture of a scrollback that is not on screen and
+        // cannot be scrolled. The terminal's own position is untouched — `scroll_state` is not
+        // asked, and `self.app` still knows where the viewport is — so coming back to the shell
+        // finds it where it was left.
+        let scroll = if self.settings_tab.shows() {
+            ScrollState::default()
+        } else {
+            self.scroll_state()
+        };
         let blink_on = self.app.blink_on(now);
         let selection = self.app.selection();
-        let active = self.app.active_number();
+        // The tab on screen, which is the settings tab when the page is up and the app's own
+        // active shell otherwise. The app's active terminal is not cleared while the page is
+        // shown — a shell that is not the tab you are looking at is still a shell that is
+        // running — so this is what says which of the two the strip is highlighting.
+        let active = if self.settings_tab.shows() {
+            Some(TabId::Settings)
+        } else {
+            self.app.active_number().map(TabId::Terminal)
+        };
         let theme = self.app.theme();
         let cursor_settings = self.app.config().cursor.clone();
         let elapsed = now.duration_since(self.origin).as_secs_f32();
@@ -738,12 +810,12 @@ impl Host {
         // The rows and the strings they borrow, both alive until the frame is done with
         // them. `ChromeInput` is a view rather than an owner, so something has to outlive
         // it, and this pair is that something.
-        let lines = self.settings_open.then(|| self.app.settings());
-        let panel = lines
+        let lines = self.settings_tab.open().then(|| self.app.settings());
+        let rows = lines
             .as_ref()
             .map_or_else(Vec::new, |lines| panel_lines(lines, self.capturing));
         // Focus is an index into a list the app rebuilds from the file every frame, so a
-        // change made from the panel can move the row out from under it: choosing a
+        // change made from the page can move the row out from under it: choosing a
         // block cursor drops the thickness row, and a highlight on the line below it
         // would silently be a highlight on a different setting. Re-clamped here rather
         // than remembered, because this is the only place that knows what the rows are.
@@ -766,8 +838,7 @@ impl Host {
             palette: &self.palette,
             tabs: &tabs,
             active,
-            settings_open: self.settings_open,
-            settings: &panel,
+            settings: &rows,
             settings_scroll: self.settings_scroll,
             settings_focus: focused,
             settings_section: self.settings_section.as_deref(),
@@ -798,7 +869,13 @@ impl Host {
         // The grid first, so the chrome lands on top of it. It is positioned with the
         // previous frame's layout — see the module documentation — and the fresh layout
         // is compared against it below.
-        if let Some(session) = self.app.active() {
+        //
+        // Not at all while the settings page is up, and that is what makes it a page rather
+        // than an overlay: a tab is one thing on screen at a time, and a terminal drawn under
+        // the page is a frame of work nobody sees. The session keeps running — nothing here
+        // stops it reading its pty — and the next frame after the page is closed draws it
+        // again where the layout says, which has not moved.
+        if let Some(session) = self.app.active().filter(|_| !self.settings_tab.shows()) {
             let view = View {
                 origin: (placed.x * scale, placed.y * scale),
                 focused: self.focused,
@@ -833,12 +910,18 @@ impl Host {
         // one more frame puts it right — and because the comparison is against the
         // fresh layout, the second frame agrees with itself and the loop stops there.
         let moved = fresh.grid != placed;
-        // The panel answers with the scroll it actually used rather than the one it was
+        // The page answers with the scroll it actually used rather than the one it was
         // asked for, and that answer is kept: a window that grows then pulls a scrolled
         // list back up on its own, instead of leaving it parked past the end of a list
         // that now fits.
-        self.settings_scroll = fresh.settings_scroll;
-        // The section the panel actually drew, which is the answer to the name this window
+        //
+        // Only while it is on screen. A page that is behind a terminal is not drawn, so it
+        // answers nothing, and an answer of "the scroll I used" from a page that drew nothing
+        // would snap a scrolled list back to the top the moment the user switched away.
+        if self.settings_tab.shows() {
+            self.settings_scroll = fresh.settings_scroll;
+        }
+        // The section the page actually drew, which is the answer to the name this window
         // asked for: a name that is no heading in the current list shows the first section,
         // and a window that kept asking for it would ask again on every frame. Keeping the
         // answer is what makes the choice survive the list changing under it — a setting that
@@ -877,12 +960,20 @@ impl Host {
     ///
     /// A tab with no name — a program that never set one, which is most of them — gives
     /// the app's name alone. `zet` is a truer answer than `— zet`.
+    ///
+    /// The settings page names itself, and takes the place of the shell's name while it is the
+    /// tab on screen: a window that is showing settings and calls itself after a shell is a
+    /// window that lies about what it is showing. A page that is open behind a terminal does not
+    /// reach this, because the tab the user is looking at is the terminal.
     fn os_window_title(&self) -> String {
-        let name = self
-            .app
-            .active()
-            .map(zet_session::Session::title)
-            .unwrap_or_default();
+        let name = if self.settings_tab.shows() {
+            SETTINGS_TAB.to_owned()
+        } else {
+            self.app
+                .active()
+                .map(zet_session::Session::title)
+                .unwrap_or_default()
+        };
         if name.is_empty() {
             APP_NAME.to_owned()
         } else {
@@ -891,27 +982,40 @@ impl Host {
     }
 
     /// The tabs, as the strip needs them.
+    ///
+    /// The settings tab is appended last, and is present whenever it is open — on screen or
+    /// behind a terminal. It is a tab that exists, so it is in the strip whether or not it is
+    /// the one being looked at, and the close gesture that works on any other cell works on it.
     fn tabs(&self) -> Vec<TabInfo> {
         let hovered = self
             .pointer
             .and_then(|(x, y)| match self.chrome.hit(x as f32, y as f32) {
-                Hit::Tab(number) => Some(number),
+                Hit::Tab(id) => Some(id),
                 _ => None,
             });
-        self.app
+        let mut tabs: Vec<TabInfo> = self
+            .app
             .tab_numbers()
             .into_iter()
             .map(|number| TabInfo {
-                index: number,
+                id: TabId::Terminal(number),
                 title: self
                     .app
                     .sessions()
                     .get(number)
                     .map(zet_session::Session::title)
                     .unwrap_or_default(),
-                hovered: hovered == Some(number),
+                hovered: hovered == Some(TabId::Terminal(number)),
             })
-            .collect()
+            .collect();
+        if self.settings_tab.open() {
+            tabs.push(TabInfo {
+                id: TabId::Settings,
+                title: SETTINGS_TAB.to_owned(),
+                hovered: hovered == Some(TabId::Settings),
+            });
+        }
+        tabs
     }
 
     /// Where the scrollback is, for the scrollbar.
@@ -1052,92 +1156,120 @@ impl Host {
             return;
         }
 
-        // The two overlays belong to the window, which is where they are drawn, so the
-        // binding is read here rather than left to the app. Nothing else is intercepted:
-        // a key with no binding is a key for the shell, and that is the whole of the
-        // keymap's design.
-        // Through `action_for` rather than `bound`, because a chord is not an event:
-        // asking the keymap directly would toggle the panel open on the press and shut
-        // again on the release, which is one keystroke the user cannot see the effect
-        // of.
-        if self.app.action_for(&translated) == Some(Action::Settings) {
-            self.toggle_settings();
+        // The overlays and the settings tab belong to the window, which is where they are drawn,
+        // so their keys are read here rather than left to the app. Everything about that is in
+        // `page_key`; what this line is for is that a key it takes goes no further.
+        if self.page_key(&translated) {
             return;
         }
 
-        // An open menu's one key. Before the picker, because a menu is the thing the user
-        // opened most recently and the thing drawn over everything else.
-        if self.menu_key(&translated) {
-            self.redraw();
-            return;
-        }
-
-        // The profile picker's four keys, while it is asking. Before the find bar,
-        // because a question about a new tab is the thing on top and the thing the user
-        // has just opened, and a `Down` that scrolled a find result instead of moving the
-        // highlight would be the window answering the wrong question.
-        if self.app.picker_key(&translated) {
-            self.redraw();
-            return;
-        }
-
-        // The find bar's keys, and it has more of them than the panel does: it is a text
-        // field, so what was typed is its own rather than the shell's. That is the one
-        // place in this window where a letter does not reach the terminal, and it is the
-        // whole point of a find bar — a query you cannot type is not a query.
-        //
-        // Before the panel, because a letter belongs to whichever of the two is asking
-        // for text, and only one of them ever is.
-        if self.app.find_key(&translated) {
-            self.redraw();
-            return;
-        }
-
-        // The panel's own keys, which it only has while the panel is open and only for
-        // the ones it names. A letter is still a letter for the shell with the panel up,
-        // which is what "it does not steal focus from the prompt" has to mean.
-        if self.settings_open && self.panel_key(&translated) {
-            self.redraw();
-            return;
-        }
-
-        // DESIGN.md: the panel never traps focus, and a way out that does not depend on
-        // remembering the chord you opened it with is the whole of that promise. Bare
-        // `Escape` only — a modified one is somebody else's key, and the shell may well
-        // be waiting for it.
-        //
-        // And a press only. The key going up is not a second Escape: without this the
-        // documented two-stage Escape is defeated from the first press, because the
-        // release closes a panel the press had already left open.
-        if self.settings_open
-            && translated.kind != KeyKind::Release
-            && translated.key == Key::Escape
-            && translated.mods.is_empty()
-        {
-            self.settings_open = false;
-            self.settings_focus = None;
-            self.capturing = None;
-            self.redraw();
-            return;
-        }
-
-        // Whether this key ran an action or went to the shell. An action has nothing
-        // coming behind it: typing is answered by the program's echo, which arrives on
-        // the pump and asks for a frame of its own, but opening the find bar, resizing
-        // the font, or scrolling the view changes what is on screen and then stops
-        // talking. Without this the bar would appear only once something else happened
-        // to print.
-        //
-        // The question is asked of the app rather than of the keymap, so that the
-        // answer is the same one the app acts on: a release matches a chord and runs
-        // nothing, and a frame requested for it would be a redraw of a screen nothing
-        // changed.
+        // Which shell is active, before the key runs, so that a chord which switches tabs can be
+        // noticed afterwards. The whole of the next/previous/activate-tab family moves the app
+        // to a shell, and a page that stayed on screen while the app believed a terminal was in
+        // front would be a page with a strip that highlighted nothing in it.
         let ran_an_action = self.app.action_for(&translated).is_some();
+        let was_active = self.app.active_number();
         let commands = self.app.key(&translated);
+        if self.settings_tab.shows() && self.app.active_number() != was_active {
+            self.settings_tab = SettingsTab::Behind;
+        }
         if ran_an_action && let Some(window) = self.window() {
             window.request_redraw();
         }
         self.carry_out(loop_, commands);
+    }
+
+    /// The settings tab's claim on a translated key, and whether it took it.
+    ///
+    /// Split out of [`Self::key`] so that the rules can be asserted without a window: this is
+    /// the whole of what the page does with a key, and every one of the branches is a decision
+    /// about which of the two things on the other side of this call — the app's keymap and the
+    /// shell behind the shell behind the page — is entitled to hear it. Taking it means it
+    /// reached neither.
+    ///
+    /// The order is the order the user's things are stacked in, and it is load-bearing:
+    ///
+    /// - the settings chord, which is what opened the tab and is what puts it away;
+    /// - the close chord, which the user aimed at what is on screen — a page is not a shell, so
+    ///   it closes the page and not the shell behind it, which is alive and unmentioned;
+    /// - the pane's own keys, each of which is a thing the user is looking at;
+    /// - `Escape`, the way out that does not depend on remembering the chord;
+    /// - and finally the swallow: an unbound key does not reach a shell that is not on screen.
+    ///   A chord does, because a chord is the user asking zet itself for something.
+    fn page_key(&mut self, translated: &KeyEvent) -> bool {
+        // Through `action_for` rather than `bound`, because a chord is not an event: asking the
+        // keymap directly would toggle the page open on the press and shut again on the release,
+        // which is one keystroke the user cannot see the effect of.
+        if self.app.action_for(translated) == Some(Action::Settings) {
+            self.toggle_settings();
+            return true;
+        }
+
+        // Only on screen. A page behind a terminal is not the tab being looked at, so the chord
+        // there means what it always meant, and closes the shell in front of the user.
+        if self.settings_tab.shows() && self.app.action_for(translated) == Some(Action::CloseTab) {
+            self.close_settings();
+            self.redraw();
+            return true;
+        }
+
+        // An open menu's one key. Before the picker, because a menu is the thing the user opened
+        // most recently and the thing drawn over everything else.
+        if self.menu_key(translated) {
+            self.redraw();
+            return true;
+        }
+
+        // The profile picker's four keys, while it is asking. Before the find bar, because a
+        // question about a new tab is the thing on top and the thing the user has just opened,
+        // and a `Down` that scrolled a find result instead of moving the highlight would be the
+        // window answering the wrong question.
+        if self.app.picker_key(translated) {
+            self.redraw();
+            return true;
+        }
+
+        // The find bar's keys, and it has more of them than the page does: it is a text field,
+        // so what was typed is its own rather than the shell's. That is the one place in this
+        // window where a letter does not reach the terminal, and it is the whole point of a find
+        // bar — a query you cannot type is not a query. Before the page, because a letter belongs
+        // to whichever of the two is asking for text, and only one of them ever is.
+        if self.app.find_key(translated) {
+            self.redraw();
+            return true;
+        }
+
+        // The page's own keys, which it only has while it is the tab on screen and only for the
+        // ones it names.
+        if self.settings_tab.shows() && self.panel_key(translated) {
+            self.redraw();
+            return true;
+        }
+
+        // DESIGN.md: the settings page never traps focus, and a way out that does not depend on
+        // remembering the chord you opened it with is the whole of that promise. Bare `Escape`
+        // only — a modified one is somebody else's key, and the shell may well be waiting for it.
+        //
+        // A press only. The key going up is not a second Escape: without this the documented
+        // two-stage Escape is defeated from the first press, because the release closes a page
+        // the press had already left open.
+        if self.settings_tab.shows()
+            && translated.kind != KeyKind::Release
+            && translated.key == Key::Escape
+            && translated.mods.is_empty()
+        {
+            self.close_settings();
+            self.redraw();
+            return true;
+        }
+
+        // Everything else, and the one place this window departs from the old panel's rule. The
+        // panel let an unbound key through to the shell because the shell was on screen beside
+        // it, and "it does not steal focus from the prompt" meant exactly that. A page has no
+        // prompt behind it: the terminal is a different tab, and a letter typed at a settings
+        // page that reached it would be a letter typed into a shell the user cannot see, with
+        // the answer arriving on a screen that is not being shown.
+        self.settings_tab.shows() && !self.app.owns(translated)
     }
 
     /// A key aimed at an open context menu, and whether the menu took it.
@@ -1160,20 +1292,19 @@ impl Host {
         true
     }
 
-    /// A key aimed at the settings panel, and whether the panel took it.
+    /// A key aimed at the settings page, and whether the page took it.
     ///
-    /// The panel's focus is entered and left with `Tab`, exactly as focus is traversed
-    /// everywhere else, and `Tab` past the last row hands the keyboard back to the shell
-    /// rather than wrapping. That is what "it never traps focus" has to mean: a panel
-    /// that kept `Tab` until you remembered the chord you opened it with would be a
-    /// panel you can get stuck in. Once it has been handed back, nothing the panel names
-    /// is swallowed at all — the next `Tab` is the shell's, not a second chance to walk
-    /// the rows.
+    /// The page's focus is entered and left with `Tab`, exactly as focus is traversed
+    /// everywhere else, and `Tab` past the last row walks the focus off the end. That is what
+    /// "it never traps focus" has to mean: a page that kept `Tab` until you remembered the chord
+    /// you opened it with would be a page you can get stuck in. Once the focus has been walked
+    /// off, nothing the page names is swallowed at all — the next `Tab` is not a second chance to
+    /// walk the rows, and with a page on screen it is swallowed rather than typed, as every other
+    /// unbound key is.
     ///
-    /// Only bare `Tab`, the four arrows, `Enter`, `Space` and `Escape` are named here.
-    /// Everything else — every letter, and every chord with a modifier on it — falls
-    /// through to the shell, because the terminal behind the panel is still live and
-    /// typing into it is the reason the panel does not cover it.
+    /// Only bare `Tab`, the four arrows, `Enter`, `Space` and `Escape` are named here. Everything
+    /// else — every letter, and every chord with a modifier on it — is not the page's, and where
+    /// it goes after that is the caller's business rather than this function's.
     fn panel_key(&mut self, event: &KeyEvent) -> bool {
         // A repeat moves the highlight the way holding an arrow key should. A release is
         // not an event the panel has an opinion about.
@@ -1293,25 +1424,54 @@ impl Host {
         self.settings_scroll = 0.0;
     }
 
-    /// Open the settings panel, or close it.
+    /// Open the settings tab, bring it forward, or close it.
     ///
-    /// The window's state rather than the app's, for the reason the field is: an overlay is
-    /// something the window draws and the app draws nothing. One function rather than two
-    /// call sites, because the chord and the strip's own control are two ways to ask for one
-    /// thing — a button that opened the panel and a chord that toggled it would leave a user
-    /// pressing the button again to get rid of it and being handed a second panel.
+    /// The window's state rather than the app's, for the reason the field is: a page of settings
+    /// is something the window draws and the app draws nothing. One function rather than three
+    /// call sites, because the chord and the strip's own mark are two ways to ask for one thing —
+    /// a mark that opened the page and a chord that toggled it would leave a user pressing the
+    /// mark again to get rid of it and being handed a second page.
     ///
-    /// Everything the panel was holding is let go: the scroll, the row the keyboard was on,
-    /// whether it had walked off the end, and a chord waiting to be captured. A panel that
-    /// opened with the last session's highlight still on a row would take the arrow keys the
-    /// moment it appeared.
+    /// Three states in, three states out:
+    ///
+    /// - shut opens it, on screen, at the top of its list;
+    /// - behind a terminal brings it forward, and keeps the scroll and the section it was left on,
+    ///   because nothing has changed about the page — the user is coming back to where they were;
+    /// - on screen closes it, and the terminal that is then the tab on screen is the app's own
+    ///   active one, which has been left alone the whole time.
     fn toggle_settings(&mut self) {
-        self.settings_open = !self.settings_open;
+        match self.settings_tab {
+            SettingsTab::Shut => {
+                self.settings_tab = SettingsTab::Shown;
+                // A page that opened with the last session's highlight still on a row would take
+                // the arrow keys the moment it appeared, and one that opened scrolled to where a
+                // list it is no longer showing was left would open in the middle.
+                self.settings_scroll = 0.0;
+                self.capturing = None;
+                self.settings_focus = None;
+                self.settings_left = false;
+            }
+            SettingsTab::Behind => self.settings_tab = SettingsTab::Shown,
+            SettingsTab::Shown => self.close_settings(),
+        }
+        self.redraw();
+    }
+
+    /// Close the settings tab, and let go of everything it was holding.
+    ///
+    /// Nothing is left of the tab: it is shut, so the mark goes back to `ink-mid` and the tab is
+    /// gone from the strip. The state it was left in — which section, how far down — goes with it,
+    /// because a tab that is gone has no scroll to come back to.
+    ///
+    /// The shell behind it is not touched. It was never closed and it was never resized; it is a
+    /// tab that stopped being the one on screen, and closing the page makes it the one on screen
+    /// again.
+    fn close_settings(&mut self) {
+        self.settings_tab = SettingsTab::Shut;
         self.settings_scroll = 0.0;
-        self.capturing = None;
         self.settings_focus = None;
         self.settings_left = false;
-        self.redraw();
+        self.capturing = None;
     }
 
     /// Write the configuration back, and say so when it could not be.
@@ -1381,6 +1541,14 @@ impl Host {
     fn moved(&mut self, x: f64, y: f64) {
         let (x, y) = mouse::logical(x, y, self.scale());
         self.pointer = Some((x, y));
+        // The chrome's hover is the one thing a plain move can change, and it is a transition
+        // rather than a state, so a move onto a control owes a frame and a move within one
+        // does not. Asked of the chrome rather than worked out here, because what is under the
+        // pointer is the chrome's own answer and a second copy of it here is a second copy
+        // that can be wrong.
+        let at = self.chrome.hit(x as f32, y as f32);
+        let hovered_moved = at != self.hover_at;
+        self.hover_at = at;
         // Sent before any of the drags below, and before the early return the scrollbar
         // drag takes: the pointer is over the grid or it is not, and that question has
         // nothing to do with what this window happens to be doing with the drag.
@@ -1388,6 +1556,9 @@ impl Host {
         let Some(window) = self.window.clone() else {
             return;
         };
+        if hovered_moved {
+            window.request_redraw();
+        }
 
         // A drag on the thumb is the pointer's, and nothing else's: a user holding the
         // scrollbar is not also sweeping a selection across the grid behind it.
@@ -1514,7 +1685,12 @@ impl Host {
                         window.request_redraw();
                         return;
                     }
-                    if let Hit::Tab(number) = self.chrome.hit(x as f32, y as f32) {
+                    // The tab strip's menu, on a shell and on nothing else. The settings tab
+                    // has no menu to open: every item a tab's menu offers is about a shell — its
+                    // splits, its name, closing it — and a page that has one name and three ways
+                    // to close it already has a menu with nothing in it. A right click there is
+                    // the click that dismisses an open menu and is otherwise nothing at all.
+                    if let Hit::Tab(TabId::Terminal(number)) = self.chrome.hit(x as f32, y as f32) {
                         self.app.open_tab_menu(number, (x as f32, y as f32));
                         window.request_redraw();
                         return;
@@ -1525,7 +1701,15 @@ impl Host {
                     // affordance on a tab — but a middle click on one is what every
                     // other terminal on this platform does, and a user who tries it
                     // should not be told no.
-                    if let Hit::Tab(number) = self.chrome.hit(x as f32, y as f32) {
+                    if let Hit::Tab(id) = self.chrome.hit(x as f32, y as f32) {
+                        // The settings tab answers it the same way a shell does, and closes
+                        // itself rather than the window: it is the one tab here that is not the
+                        // last shell, so there is nothing behind it to end.
+                        let TabId::Terminal(number) = id else {
+                            self.close_settings();
+                            window.request_redraw();
+                            return;
+                        };
                         // Closing the last tab is closing the window, which is what the
                         // bound `close-tab` action does with the same answer. Dropping it
                         // left a window with no terminal in it: the shell was gone, the
@@ -1563,6 +1747,28 @@ impl Host {
         self.forward_mouse(state, button);
     }
 
+    /// A press on a cell of the strip, and whether the cell took it.
+    ///
+    /// The two kinds of cell do different things to the page rather than the same thing to
+    /// different tabs. A press on a terminal brings that shell forward and leaves the page where
+    /// it is: still in the strip, still open, with its mark still lit — simply not the one being
+    /// looked at. A press on the settings cell is the page asking to be looked at, which is the
+    /// mark's own function and the chord's.
+    fn tab_press(&mut self, id: TabId) -> bool {
+        match id {
+            TabId::Terminal(number) => {
+                self.settings_tab = if self.settings_tab.open() {
+                    SettingsTab::Behind
+                } else {
+                    SettingsTab::Shut
+                };
+                self.app.activate(number);
+            }
+            TabId::Settings => self.settings_tab = SettingsTab::Shown,
+        }
+        true
+    }
+
     /// Hand a press to the chrome, and report whether it was the chrome's.
     ///
     /// `titlebar` is the last press on the strip's drag region, taken off the host before
@@ -1580,13 +1786,16 @@ impl Host {
             return false;
         };
         let handled = match self.chrome.hit(x as f32, y as f32) {
-            Hit::Tab(number) => {
-                self.app.activate(number);
-                true
-            }
+            Hit::Tab(id) => self.tab_press(id),
             Hit::NewTab => {
                 let (cols, rows) = self.grid_size();
                 let commands = self.app.new_tab(cols.max(1), rows.max(1));
+                // A new tab is a tab to look at, so it takes the screen from the page and the
+                // page goes behind — still open, still in the strip, with its mark still lit.
+                // The alternative is a mark that opens a tab you cannot see.
+                if self.settings_tab.shows() {
+                    self.settings_tab = SettingsTab::Behind;
+                }
                 self.carry_out(loop_, commands);
                 true
             }
@@ -1694,10 +1903,9 @@ impl Host {
                 }
                 true
             }
-            // The panel's own surface, between and around its controls. Swallowed
-            // rather than passed on: the terminal behind it stays visible, which
-            // DESIGN.md gives as the reason the panel exists at all, but a click on a
-            // surface is a click on the surface and not on what shows through it.
+            // The page's own surface, between and around its controls. Swallowed rather than
+            // passed on: the page is what is on screen, and a click on a surface is a click on
+            // the surface rather than on whatever the last frame drew behind it.
             //
             // A menu row and a menu's own surface are swallowed for the same reason and are
             // not reachable from here anyway: the press that lands on a menu is answered
@@ -1722,9 +1930,34 @@ impl Host {
     }
 
     /// The cell a point is over, if any.
+    ///
+    /// Nothing at all while the settings page is up, and this is the one gate the mouse needs.
+    /// The page occupies the grid's rectangle, so every point that would resolve to a cell — a
+    /// press that starts a selection, a ctrl-click that follows a link, a hover report, a wheel
+    /// — is over the page instead, and the answer "that is a cell of the terminal" would be a
+    /// point the user is not pointing at. The shell keeps its own state while it is off screen:
+    /// the viewport is where it was, the selection is what it was, and reporting resumes the
+    /// frame the terminal is the tab on screen again.
     fn grid_cell(&self, x: f64, y: f64) -> Option<zet_vt::Pos> {
+        if self.settings_tab.shows() {
+            return None;
+        }
         let renderer = self.renderer.as_ref()?;
         mouse::cell(x, y, self.placed.grid, renderer.metrics(), self.scale())
+    }
+
+    /// Whether a mouse event is the shell's to hear.
+    ///
+    /// A program in reporting mode asks for the mouse by its cell coordinates, and the page is not
+    /// the shell: a click at a coordinate on the settings page is a click at a coordinate on a
+    /// screen the program is not on, and the report would be a lie the program then acts on. So
+    /// nothing is sent while the page is what the user is looking at.
+    ///
+    /// `Behind` is the other half of the rule and the reason this is asked of the state rather
+    /// than of a flag: a page behind a terminal is not on screen at all, the shell in front of it
+    /// is, and it gets its reports exactly as it did before the page was ever opened.
+    const fn mouse_reaches_the_shell(&self) -> bool {
+        !self.settings_tab.shows()
     }
 
     /// Send a button event to the program, if it asked for mouse reporting.
@@ -1767,10 +2000,13 @@ impl Host {
     /// One mouse report, or nothing.
     ///
     /// A point outside the grid is not a report at all: the chrome's own surfaces —
-    /// the tab strip, the scrollbar, the settings panel — are drawn over the grid and
+    /// the tab strip, the scrollbar, the settings page — are drawn over the grid and
     /// are not the terminal's to report on, and a program told about a move over the
     /// tab strip would be told the pointer was inside the text it is drawing.
     fn send_mouse(&self, button: zet_input::MouseButton, action: zet_input::MouseAction) {
+        if !self.mouse_reaches_the_shell() {
+            return;
+        }
         let Some(session) = self.app.active() else {
             return;
         };
@@ -1816,11 +2052,10 @@ impl Host {
             return false;
         }
 
-        // The panel is a list that can be longer than the window, and a list with no
-        // wheel is a list whose last rows are unreachable on a laptop with no End key.
-        // The pointer decides, because both surfaces are on screen at once and the one
-        // under the cursor is the one the user is looking at.
-        if self.settings_open && self.pointer.is_some_and(|(x, y)| self.over_panel(x, y)) {
+        // The page is a list that can be longer than the window, and a list with no wheel is a
+        // list whose last rows are unreachable on a laptop with no End key. The pointer decides
+        // where it lands, so that the same gesture over the strip still belongs to the strip.
+        if self.settings_tab.shows() && self.pointer.is_some_and(|(x, y)| self.over_page(x, y)) {
             self.settings_scroll = (self.settings_scroll - lines as f32 * PANEL_WHEEL).max(0.0);
             return true;
         }
@@ -1872,17 +2107,19 @@ impl Host {
         true
     }
 
-    /// Whether a point is inside the settings panel.
+    /// Whether a point is inside the settings page.
     ///
-    /// Asked of the chrome rather than worked out from the panel's width, because the
-    /// width is the chrome's business and a second copy of it here is a second place for
+    /// Asked of the chrome rather than worked out from the content rectangle, because the
+    /// rectangle is the chrome's business and a second copy of it here is a second place for
     /// it to be wrong. The chrome hit-tests what it actually drew, which is also what
     /// the user is looking at.
     ///
-    /// The strip's own settings control counts: it is drawn over the panel and it is the
-    /// panel's to answer for, so a wheel over it that scrolled the terminal behind the panel
-    /// would be the one pixel of the panel that scrolled something else.
-    fn over_panel(&self, x: f64, y: f64) -> bool {
+    /// The strip's own settings control counts: the wheel over it belongs to the window's
+    /// controls rather than to the terminal, and a wheel there that scrolled the shell would be
+    /// the one pixel of the strip that scrolled something else. The page's own surface is the
+    /// whole content rectangle, so every point below the strip that is not a control of it is
+    /// still the page's to answer for.
+    fn over_page(&self, x: f64, y: f64) -> bool {
         matches!(
             self.chrome.hit(x as f32, y as f32),
             Hit::Settings | Hit::Setting { .. } | Hit::SettingsButton | Hit::Section(_)
@@ -2148,9 +2385,9 @@ impl ApplicationHandler<Wake> for Host {
         // and no tab that could have closed.
         if let Wake::Families(families) = wake {
             self.app.set_families(families);
-            // The panel is the only thing that reads them, and a panel that is not open
-            // does not need the frame.
-            if self.settings_open
+            // A row that lists the families reads them, and a page that is not on screen is
+            // not drawing that row: the frame is owed only while it is.
+            if self.settings_tab.shows()
                 && let Some(window) = self.window.clone()
             {
                 window.request_redraw();
@@ -2216,6 +2453,15 @@ impl ApplicationHandler<Wake> for Host {
             WindowEvent::CursorMoved { position, .. } => self.moved(position.x, position.y),
             WindowEvent::CursorLeft { .. } => {
                 self.pointer = None;
+                // A pointer that has left the window is over nothing, so whatever was lit
+                // fades out — and a frame is what makes that visible rather than a control
+                // that stays lit for as long as nothing else happens to want one.
+                if self.hover_at != Hit::None {
+                    self.hover_at = Hit::None;
+                    if let Some(window) = self.window() {
+                        window.request_redraw();
+                    }
+                }
                 // Same reason as losing focus, and it is the commoner case: a drag
                 // taken off the edge of the window is a drag whose release happens
                 // somewhere this window is not listening.
@@ -2256,24 +2502,43 @@ impl ApplicationHandler<Wake> for Host {
             }
         }
 
-        // The cursor's blink is the other thing in zet that happens on a clock, so the
-        // loop is only ever woken for it when there is a cursor to blink. A terminal
-        // sitting idle with nothing to flash parks in `Wait` and uses no power at all.
-        if !self.app.blinks() {
-            loop_.set_control_flow(ControlFlow::Wait);
-            return;
-        }
-        let next = self.app.next_blink(now);
-        if now >= self.blink_at {
-            // The phase has flipped since the last frame was drawn, and the deadline has
-            // moved past it, so the frame that follows this one cannot ask for another
-            // the same way. That is what makes this terminate.
-            self.blink_at = next;
+        // A hover in flight is the other thing in zet that happens on a clock, and it is the
+        // only one of them the *chrome* knows about: a pointer that has just arrived on a
+        // control is a fade that needs the frames to run, and no event will arrive to ask for
+        // them. This is the whole of the frame clock — while the chrome says something is
+        // moving, the loop comes back for another frame, and once it has landed the deadline
+        // is gone and the window is as idle as it was before.
+        let mut due = if self.chrome.moving() {
             if let Some(window) = self.window() {
                 window.request_redraw();
             }
+            Some(now + HOVER_FRAME)
+        } else {
+            None
+        };
+
+        // The cursor's blink is the other thing in zet that happens on a clock, so the
+        // loop is only ever woken for it when there is a cursor to blink. A terminal
+        // sitting idle with nothing to flash — and with nothing fading — parks in `Wait`
+        // and uses no power at all.
+        if self.app.blinks() {
+            let next = self.app.next_blink(now);
+            if now >= self.blink_at {
+                // The phase has flipped since the last frame was drawn, and the deadline has
+                // moved past it, so the frame that follows this one cannot ask for another
+                // the same way. That is what makes this terminate.
+                self.blink_at = next;
+                if let Some(window) = self.window() {
+                    window.request_redraw();
+                }
+            }
+            due = Some(due.map_or(self.blink_at, |hover| hover.min(self.blink_at)));
         }
-        loop_.set_control_flow(ControlFlow::WaitUntil(self.blink_at));
+
+        match due {
+            Some(at) => loop_.set_control_flow(ControlFlow::WaitUntil(at)),
+            None => loop_.set_control_flow(ControlFlow::Wait),
+        }
     }
 }
 
@@ -2388,7 +2653,7 @@ mod tests {
         // either "not asked for yet" or "handed back", and the next `Tab` has to tell
         // them apart or the panel wraps and the shell never gets one.
         let mut host = Host::new(app());
-        host.settings_open = true;
+        host.settings_tab = SettingsTab::Shown;
         let tab = KeyEvent {
             key: Key::Tab,
             mods: Modifiers::empty(),
@@ -2438,7 +2703,7 @@ mod tests {
     #[test]
     fn clicking_a_row_takes_the_keyboard_back_from_the_shell() {
         let mut host = Host::new(app());
-        host.settings_open = true;
+        host.settings_tab = SettingsTab::Shown;
         host.settings_left = true;
         let Some(line) = host.app.settings().iter().position(|l| l.kind().is_some()) else {
             panic!("the panel has no rows to click");
@@ -2532,6 +2797,239 @@ mod tests {
         }
     }
 
+    /// A chord pressed, which is what the app's keymap answers to.
+    fn chord(mods: Modifiers, key: Key) -> KeyEvent {
+        KeyEvent { mods, ..press(key) }
+    }
+
+    #[test]
+    fn the_settings_tab_opens_shows_and_closes() {
+        // The three states, from the one control that moves between them. `Behind` is not a
+        // fourth case to handle: it is what a terminal on top of the page leaves, and bringing the
+        // page back has to be the same thing as opening it — except that where the user had got to
+        // in the list is still there, because nothing about the page changed while they were away.
+        let mut host = Host::new(app());
+        assert_eq!(
+            host.settings_tab,
+            SettingsTab::Shut,
+            "a fresh host has no tab"
+        );
+
+        host.toggle_settings();
+        assert_eq!(
+            host.settings_tab,
+            SettingsTab::Shown,
+            "the mark did not open the tab"
+        );
+
+        host.settings_scroll = 40.0;
+        host.settings_focus = Some(3);
+        host.settings_left = true;
+        host.toggle_settings();
+        assert_eq!(
+            host.settings_tab,
+            SettingsTab::Shut,
+            "the mark did not close the tab"
+        );
+        assert_eq!(host.settings_scroll, 0.0, "the closed tab kept its scroll");
+        assert_eq!(
+            host.settings_focus, None,
+            "the closed tab kept its highlight"
+        );
+        assert!(
+            !host.settings_left,
+            "the closed tab kept the focus it had walked off"
+        );
+
+        // A page behind a terminal comes forward where it was left, and the tab that put it there
+        // is the one the user is on.
+        let behind = SettingsTab::Behind;
+        host.settings_tab = behind;
+        host.settings_scroll = 40.0;
+        host.settings_focus = Some(3);
+        host.toggle_settings();
+        assert_eq!(host.settings_tab, SettingsTab::Shown);
+        assert_eq!(
+            host.settings_scroll, 40.0,
+            "the page came back at the top of its list"
+        );
+        assert_eq!(
+            host.settings_focus,
+            Some(3),
+            "the page came back with no highlight"
+        );
+
+        // And opening from shut starts at the top however the last page was left.
+        host.settings_tab = SettingsTab::Shut;
+        host.settings_scroll = 40.0;
+        host.settings_focus = Some(3);
+        host.toggle_settings();
+        assert_eq!(host.settings_scroll, 0.0);
+        assert_eq!(host.settings_focus, None);
+    }
+
+    #[test]
+    fn the_settings_follows_the_active_tab() {
+        // The tab exists while the tab is open, whether or not it is the one on screen, and the
+        // strip is told about it either way: the cell is in the run and the mark is lit, which is
+        // what makes the page a tab rather than a mode the window is in.
+        let mut host = Host::new(app());
+        let terminals = host.tabs();
+        assert!(
+            !terminals
+                .iter()
+                .any(|tab| tab.id == zet_ui::TabId::Settings),
+            "a shut tab is in the strip"
+        );
+
+        host.settings_tab = SettingsTab::Shown;
+        let shown = host.tabs();
+        assert_eq!(
+            shown.len(),
+            terminals.len() + 1,
+            "the tab is not in the strip"
+        );
+        assert_eq!(
+            shown.last().map(|tab| tab.id),
+            Some(zet_ui::TabId::Settings),
+            "the settings tab is not the last cell"
+        );
+        assert!(host.settings_tab.shows());
+
+        // Behind a terminal: still a tab, not the one on screen.
+        host.settings_tab = SettingsTab::Behind;
+        let behind = host.tabs();
+        assert_eq!(
+            behind.len(),
+            terminals.len() + 1,
+            "the page behind lost its tab"
+        );
+        assert!(!host.settings_tab.shows(), "a page behind is on screen");
+
+        host.close_settings();
+        assert_eq!(
+            host.tabs().len(),
+            terminals.len(),
+            "the closed tab is still there"
+        );
+    }
+
+    #[test]
+    fn the_close_chord_closes_the_settings_tab_and_not_the_shell_behind_it() {
+        // `close-tab` means "close the tab I am looking at", and while the page is up that tab is
+        // the page. The app's active tab is still the shell it was, because a shell that is not on
+        // screen is still running — so a chord that reached the app would kill a shell the user
+        // cannot see and leave the page up.
+        let mut host = Host::new(app());
+        // A host with no window has opened no shell: `Host::new` gets the app ready and the first
+        // frame opens the tab. A test about a shell that survives the page has to have one.
+        let _ = host
+            .app
+            .open_tab(EMPTY_GRID.0, EMPTY_GRID.1)
+            .expect("a shell to leave alone");
+        let shells = host.app.tab_numbers();
+        assert!(
+            !shells.is_empty(),
+            "the host opened no shell to leave alone"
+        );
+
+        host.settings_tab = SettingsTab::Shown;
+        let chord = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('W'));
+        assert_eq!(
+            host.app.action_for(&chord),
+            Some(Action::CloseTab),
+            "the chord under test is not the close chord"
+        );
+        assert!(host.page_key(&chord), "the close chord was not the page's");
+        assert_eq!(
+            host.settings_tab,
+            SettingsTab::Shut,
+            "the page did not close"
+        );
+        assert_eq!(
+            host.app.tab_numbers(),
+            shells,
+            "the shell behind the page was closed with it"
+        );
+
+        // And with no page, the same chord is the app's, which is where it closes the shell in
+        // front of the user.
+        assert!(!host.page_key(&chord), "a shut page kept the close chord");
+    }
+
+    #[test]
+    fn a_key_with_no_binding_does_not_reach_the_shell_while_the_page_is_up() {
+        // The one place this window departs from the panel's rule. The panel let an unbound key
+        // through because the shell was on screen beside it; a page has no prompt behind it, so a
+        // letter typed there would reach a shell the user cannot see and the answer would appear on
+        // a screen that is not being shown. A chord still goes through: a chord is the user asking
+        // zet itself for something.
+        let mut host = Host::new(app());
+        let letter = press(Key::Char('a'));
+        let new_tab = chord(Modifiers::CTRL | Modifiers::SHIFT, Key::Char('T'));
+        assert!(
+            !host.app.owns(&letter),
+            "the letter under test is bound to something"
+        );
+        assert!(
+            host.app.owns(&new_tab),
+            "the chord under test is bound to nothing"
+        );
+
+        // With no page, both are the app's to decide, and the letter reaches the shell.
+        assert!(!host.page_key(&letter), "a shut page swallowed a letter");
+        assert!(!host.page_key(&new_tab), "a shut page swallowed a chord");
+
+        host.settings_tab = SettingsTab::Shown;
+        assert!(
+            host.page_key(&letter),
+            "a letter reached the shell behind the page"
+        );
+        assert!(
+            !host.page_key(&new_tab),
+            "the page swallowed a chord the user aimed at zet"
+        );
+
+        // Behind a terminal, the page is not what the user is looking at and the shell is: the
+        // letter is the shell's again.
+        host.settings_tab = SettingsTab::Behind;
+        assert!(
+            !host.page_key(&letter),
+            "a page behind a terminal swallowed the shell's typing"
+        );
+    }
+
+    #[test]
+    fn the_mouse_is_not_forwarded_to_a_shell_that_is_not_on_screen() {
+        // A program in reporting mode is told about the mouse by cell coordinates, and the page is
+        // not the shell: a report from a click at a coordinate on the settings page would be a lie
+        // the program acts on. `Behind` is the other half — the shell in front of it is what the
+        // user is looking at, and it gets its reports as it did before the page was opened.
+        let mut host = Host::new(app());
+        assert!(
+            host.mouse_reaches_the_shell(),
+            "a host with no page kept the mouse"
+        );
+
+        host.settings_tab = SettingsTab::Shown;
+        assert!(
+            !host.mouse_reaches_the_shell(),
+            "the mouse reached a shell that is not on screen"
+        );
+
+        host.settings_tab = SettingsTab::Behind;
+        assert!(
+            host.mouse_reaches_the_shell(),
+            "a page behind a terminal took the shell's mouse reports"
+        );
+
+        host.close_settings();
+        assert!(
+            host.mouse_reaches_the_shell(),
+            "a closed page kept the mouse"
+        );
+    }
+
     #[test]
     fn the_panels_sections_are_the_apps_own_headings() {
         // The seam the rail stands on. `zet-ui` derives its sections from the heading rows it
@@ -2556,7 +3054,7 @@ mod tests {
         // scroll goes back to the top with the page, because the position the old page was
         // scrolled to is a position in a list that is no longer being drawn.
         let mut host = Host::new(app());
-        host.settings_open = true;
+        host.settings_tab = SettingsTab::Shown;
         let lines = host.app.settings();
         let next = lines
             .iter()
@@ -2594,7 +3092,7 @@ mod tests {
         // page for the old highlight to be, and the panel's rule is that it holds the keyboard
         // only when it has been asked to.
         let mut host = Host::new(app());
-        host.settings_open = true;
+        host.settings_tab = SettingsTab::Shown;
         let lines = host.app.settings();
         let keys = lines
             .iter()

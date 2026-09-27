@@ -12,14 +12,28 @@ use zet_font::Weight;
 
 use crate::Caption;
 use crate::ChromeInput;
+use crate::Hit;
+use crate::TabId;
 use crate::TabInfo;
 use crate::geometry::{
     CAPTION_WIDTH, HASH_RATIO, INDICATOR, NAME_GAP, NAME_INSET, NAME_SIZE, NAME_TRACKING,
-    RAIL_CELL, RAIL_CELL_FLOOR, RAIL_WIDTH, ROW_HEIGHT, Rect, Size, TAB_GAP, TAB_MAX_WIDTH,
-    TAB_PADDING, TAB_SIZE, TRAVEL,
+    RAIL_CELL, RAIL_CELL_FLOOR, RAIL_WIDTH, ROW_HEIGHT, Rect, SETTINGS_CELL, Size, TAB_GAP,
+    TAB_MAX_WIDTH, TAB_PADDING, TAB_SIZE, TRAVEL,
 };
+use crate::hover::Hover;
 use crate::marks::{self, Mark};
 use crate::paint::{Painter, TextStyle};
+
+/// How strong the wash under a caption button that is not close is at full hover.
+///
+/// The three caption buttons share one behaviour — the button fills — and two colours: close
+/// spends `danger`, because it is the one that takes something away, and the other two spend
+/// a tenth of `ink`, which is a wash rather than a fill. Ten percent is what Windows uses for
+/// the same two buttons, and it is the strength at which the mark over it still reads.
+///
+/// A `pub(crate)` constant rather than a local one, because a fade is only assertable at its
+/// ends and halfway between them if the caller can name the value it is heading for.
+pub(crate) const CAPTION_WASH: f32 = 0.10;
 
 /// One tab's cell: where it is, and how much of its name fits on it.
 ///
@@ -28,8 +42,8 @@ use crate::paint::{Painter, TextStyle};
 /// one number that is not recoverable from outside — how much of it there is room for —
 /// and the drawing reads the characters back off the input.
 pub(crate) struct TabCell {
-    /// The tab's number, which is its identity.
-    pub index: u32,
+    /// The tab's id, which is its identity.
+    pub id: TabId,
     /// The cell.
     pub rect: Rect,
     /// How many characters of the tab's title fit.
@@ -61,8 +75,8 @@ pub(crate) struct Strip {
     ///
     /// Its rect is planned here with the rest of the strip, because the two controls share
     /// the run the tabs do not have — but it is *drawn* from `Chrome::overdraw` rather than
-    /// from [`draw`], because it is the one control in the strip that has to be over the
-    /// settings panel, and the panel is drawn after the strip is. See [`settings_mark`].
+    /// from [`draw`], with the window's other controls rather than with the strip's text.
+    /// See [`settings_mark`].
     pub settings: Option<Rect>,
     /// The draggable gap.
     pub drag: Option<Rect>,
@@ -81,8 +95,8 @@ pub(crate) struct Travel {
     /// rather than where it was heading: pressing `Ctrl+Tab` twice in a row is one bar
     /// moving twice, not one bar snapping back and starting again.
     pub from: Rect,
-    /// The tab it is leaving, whose index cross-fades back down to its resting weight.
-    pub from_index: u32,
+    /// The tab it is leaving, whose label cross-fades back down to its resting weight.
+    pub from_id: TabId,
 }
 
 /// Plan the strip for one frame.
@@ -152,10 +166,10 @@ fn horizontal(
     // The new-tab mark is the width of a tab with nothing to say: a number and its
     // padding. It is the affordance that must not be the thing that overflows, so it
     // never gives up room and is never the cell that gets squeezed. The settings control
-    // beside it is the same width, and shares the guarantee: the run of tabs stops before
-    // both of them.
-    let plus_width = number_cell(paint, 1);
-    let settings_width = plus_width;
+    // beside it is a fixed sixteen pixels rather than a cell of any kind, and shares the
+    // guarantee: the run of tabs stops before both of them.
+    let plus_width = number_cell(paint, TabId::Terminal(1));
+    let settings_width = SETTINGS_CELL;
     let controls = plus_width + settings_width;
     let natural: f32 = input
         .tabs
@@ -187,9 +201,9 @@ fn horizontal(
         if cursor + width + controls > limit {
             break;
         }
-        let room = width - number_cell(paint, tab.index) - TAB_GAP;
+        let room = width - number_cell(paint, tab.id) - number_gap(tab.id);
         tabs.push(TabCell {
-            index: tab.index,
+            id: tab.id,
             rect: Rect::new(cursor, 0.0, width, ROW_HEIGHT),
             title: title_fit(paint, &tab.title, room),
         });
@@ -200,7 +214,7 @@ fn horizontal(
         (cursor + plus_width <= limit).then(|| Rect::new(cursor, 0.0, plus_width, ROW_HEIGHT));
     // The settings control is dropped rather than squeezed when the two do not both fit: a
     // control drawn a few pixels narrower than its own mark is a mark with its edge cut off,
-    // and the chord that opens the panel is still there. The width it would have taken
+    // and the chord that opens the page is still there. The width it would have taken
     // becomes drag region, which is where a press on a strip with no room for controls
     // should land anyway.
     let settings = (cursor + controls <= limit)
@@ -266,7 +280,7 @@ fn vertical(
         // whole reason to choose it is that it gives the grid the rest, so a name in it
         // would be a name in the space the tabs were moved aside to free.
         tabs.push(TabCell {
-            index: tab.index,
+            id: tab.id,
             rect: Rect::new(0.0, y, RAIL_WIDTH, cell),
             title: 0,
         });
@@ -293,28 +307,58 @@ fn vertical(
 
 /// Draw the settings mark into the box the strip planned for it.
 ///
-/// Called from the chrome's overdrawn layer rather than from [`draw`], and that is the whole
-/// reason this is a function of its own: the panel is drawn after the strip and covers it in
-/// a window narrow enough that the panel is the window, so a mark drawn with the strip would
-/// be painted over by the panel while remaining a hit region — a control nobody can see that
-/// answers a press. It goes through [`marks::draw`] like the caption buttons, so it is a
-/// rectangle on the device grid rather than a character in the chrome's face.
-pub(crate) fn settings_mark(paint: &mut Painter<'_>, strip: &Strip, input: &ChromeInput<'_>) {
+/// Called from the chrome's overdrawn layer rather than from [`draw`], with the window's other
+/// controls: it goes through [`marks::draw`] like the caption buttons, so it is a rectangle on
+/// the device grid rather than a character in the chrome's face, and it belongs with the
+/// captions rather than with the strip's text.
+///
+/// Two states, and neither of them is a fill. The mark is `ink-mid` while there is no settings
+/// tab and `ink` while there is one, which is how the mark stays lit for as long as the page
+/// exists — the same rule the active tab's number follows, and for the same reason: what is
+/// open is the thing that is bright. Under the pointer the resting ink steps up to `ink` over
+/// the hover, which for a shut tab is a visible change and for an open one is nothing, because
+/// a mark that is already lit has no second look to give.
+pub(crate) fn settings_mark(
+    paint: &mut Painter<'_>,
+    strip: &Strip,
+    input: &ChromeInput<'_>,
+    hover: &Hover,
+) {
     let Some(rect) = strip.settings else {
         return;
     };
-    // The captions' own pair of colours rather than the new-tab mark's single one: this is
-    // drawn as a mark beside buttons that step up one ink under the pointer, and a control
-    // in that row that did not would be the one the user is not sure they are over. The `+`
-    // is a character in the chrome's face and does not hover; that is a difference between
-    // the two kinds of control, not between these two.
-    let hovered = input.pointer.is_some_and(|(x, y)| rect.contains(x, y));
-    let color = if hovered {
-        input.palette.ink
-    } else {
-        input.palette.ink_mid
-    };
-    marks::draw(paint, Mark::Sliders, rect, color, input.scale);
+    if input.tabs.iter().any(|tab| tab.id == TabId::Settings) {
+        marks::draw(
+            paint,
+            Mark::Sliders,
+            rect,
+            input.palette.ink,
+            1.0,
+            input.scale,
+        );
+        return;
+    }
+    let lit = hover.of(Hit::SettingsButton);
+    if lit < 0.998 {
+        marks::draw(
+            paint,
+            Mark::Sliders,
+            rect,
+            input.palette.ink_mid,
+            1.0 - lit,
+            input.scale,
+        );
+    }
+    if lit > 0.002 {
+        marks::draw(
+            paint,
+            Mark::Sliders,
+            rect,
+            input.palette.ink,
+            lit,
+            input.scale,
+        );
+    }
 }
 
 /// How wide a tab's number is, in the weight the number is measured in.
@@ -336,19 +380,37 @@ fn number_style() -> TextStyle {
 
 /// How wide the cell is that holds a number and nothing else.
 ///
-/// The floor a tab is squeezed to, and the footprint the new-tab mark takes.
-fn number_cell(paint: &mut Painter<'_>, index: u32) -> f32 {
-    number_width(paint, index, number_style()) + 2.0 * TAB_PADDING
+/// The floor a tab is squeezed to, and the footprint the new-tab mark takes. A settings cell
+/// has no number, so its floor is the padding alone: the callers that ask for a floor are
+/// asking "how narrow can this cell be and still show what it has", and what a settings cell
+/// has is its name, which needs exactly the padding it is drawn with.
+fn number_cell(paint: &mut Painter<'_>, id: TabId) -> f32 {
+    match id {
+        TabId::Terminal(index) => number_width(paint, index, number_style()) + 2.0 * TAB_PADDING,
+        TabId::Settings => 2.0 * TAB_PADDING,
+    }
+}
+
+/// The gap between a cell's number and its name.
+///
+/// Zero for a settings cell, which has no number for a gap to separate anything from. It is a
+/// gap and not padding: the cell already has padding either side, and a settings cell asked for
+/// both would be eight pixels wider than the name it holds with a hole in front of it.
+const fn number_gap(id: TabId) -> f32 {
+    match id {
+        TabId::Terminal(_) => TAB_GAP,
+        TabId::Settings => 0.0,
+    }
 }
 
 /// How wide a tab's cell is: its number, its name when there is room for one, the
 /// padding either side, and never more than `cap`.
 fn tab_width(paint: &mut Painter<'_>, tab: &TabInfo, cap: f32) -> f32 {
-    let floor = number_cell(paint, tab.index);
+    let floor = number_cell(paint, tab.id);
     if tab.title.is_empty() {
         return floor.min(cap);
     }
-    let natural = floor + TAB_GAP + paint.advance(&tab.title, TAB_SIZE, Weight::NORMAL);
+    let natural = floor + number_gap(tab.id) + paint.advance(&tab.title, TAB_SIZE, Weight::NORMAL);
     // The floor wins over the cap. A cell narrower than its number is a cell that shows
     // a clipped number, and half a number is worse than a tab that is not on screen.
     natural.min(cap).max(floor)
@@ -369,7 +431,7 @@ fn tab_cap(paint: &mut Painter<'_>, tabs: &[TabInfo], available: f32) -> f32 {
     if tabs.is_empty() {
         return TAB_MAX_WIDTH;
     }
-    let floor = number_cell(paint, 1);
+    let floor = number_cell(paint, TabId::Terminal(1));
     let share = available / tabs.len() as f32;
     share.clamp(floor.min(TAB_MAX_WIDTH), TAB_MAX_WIDTH)
 }
@@ -435,7 +497,8 @@ pub(crate) fn draw(
     paint: &mut Painter<'_>,
     strip: &Strip,
     input: &ChromeInput<'_>,
-    fade: Option<(u32, f32)>,
+    fade: Option<(TabId, f32)>,
+    hover: &Hover,
 ) {
     let palette = *input.palette;
 
@@ -480,14 +543,17 @@ pub(crate) fn draw(
     for cell in &strip.tabs {
         // A cell was planned from a tab that is still in the input, so this cannot miss;
         // skipping rather than indexing keeps that from being a panic if it ever does.
-        let Some(info) = input.tabs.iter().find(|tab| tab.index == cell.index) else {
+        let Some(info) = input.tabs.iter().find(|tab| tab.id == cell.id) else {
             continue;
         };
-        let active = Some(cell.index) == input.active;
-        let resting = if info.hovered {
-            palette.ink_mid
+        let active = Some(cell.id) == input.active;
+        // The active tab outranks the pointer, exactly as it does for the preview bar: its
+        // number is `ink` whether the pointer is on it or not, and a hovered active tab that
+        // faded towards `ink-mid` would be the strip's own rule losing to the mouse.
+        let lit = if active {
+            0.0
         } else {
-            palette.ink_dim
+            hover.of(Hit::Tab(cell.id))
         };
 
         // How much of the active weight this index currently carries. At rest it is one
@@ -495,13 +561,13 @@ pub(crate) fn draw(
         // is leaving is the same curve running down. Nothing else about a tab moves.
         let heavy = match fade {
             Some((_, t)) if active => t,
-            Some((from, t)) if from == cell.index => 1.0 - t,
+            Some((from, t)) if from == cell.id => 1.0 - t,
             _ if active => 1.0,
             _ => 0.0,
         };
 
         let x = if strip.position == TabPosition::Left {
-            let width = number_cell(paint, cell.index) - 2.0 * TAB_PADDING;
+            let width = number_cell(paint, cell.id) - 2.0 * TAB_PADDING;
             cell.rect.x + (cell.rect.width - width) / 2.0
         } else {
             cell.rect.x + TAB_PADDING
@@ -509,61 +575,101 @@ pub(crate) fn draw(
         let baseline = paint.baseline_in(cell.rect, TAB_SIZE);
 
         if heavy > 0.002 {
-            tab_label(
-                paint,
-                x,
-                baseline,
-                info,
-                cell.title,
-                TextStyle::new(TAB_SIZE, Weight::MEDIUM, palette.ink).faded(heavy),
-                TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink).faded(heavy),
-            );
+            let number = TextStyle::new(TAB_SIZE, Weight::MEDIUM, palette.ink).faded(heavy);
+            let name = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink).faded(heavy);
+            let start = tab_number(paint, x, baseline, info, number);
+            tab_name(paint, start, baseline, info, cell.title, name);
         }
         if heavy < 0.998 {
-            tab_label(
-                paint,
-                x,
-                baseline,
-                info,
-                cell.title,
-                TextStyle::new(TAB_SIZE, Weight::NORMAL, resting).faded(1.0 - heavy),
-                TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink_mid).faded(1.0 - heavy),
-            );
+            // The resting tab, in as many passes as the number has inks to be between. The
+            // name is `ink-mid` whichever of them the number is on, so it is drawn once —
+            // once per pass would be the same glyphs laid down twice, which is a name that
+            // gets brighter as the number fades across.
+            let light = 1.0 - heavy;
+            let name = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink_mid).faded(light);
+            let mut start = None;
+            if lit < 0.998 {
+                let number = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink_dim)
+                    .faded(light * (1.0 - lit));
+                start = Some(tab_number(paint, x, baseline, info, number));
+            }
+            if lit > 0.002 {
+                let number =
+                    TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink_mid).faded(light * lit);
+                start = Some(tab_number(paint, x, baseline, info, number));
+            }
+            if let Some(start) = start {
+                tab_name(paint, start, baseline, info, cell.title, name);
+            }
         }
     }
 
     if let Some(plus) = strip.plus {
-        let style = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink_dim);
-        paint.centered("+", plus, style);
+        // Under the pointer the `+` is white rather than dim, and that is the whole of it: no
+        // fill, no haze, nothing behind the mark. The two passes are the cross-fade the tab
+        // numbers have always used, and it is the same pair of draws the settings mark wears
+        // — one control's two looks, laid over each other at the share of the transition each
+        // one holds.
+        let lit = hover.of(Hit::NewTab);
+        if lit < 0.998 {
+            let style = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink_dim).faded(1.0 - lit);
+            paint.centered("+", plus, style);
+        }
+        if lit > 0.002 {
+            let style = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink).faded(lit);
+            paint.centered("+", plus, style);
+        }
     }
 }
 
-/// A tab's whole label: the `#` at seventy percent, the number, then as much of the name
-/// as the cell has room for.
+/// A tab's number: the `#` at seventy percent, then its digits.
 ///
-/// The number and the name are drawn as one run so that they cannot disagree about how
-/// present the tab is, which is the one thing the indicator's cross-fade moves.
+/// Returns where the name that follows it starts. That is the one thing a caller cannot work
+/// out for itself: the digits' advance belongs to the weight they are set in, and the
+/// indicator's cross-fade moves the number between two weights.
+///
+/// The two halves of a tab's label are drawn separately rather than as one run, which is what
+/// they used to be. The reason they were one was that they could not disagree about how
+/// present the tab is, and that is still true of the *fade*: both callers pass the same alpha
+/// to the number and the name. What the split buys is the hover, which moves the number's ink
+/// and leaves the name's alone, and a run drawn once per ink would be a name laid down twice.
+fn tab_number(
+    paint: &mut Painter<'_>,
+    x: f32,
+    baseline: f32,
+    info: &TabInfo,
+    number: TextStyle,
+) -> f32 {
+    // A settings tab has no number to draw and no number's worth of space to skip, so its
+    // name starts where the cell's padding left it. This is the only place the two kinds of
+    // tab draw differently, and it is one early return rather than a second label-drawing
+    // path: what comes back is the x the name starts at either way.
+    let TabId::Terminal(index) = info.id else {
+        return x;
+    };
+    let mut buffer = [0u8; 10];
+    let digits = index_text(&mut buffer, index);
+    let hash = number.scaled(HASH_RATIO);
+    let hash_width = paint.width("#", hash);
+    paint.text("#", x, baseline, hash);
+    paint.text(digits, x + hash_width, baseline, number);
+    x + hash_width + paint.width(digits, number) + TAB_GAP
+}
+
+/// A tab's name, as much of it as the cell has room for.
 ///
 /// The name is sliced out of the title the caller already owns — by character, so a
 /// multi-byte one is never cut in half — and an ellipsis is appended when the slice is
 /// short. The cell reserved room for that ellipsis when it counted the characters, so
 /// nothing here can overflow the cell.
-fn tab_label(
+fn tab_name(
     paint: &mut Painter<'_>,
     x: f32,
     baseline: f32,
     info: &TabInfo,
     fit: usize,
-    number: TextStyle,
     name: TextStyle,
 ) {
-    let mut buffer = [0u8; 10];
-    let digits = index_text(&mut buffer, info.index);
-    let hash = number.scaled(HASH_RATIO);
-    let hash_width = paint.width("#", hash);
-    paint.text("#", x, baseline, hash);
-    paint.text(digits, x + hash_width, baseline, number);
-
     if fit == 0 {
         return;
     }
@@ -573,35 +679,46 @@ fn tab_label(
         .nth(fit)
         .map_or(title.len(), |(at, _)| at);
     let (shown, rest) = title.split_at(cut);
-    let name_x = x + hash_width + paint.width(digits, number) + TAB_GAP;
-    paint.text(shown, name_x, baseline, name);
+    paint.text(shown, x, baseline, name);
     if !rest.is_empty() {
         let offset = paint.width(shown, name);
-        paint.text("…", name_x + offset, baseline, name);
+        paint.text("…", x + offset, baseline, name);
     }
 }
 
 /// Draw the three caption marks.
 ///
-/// Last, and after the settings panel, because these are the window's own controls and
-/// nothing in zet is allowed to cover them.
-pub(crate) fn captions(paint: &mut Painter<'_>, strip: &Strip, input: &ChromeInput<'_>) {
+/// Last but the menu, because these are the window's own controls and nothing in zet is
+/// allowed to cover them.
+pub(crate) fn captions(
+    paint: &mut Painter<'_>,
+    strip: &Strip,
+    input: &ChromeInput<'_>,
+    hover: &Hover,
+) {
     let palette = *input.palette;
     for (caption, rect) in &strip.captions {
-        let hovered = input.pointer.is_some_and(|(x, y)| rect.contains(x, y));
-        // DESIGN.md names one hover colour and it is the close button's. The other two
-        // step up one ink rather than staying still, because a control with no hover
-        // state is a control the user is not sure they are over.
-        let color = match (caption, hovered) {
-            (Caption::Close, true) => palette.danger,
-            (_, true) => palette.ink,
-            (_, false) => palette.ink_mid,
-        };
+        let lit = hover.of(Hit::Caption(*caption));
+        let closing = *caption == Caption::Close;
+        // Under the pointer the button fills and the mark inverts against the fill, which is
+        // what Windows does with the same three buttons. Close fills `danger` and takes a
+        // `ground` mark: dark on the coral measures 7.05:1 and `ink` on it measures 2.15:1,
+        // so the mark has to go the other way to stay readable. The other two fill a tenth
+        // of `ink`, and their mark steps up to `ink` rather than staying `ink-mid`, because
+        // a control with no hover state is a control the user is not sure they are over.
+        paint.fill_at(
+            *rect,
+            if closing { palette.danger } else { palette.ink },
+            if closing { lit } else { lit * CAPTION_WASH },
+        );
+        let mark = mark_of(*caption, input.maximized);
+        marks::draw(paint, mark, *rect, palette.ink_mid, 1.0 - lit, input.scale);
         marks::draw(
             paint,
-            mark_of(*caption, input.maximized),
+            mark,
             *rect,
-            color,
+            if closing { palette.ground } else { palette.ink },
+            lit,
             input.scale,
         );
     }
@@ -636,7 +753,7 @@ pub(crate) fn indicator(
     let cell = strip
         .tabs
         .iter()
-        .find(|cell| Some(cell.index) == input.active)?;
+        .find(|cell| Some(cell.id) == input.active)?;
     let destination = bar_rect(strip.position, cell.rect);
     let rect = match travel {
         Some(travel) => travel
@@ -655,26 +772,32 @@ fn bar_rect(position: TabPosition, cell: Rect) -> Rect {
     }
 }
 
-/// The indicator's preview under a hovered tab.
+/// The indicator's preview under a hovered tab, and how far in it has faded.
 ///
 /// Suppressed while one is travelling, because the bar in flight is the answer to "where
-/// am I now" and a second one at rest would be a second answer.
+/// am I now" and a second one at rest would be a second answer. The active tab is never the
+/// previewed one: its bar is already there, at `signal` rather than `signal-dim`.
+///
+/// The colour is the caller's and the lit value is this function's, because the bar is drawn
+/// by whoever holds the palette and where it goes is a question about the strip.
 pub(crate) fn hover_preview(
     strip: &Strip,
     input: &ChromeInput<'_>,
     travelling: bool,
-) -> Option<Rect> {
+    hover: &Hover,
+) -> Option<(Rect, f32)> {
     if travelling {
         return None;
     }
     let cell = strip.tabs.iter().find(|cell| {
-        Some(cell.index) != input.active
+        Some(cell.id) != input.active
             && input
                 .tabs
                 .iter()
-                .any(|tab| tab.index == cell.index && tab.hovered)
+                .any(|tab| tab.id == cell.id && tab.hovered)
     })?;
-    Some(bar_rect(strip.position, cell.rect))
+    let lit = hover.of(Hit::Tab(cell.id));
+    (lit > 0.0).then(|| (bar_rect(strip.position, cell.rect), lit))
 }
 
 /// How far through a transition of `over` seconds this is, from zero to one, after
@@ -682,8 +805,8 @@ pub(crate) fn hover_preview(
 ///
 /// Exponential ease-out, which is the curve DESIGN.md names for the indicator's travel:
 /// most of the distance goes in the first third of the time and the rest settles rather
-/// than stopping. The panel's slide is the same curve over a different span, so the span
-/// is the caller's and the shape is this function's.
+/// than stopping. A hover is the same curve over a different span, so the span is the
+/// caller's and the shape is this function's.
 pub(crate) fn progress(elapsed: f32, over: f32) -> f32 {
     if elapsed <= 0.0 {
         0.0

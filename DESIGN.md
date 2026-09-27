@@ -18,7 +18,7 @@ with a single lamp, not with a highlighted card.
 
 The window has two planes and they never borrow from each other.
 
-**The chrome plane** is zet's: the titlebar, the tab strip, the settings panel, the
+**The chrome plane** is zet's: the titlebar, the tab strip, the settings page, the
 scrollbar, the find bar, every focus ring. It uses the zet palette below, including
 the signal color.
 
@@ -37,7 +37,7 @@ The signal color appears in the chrome and stops at the grid boundary.
 |---|---|---|
 | `ground` | `#0a0b0d` | Window background, behind everything |
 | `surface` | `#0f1114` | Titlebar and tab strip |
-| `surface-raised` | `#15181c` | Settings panel, popovers, menus |
+| `surface-raised` | `#15181c` | Settings page, popovers, menus |
 | `hairline` | `#23272d` | Every 1px division in the chrome |
 | `hairline-strong` | `#333941` | Focused input borders, drag targets |
 | `ink` | `#e7e9ec` | Primary chrome text, active tab index |
@@ -53,9 +53,14 @@ Rules that keep the palette honest:
 - `signal` never fills an area larger than 3px by 40px. It is a lamp, not a color.
 - `hairline` is the only depth mechanism in the chrome. No shadows, no gradients, no
   glass. Elevation is expressed by a line and by a one-step surface change.
+- The only transparency in the chrome is a coverage on a palette colour. A hover fades a
+  colour by lowering its alpha, never by mixing it with another, and a mark lit under the
+  pointer is that mark's own ink at a higher value rather than a second shape around it,
+  because the renderer draws rectangles and glyphs and nothing else. A quad at zero alpha is
+  not a colour at all, so a fade that has reached nothing draws nothing.
 - Text on `surface-raised` is still `ink` or `ink-mid`, never a tinted gray.
-- The settings panel shows every value numerically, so the panel is legible as data
-  even when the visual preview is off screen.
+- The settings page shows every value numerically, so it is legible as data even when
+  the visual preview is on another tab.
 
 ### Contrast floors
 
@@ -65,6 +70,7 @@ Rules that keep the palette honest:
 | `ink-mid` on `ground` | 6:1 |
 | `ink-dim` on `surface` | 4.5:1 |
 | `signal` on `surface` | 4.5:1 |
+| `ground` on `danger` | 4.5:1 |
 | Theme ANSI colors on theme ground | 4.5:1 for zet's own themes |
 
 Imported palettes ship unmodified so they look like themselves, and the theme picker
@@ -114,7 +120,7 @@ Scale, at 100% DPI:
 |---|---|---|---|
 | Titlebar app name | 12px | 500 | +0.02em |
 | Tab index | 13px | 500 active / 400 inactive | 0 |
-| Settings section heading | 12px | 500, uppercase | +0.08em |
+| Settings section heading | 12px | 500, sentence case | +0.08em |
 | Settings label | 13px | 400 | 0 |
 | Settings value | 13px | 400, tabular | 0 |
 | Body text | 13px | 400 | 0 |
@@ -165,7 +171,9 @@ right now.
   number is an ordinal, and the name is the thing being read.
 - Hover: number moves to `ink-mid`. The indicator bar previews at `signal-dim`.
   No background fill, ever. Filling a hovered tab is the single most common way a
-  tab strip starts looking like everyone else's.
+  tab strip starts looking like everyone else's. A hovered *active* tab is
+  untouched: its index is `ink` and its bar is already there, and the tab that is
+  open outranks the pointer.
 - New tab: a `+` at the end of the run, the footprint of a tab with no name,
   `ink-dim`.
 - The OS window title is the active tab's name and then `zet`, so the taskbar and
@@ -234,10 +242,10 @@ program owns most of the pixels, and the strip is the part that is ours.
   something away and a menu whose destructive item sits in the middle is a menu where a
   mis-aimed click lands on it.
 - The menu is `surface-raised`, a `hairline` border, 28px rows, 16px of padding above,
-  below, and at each side, and 120px of minimum width. It is the panel's own surface
-  and the panel's own border, one level smaller — a menu is the panel's language shrunk
-  to the size of the question it is asking.
-- Hover fills the row in `hairline`, the same fill the panel gives the half of a control
+  below, and at each side, and 120px of minimum width. It is the settings page's own
+  surface and its own border, one level smaller — a menu is that language shrunk to the
+  size of the question it is asking.
+- Hover fills the row in `hairline`, the same fill the page gives the half of a control
   a click will take and for the same reason: with no glyphs to read, the fill is what
   says what the pointer is about to do.
 - Width comes from measuring the items, not from a constant, so renaming one moves the
@@ -262,8 +270,8 @@ program owns most of the pixels, and the strip is the part that is ours.
   is what dismisses it. No timeout, no click-to-toggle, no fade. A menu that faded
   would be a menu where the click during the fade lands on the window underneath.
 - `Escape` closes it and is the menu's key for as long as it is open. It is the one
-  key the menu takes: everything else still goes to the shell, for the reason the panel
-  gives.
+  key the menu takes: everything else still goes to the shell, for the reason a page in
+  front of it gives none of them.
 - The menu belongs to the tab it was opened on, and it goes away when that tab does —
   including when a tab is closed from somewhere else, and when the program on it exits.
   A menu still offering `Close tab` for a tab that is gone is a menu that lies.
@@ -290,18 +298,35 @@ vertical space to say nothing, and this is the change that makes zet feel denser
 Windows Terminal.
 
 - Caption buttons keep Windows' own metrics: 46px wide, 40px tall, full-height right
-  edge, close turning `danger` on hover. Users hit these hundreds of times a day and
-  muscle memory is not ours to redesign.
-- Two controls sit after the last tab: `+` for a new tab, and the settings mark for the
-  panel. Each is one number cell wide, and both are drawn only when they fit — a control
-  is never the thing that overflows, and the tabs stop before them rather than running
-  under them. The settings mark is the one control in the strip that is drawn over the
-  panel it opens, so in a window narrow enough that the panel is the window it stays
-  visible and stays clickable.
+  edge. Under the pointer the button fills: a tenth of `ink` for minimize and maximize,
+  and `danger` for close, whose mark turns over to `ground` so that it stays readable on
+  the coral — `ground` on `danger` is 7.05:1, where `ink` on it is 2.15:1. Users hit these
+  hundreds of times a day and muscle memory is not ours to redesign.
+- Two controls sit after the last tab: `+` for a new tab, and the settings mark that opens
+  the settings tab. `+` is one number cell wide, because it stands where a tab would; the
+  settings mark is a fixed 16px, because it is not a tab and has no number to make room
+  for. The two are adjacent — nothing between them — which puts their centres 25.5px
+  apart, where a cell-wide settings control would have put them 35px apart. Both are
+  drawn only when they fit — a control is never the thing that overflows, and the tabs
+  stop before them rather than running under them. The settings mark goes first: 16px is
+  the whole difference between a row that holds both and a row that holds one, and the
+  chord that opens the tab is still there.
 - The settings mark is geometry, like the caption marks and for the same reason: three
   bars with a tick on each. A gear would be a ring and eight teeth, which is a polygon
   rasteriser in a module whose whole subject is a one-pixel stroke that lands on exactly
   one pixel.
+- Both of those controls are bare marks with no face of their own, and neither gets one
+  under the pointer: what the hover does is turn the mark's own ink white — `ink-dim` to
+  `ink` for the `+`, `ink-mid` to `ink` for the settings bars. No halo, no bloom, and
+  nothing drawn beside the mark, so a hover here is a colour and not a second thing. The
+  settings mark is `ink` for as long as the settings tab exists, pointer or no pointer,
+  because the strip's rule that what is open is what is bright applies to the view as well
+  as to the tab: under the pointer a lit mark has no second look to give.
+- The settings tab itself is a cell at the end of the run of tabs, titled `settings`, with
+  no number on it. It is a view of the app rather than a program in a shell, so numbering
+  it would either break the run from `#1` or leave a gap where a shell used to be. The mark
+  and the cell answer differently on purpose: the cell is the tab, the mark is the button
+  that opens it and closes it, and a press has to land on the one the user pointed at.
 - The drag region is any horizontal gap between the last of those controls and the
   caption buttons. Double-click maximizes, and restores a window that is already
   maximized.
@@ -316,7 +341,7 @@ Windows Terminal.
 
 ## Motion
 
-Two authored moments, and both of them carry an answer that the frame they land on
+Three authored moments, and each of them carries an answer that the frame it lands on
 cannot.
 
 **The active indicator travels.** When the active tab changes, the 2px bar moves
@@ -324,69 +349,94 @@ from the old tab to the new one over 140ms on an exponential ease-out curve, and
 two indices cross-fade their ink weight over the same duration. The strip itself
 does not move, resize, or reflow. One line travels; nothing else reacts.
 
-**The settings panel slides in.** Over 180ms, on the same curve, from the right edge
-it is anchored to. It arrives from off the window and translates rather than growing
-or fading in place: a surface that widens reads as the terminal being resized, and
-one that fades reads as the terminal having changed, and neither is what happened.
-What the slide says is that this came from the edge and can go back to it.
+**A hover lights.** Over 110ms, on the same curve, from the control the pointer left to
+the one it has reached. Every hover in the app is this one transition: a caption button
+fills, a tab's index moves to `ink-mid` and previews its bar, the new-tab mark and the
+settings bars turn white, a menu or picker row fills, a settings rail item and the whole
+face of a control fill, and the scrollbar grows from 8px to 10px. Nothing about the layout
+changes — a hover moves a coverage, and one width — so the frame it lands on and the
+frame it starts on are the same frame with different numbers in it. What the fade buys
+is that a pointer crossing a row of tabs is one movement rather than a row of hard cuts.
 
 Everything else is instant:
 
 - Theme changes apply in one frame with no crossfade. A crossfade would show an
   intermediate theme, which is a worse lie than a hard cut.
-- Closing the panel. It goes on the frame the app stops considering it open. A slide
-  out would leave a panel drawn — and therefore hit-testable, because a region and a
-  surface are one rectangle — for the length of the animation, and every control in
-  it would take a click meant for the terminal behind it.
+- The settings tab opening and closing. It is there on the frame the app stops
+  considering it open and gone on the frame it does. The tab replaced a panel that slid
+  in from the right edge, and the slide went with it: a tab is a change of what is on
+  screen rather than a change of place, and one that animates into existence would delay
+  the actions inside it by exactly as long as the animation.
 - Tab open and close: the new tab appears already at full size. No scale-in, no
   slide. A tab that animates into existence delays input by exactly as long as the
   animation, which in a terminal is a real cost.
-- Reduce motion, read live from the system: the indicator jumps, the panel is simply
-  there on the frame it opens, cursor blink stops. Everything still works, nothing
-  moves.
+- Reduce motion, read live from the system: the indicator jumps, a hover is lit on the
+  frame the pointer arrives, cursor blink stops. Everything still works, nothing moves.
 
-The bar travels because that motion carries the answer to "where am I now," and the
-panel slides because it is a change of place rather than a change of state. Both are
-answers about space. No other transition in the app is load-bearing, so no other
+The bar travels because that motion carries the answer to "where am I now" — an answer
+about space. The hover fades because a pointer arriving and a pointer leaving are worth
+telling apart — an instant hover is a flicker at the speed a mouse moves — and that is an
+answer about attention. No other transition in the app is load-bearing, so no other
 transition exists.
 
 ## Settings
 
-A 560px panel anchored to the right edge, on `surface-raised`, separated from the
-terminal by a `hairline`. Not a modal. It does not block the terminal, does not dim
-it, and does not steal focus from the prompt. The panel is opened and closed by the
-settings mark in the strip, and by a chord; both go through the same toggle, because a
-button and a binding that disagreed would be one of them wrong.
+The settings are a tab: the content area, on `surface-raised`, from the bottom of the strip
+to the window's bottom edge and from the window's left edge to its right. Everything below
+the strip, and nothing else — the strip stays visible and stays clickable, because the
+settings tab is one of the things in it.
 
-The 560 is a rail and a page: 180 of sections down the left, then the 380 the rows are
-laid out in. The rail is what the panel grew by, and the page is the width the rows
-already had — `CONTROL_WIDTH`, the label column and the heading box were all measured
-against it.
+A tab rather than a panel, and the difference is the geometry rather than the wording. A
+panel is an overlay: it covers part of a terminal that is still drawn behind it, it has an
+edge to be separated from that terminal, and there is a screen underneath to be leaked
+into. A tab is what is on screen instead of the terminal, so the grid draws nothing at all
+while the page is up and there is no sliver of shell beside, above or under it — which is
+the whole reason it is a tab. The page's own rectangle is the grid's rectangle, the same
+one the terminal would have had, which is why the find bar takes height off both.
 
-The terminal stays visible behind it and updates live as you change things. Theme,
-font, size, opacity, and background all apply to the real terminal the moment they
-change, so the preview is not a preview. This is the reason the panel exists at all
-rather than a config file alone.
+The tab appears in the strip at the end of the run of tabs, titled `settings`, and has no
+number on it: it is a view of the app rather than a program in a shell, and `#3` beside two
+shells would say otherwise. It is opened and closed by the settings mark in the strip and
+by a chord, and both go through the same toggle, because a button and a binding that
+disagreed would be one of them wrong. The tab stays open while a terminal is in front of
+it: it is still in the strip, the mark stays lit, and a press on its cell brings it back
+where it was left. It is closed by the mark, by `Escape`, by the close-tab chord, and by a
+middle-click on its cell, and there is no × on it — the strip's tabs have never had one.
+
+The terminal is not visible behind it, because there is no behind: the settings tab and a
+shell are two tabs, and the shell is a tab that stopped being the one on screen. It is
+still running, and it was never resized or closed by opening the page. What the page has
+instead of a preview is a promise: every change writes through immediately. Theme, font,
+size, opacity, and background all apply the moment they change, and switching back to the
+shell shows them already applied. That is the reason the page exists at all rather than a
+config file alone.
+
+The page is a rail and a column: 180 of sections down the left, then the rows. The rail is
+what this grew by; the page beside it takes the rest of the width, so a wide window gives
+the rows the room rather than leaving a 560px stripe of settings on a 2400px screen.
 
 Sections, in order: Appearance, Tabs, Terminal, Keys — plus Problems, which exists only
 while the configuration file has something wrong with it and is why a section is named
-rather than numbered. The rail lists them in the panel's own type, upper case, with the
-one being shown filled in `hairline` and the one under the pointer in `ground`: the same
-pair of fills a control and its hover use, because the rail is part of the surface rather
-than a second thing bolted to its edge. One section is drawn at a time, without its
-heading — the rail says what the section is, and a page repeating the word under the item
-that already says it is a line of nothing.
+rather than numbered. The rail lists them in the page's own type and in the case they are
+spelled in, with the one being shown filled in `hairline` and the one under the pointer in
+`ground`: the same pair of fills a control and its hover use, because the rail is part of
+the surface rather than a second thing bolted to its edge. Nothing in the page shouts: a
+heading is a heading because of its size, its tracking and the rule under it, and a
+section name written in capitals in one place and not the other would be two names.
 
-The rail is drawn only when there is more than one named section. A panel with one
-section, or with rows and no headings at all, is the panel this was before there was a
-rail: no rail, the whole list in the page, and the headings drawn as headings.
+One section is drawn at a time, without its heading — the rail says what the section is,
+and a page repeating the word under the item that already says it is a line of nothing.
+
+The rail is drawn only when there is more than one named section. A page with one section,
+or with rows and no headings at all, is the page this was before there was a rail: no rail,
+the whole list in the page, and the headings drawn as headings.
 
 A narrow window narrows the rail rather than the rows — it is capped at two fifths of the
-panel — because a truncated section name is legible and a truncated value is not.
+page — because a truncated section name is legible and a truncated value is not.
 
 Row anatomy: label on the left, control on the right, current value in tabular
 figures. The control is a 118x20 rectangle of `ground` behind a `hairline` — recessed
-into the panel rather than raised off it, because `hairline` is the only depth
+into the page rather than raised off it, because `hairline` is the only depth
 mechanism there is. Its whole face is the click target, so the value readout is also
 the button.
 
@@ -405,28 +455,37 @@ Hover fills the half a click will take. With no glyphs to read, that fill is the
 thing that says which half is which — and it is why a stepper is two controls wearing
 one rectangle rather than one control with two arrows drawn on it.
 
-Rows are scrolled rather than dropped. A panel that stops listing settings once the
-window is short is a panel where a setting cannot be found and nothing says so. A
+Rows are scrolled rather than dropped. A page that stops listing settings once the
+window is short is a page where a setting cannot be found and nothing says so. A
 thickness row appears beside the cursor shape only when the shape has one: a block is
 the whole cell and a hollow block is a border on it, so neither has anything for the
 number to change.
 
 Every row writes through to the config file as it changes, and the file keeps its
 comments — `toml_edit` round-trips, so a hand-written note beside a setting survives
-being set from the panel.
+being set from the page.
 
-Keyboard: `Tab` or `Down` enters the panel and moves to the next row, `Shift+Tab` or
+Keyboard: `Tab` or `Down` enters the page and moves to the next row, `Shift+Tab` or
 `Up` to the previous one, `Left` and `Right` (or `Enter`, or `Space`) adjust the row the
-keyboard is on, and `Tab` past the last row hands the keyboard back to the shell rather
-than wrapping. `Escape` does the same, and a second `Escape` closes the panel. The chord
-that opened it toggles it, and so does the settings mark.
+keyboard is on, and `Tab` past the last row walks the focus off the end of the page
+rather than wrapping. `Escape` does the same, and a second `Escape` closes the tab. The
+chord that opened it toggles it, and so does the settings mark.
+
+Unbound keys do not reach the shell while the page is up, and this is the one place the
+window departs from what the panel used to do. The panel let a letter through because the
+shell was on screen beside it and typing into it was the reason the panel did not cover
+it; a page has no prompt behind it, so a letter typed there would reach a shell the user
+cannot see and the answer would arrive on a screen that is not being shown. A chord still
+goes through, because a chord is the user asking zet itself for something rather than
+typing at a prompt. The keyboard reachable from the page is therefore the page's keys and
+the app's chords, and nothing else — and `Escape` is the way back.
 
 The sections follow the keyboard rather than being a place the keyboard can be. The rows
 are one list, and walking off the end of a section lands on the first row of the next one,
 which brings that section to the page with it. That is why the rail needs no key of its
 own: a rail that took `Up` and `Down` and asked `Left` and `Right` to pick a section would
 need those keys to stop meaning what they mean while it had focus, which is a second mode
-inside a panel that is deliberately one list. Clicking a section name switches the page and
+inside a page that is deliberately one list. Clicking a section name switches the page and
 puts the keyboard back where it was, because there is no row where the click landed.
 
 Focus is drawn as the same hairline in `ink` — the brightest edge the chrome has. `signal`
@@ -434,11 +493,6 @@ is the obvious colour for a focus ring and the wrong one: DESIGN.md gives it a 3
 budget and calls it a lamp, which a border around a 118-pixel control would spend several
 times over. Three weights of one hairline, then, and no fourth: the row the keyboard is on
 is `ink`, the one under the pointer is `hairline-strong`, and the rest are `hairline`.
-
-Only those keys are the panel's. Every letter and every chord with a modifier still goes
-to the shell, because the terminal behind the panel is live and typing into it is the
-reason the panel does not cover it. That is what "it does not steal focus from the prompt"
-has to mean.
 
 ## Find
 
@@ -552,9 +606,9 @@ High contrast mode is not a theme. When Windows reports forced colors, zet switc
 to `zet contrast` and overrides the chrome palette to pure black, pure white ink,
 and the system highlight color, ignoring the user's theme until forced colors turn
 off. Themes are the user's choice; forced colors is not — which is why the switch in
-the settings panel defaults to on and is the only thing that can turn it off, and why
+the settings page defaults to on and is the only thing that can turn it off, and why
 the same is true of reduce motion: a machine that has asked for less movement has
-asked for a reason, and the panel is where you disagree with it rather than the
+asked for a reason, and the page is where you disagree with it rather than the
 absence of a way to.
 
 Text scaling works the same way round. `text_scale` of `0.0` means "follow the

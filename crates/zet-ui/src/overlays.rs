@@ -1,10 +1,11 @@
-//! The four surfaces that sit over the grid rather than framing it: the settings panel,
-//! the find bar, the profile picker, and the scrollbar.
+//! The surfaces that are not the window's frame: the settings page, the find bar, the profile
+//! picker, and the scrollbar.
 //!
-//! They are together because they share a rule rather than a purpose. None of them is
-//! part of the window's frame, none of them is modal, and all four take their depth from
-//! a hairline and a one-step surface change — DESIGN.md's only depth mechanism in the
-//! chrome, since there are no shadows, no gradients, and no glass.
+//! They are together because they share a rule rather than a purpose. None of them is part of
+//! the window's frame — the three popovers sit over the grid and the page takes its place — none
+//! of them is modal, and all four take their depth from a hairline and a one-step surface change,
+//! which is DESIGN.md's only depth mechanism in the chrome, since there are no shadows, no
+//! gradients, and no glass.
 
 use std::ops::Range;
 
@@ -12,17 +13,19 @@ use zet_font::Weight;
 
 use crate::ChromeInput;
 use crate::Control;
+use crate::Hit;
 use crate::PickerLine;
 use crate::ScrollState;
 use crate::SettingLine;
 use crate::SettingPart;
 use crate::geometry::{
-    FIND_BAR_HEIGHT, MENU_PAD, MENU_ROW, PANEL_RAIL, PANEL_WIDTH, Rect, SCROLLBAR, SCROLLBAR_HOVER,
-    SCROLLBAR_MIN_THUMB,
+    FIND_BAR_HEIGHT, MENU_PAD, MENU_ROW, PANEL_RAIL, Rect, SCROLLBAR, SCROLLBAR_HOVER,
+    SCROLLBAR_MIN_THUMB, lerp,
 };
+use crate::hover::Hover;
 use crate::paint::{Painter, TextStyle};
 
-/// The gap between the panel's edge and its content.
+/// The gap between the page's edge and its content.
 const PAD: f32 = 16.0;
 
 /// The space a heading occupies, including the hairline under it.
@@ -37,7 +40,7 @@ const ROW: f32 = 28.0;
 /// A row's control.
 ///
 /// Wide enough for `Cascadia Mono`, wide enough for a chord like `Ctrl+Shift+T`, and no
-/// wider: the label needs the rest, and a control that takes half the panel is a control
+/// wider: the label needs the rest, and a control that takes half the page is a control
 /// that does not look like something you click once.
 const CONTROL_WIDTH: f32 = 118.0;
 const CONTROL_HEIGHT: f32 = 20.0;
@@ -60,7 +63,7 @@ const FIND_GAP: f32 = 8.0;
 const CARET_WIDTH: f32 = 1.0;
 const CARET_INSET: f32 = 4.0;
 
-/// The sizes DESIGN.md's type table gives the panel.
+/// The sizes DESIGN.md's type table gives the page.
 const HEADING_SIZE: f32 = 12.0;
 const HEADING_TRACKING: f32 = 0.08;
 const LABEL_SIZE: f32 = 13.0;
@@ -95,7 +98,7 @@ pub(crate) struct Popover {
 /// A `surface-raised` popover under the strip, against the grid's left edge, with a
 /// hairline between it and the terminal behind it. It is not a modal and it does not
 /// resize the grid: the terminal keeps running underneath, and every letter still reaches
-/// it, which is the rule the settings panel follows and the reason a shell can be picked
+/// it, which is the rule the settings page follows and the reason a shell can be picked
 /// without stopping what the current one is doing.
 ///
 /// The shape is the strip's, scaled down. A row the question is on carries a two-pixel
@@ -105,7 +108,7 @@ pub(crate) struct Popover {
 /// weight is not touched: DESIGN.md gives 500 to the active tab and the section headings
 /// and to nothing else.
 ///
-/// The names come from the caller for the reason the panel's rows do — this crate is not
+/// The names come from the caller for the reason the page's rows do — this crate is not
 /// given the configuration and a second copy of what a profile *is* living next to the
 /// painter is how the two start disagreeing.
 ///
@@ -119,6 +122,7 @@ pub(crate) fn profile_picker(
     left: f32,
     top: f32,
     bottom: f32,
+    hover: &Hover,
 ) -> Popover {
     let palette = *input.palette;
     let width = PICKER_WIDTH.min((input.size.width - left - 2.0 * PAD).max(0.0));
@@ -150,7 +154,7 @@ pub(crate) fn profile_picker(
         PAD + HEADING_BOX + (last - first) as f32 * ROW + PAD,
     );
     paint.fill(rect, palette.surface_raised);
-    border(paint, rect, palette.hairline);
+    border(paint, rect, palette.hairline, 1.0);
 
     let caption = Rect::new(
         rect.x + PAD,
@@ -171,6 +175,13 @@ pub(crate) fn profile_picker(
     for (at, name) in picker.profiles.iter().enumerate().take(last).skip(first) {
         let row = Rect::new(rect.x, y, rect.width, ROW);
         let lit = at == picker.at;
+        let hovered = hover.of(Hit::Profile(at));
+        // The pointer's own row fills, which the picker did without and the menu does: both
+        // are lists of things to press, and with no glyphs to read the fill is what says what
+        // a click is about to do. The lamp is the other question — which row is *chosen* —
+        // and the two are drawn together without competing, because one is two pixels at the
+        // edge and the other is the row behind it.
+        paint.fill_at(row, palette.hairline, hovered);
         if lit {
             paint.fill(
                 Rect::new(row.x, row.y, PICKER_LAMP, row.height),
@@ -214,8 +225,8 @@ pub(crate) struct Menu {
 /// when there is no room is [`menu_rect`]'s decision, which is a plain function of the
 /// numbers and is tested as one.
 ///
-/// The row under the pointer is filled. That is the panel's rule rather than the picker's:
-/// a control in the panel fills the half a click will take, and a menu row is one control
+/// The row under the pointer is filled. That is the page's rule rather than the picker's:
+/// a control in the page fills the half a click will take, and a menu row is one control
 /// whose whole face is the target, so the fill is the whole row. The lamp the picker uses
 /// would be wrong here — the picker's lamp says which of several rows is *chosen*, and in a
 /// menu nothing is chosen until it is clicked.
@@ -227,21 +238,20 @@ pub(crate) fn context_menu(
     paint: &mut Painter<'_>,
     input: &ChromeInput<'_>,
     menu: &crate::MenuLine<'_>,
+    hover: &Hover,
 ) -> Menu {
     let palette = *input.palette;
     let width =
         crate::geometry::menu_width(menu.items, |item| paint.width(item, item_style(&palette)));
     let rect = crate::geometry::menu_rect(menu.at, width, menu.items.len(), input.size);
     paint.fill(rect, palette.surface_raised);
-    border(paint, rect, palette.hairline);
+    border(paint, rect, palette.hairline, 1.0);
 
     let mut rows = Vec::with_capacity(menu.items.len());
     let mut y = rect.y + MENU_PAD;
     for (at, item) in menu.items.iter().enumerate() {
         let row = Rect::new(rect.x, y, rect.width, MENU_ROW);
-        if input.pointer.is_some_and(|(x, y)| row.contains(x, y)) {
-            paint.fill(row, palette.hairline);
-        }
+        paint.fill_at(row, palette.hairline, hover.of(Hit::MenuItem(at)));
         // The label is given the menu less its padding, so a long item is cut by the
         // painter rather than running under the hairline — which cannot happen while the
         // width is measured from the items, and is what keeps it true if it ever is not.
@@ -261,16 +271,16 @@ pub(crate) fn context_menu(
 
 /// How a menu's items are set.
 ///
-/// The panel's label size and `ink`, because a menu is a list of words to read and press
+/// The page's label size and `ink`, because a menu is a list of words to read and press
 /// rather than a value to read off: the picker's dimmer `ink-mid` is for rows that are
 /// being chosen between, and every row of a menu is a thing the user can have.
 fn item_style(palette: &zet_config::Palette) -> TextStyle {
     TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink)
 }
 
-/// What the panel drew, so the caller can hit-test it and keep its scroll honest.
-pub(crate) struct Panel {
-    /// The panel itself.
+/// What the page drew, so the caller can hit-test it and keep its scroll honest.
+pub(crate) struct Page {
+    /// The page itself.
     pub rect: Rect,
     /// Every control that was on screen, and which line it belongs to.
     pub controls: Vec<(usize, SettingPart, Rect)>,
@@ -282,7 +292,7 @@ pub(crate) struct Panel {
     /// The heading line of the section that was drawn, when a rail was drawn at all.
     ///
     /// The answer to what the caller asked for, which is why it exists: the caller names a
-    /// section and the panel decides what that means, so the layout has to be able to say
+    /// section and the page decides what that means, so the layout has to be able to say
     /// which one it actually drew — a name that matched nothing shows the first section, and
     /// a caller keeping its own state in step needs to know that.
     pub shown: Option<usize>,
@@ -290,7 +300,7 @@ pub(crate) struct Panel {
     pub scroll: f32,
 }
 
-/// One section of the panel: a heading, and the rows under it.
+/// One section of the page: a heading, and the rows under it.
 ///
 /// The sections are the caller's headings and nothing else. What a setting *is* belongs to the
 /// configuration, which this crate is not given, so the words are the caller's and the
@@ -303,11 +313,11 @@ struct Section<'a> {
     /// The heading's text, which is what a caller names a section by.
     ///
     /// `None` for rows that came before any heading. Nothing current produces one, and a
-    /// caller who does gets a panel with no rail rather than rows quietly dropped.
+    /// caller who does gets a page with no rail rather than rows quietly dropped.
     name: Option<&'a str>,
 }
 
-/// The panel's sections, in the order the caller put them in.
+/// The page's sections, in the order the caller put them in.
 ///
 /// Always at least one, because a list with no headings has one section: itself.
 fn sections<'a>(lines: &'a [SettingLine<'a>]) -> Vec<Section<'a>> {
@@ -327,8 +337,8 @@ fn sections<'a>(lines: &'a [SettingLine<'a>]) -> Vec<Section<'a>> {
     }
     match out.first() {
         // Rows above the first heading are a section of their own, unnamed. They are not
-        // dropped: a panel that stopped listing rows because someone put them in the wrong
-        // order is a panel that hides settings.
+        // dropped: a page that stopped listing rows because someone put them in the wrong
+        // order is a page that hides settings.
         Some(first) if first.start != 0 => out.insert(
             0,
             Section {
@@ -360,119 +370,113 @@ fn resolve(name: Option<&str>, all: &[Section<'_>]) -> usize {
 
 /// Draw the rail, and answer where each of its items went.
 ///
-/// The panel's one control that is not a setting: the sections, in the order the caller put
-/// them in, with the one being shown filled. Items are set in the same type and the same
-/// upper case as the heading they stand for, because they are that heading — a rail item is
-/// not a second name for a section, it is the section's name, moved to where it can be used
-/// to choose.
+/// The page's one control that is not a setting: the sections, in the order the caller put
+/// them in, with the one being shown filled. An item is the section's own name in the same type
+/// as the heading it stands for, because it *is* that heading: a rail item is not a second name
+/// for a section, it is the section's name moved to where it can be used to choose.
 ///
-/// Laid out from the top of the panel with the panel's own padding, one row apart. A rail
-/// longer than the panel is not scrolled: sections are counted in single digits in every
+/// Laid out from the top of the page with the page's own padding, one row apart. A rail
+/// longer than the page is not scrolled: sections are counted in single digits in every
 /// configuration this app has, and a scrolling rail is a second scroll for the pointer's
 /// wheel to be sorted between.
 fn draw_rail(
     paint: &mut Painter<'_>,
     input: &ChromeInput<'_>,
-    panel: Rect,
+    page: Rect,
     width: f32,
     sections: &[Section<'_>],
     chosen: usize,
+    hover: &Hover,
 ) -> Vec<(usize, Rect)> {
     let palette = *input.palette;
     let mut items = Vec::with_capacity(sections.len());
-    let mut y = panel.y + PAD;
+    let mut y = page.y + PAD;
     for (index, section) in sections.iter().enumerate() {
-        let item = Rect::new(panel.x + PAD, y, (width - 2.0 * PAD).max(0.0), ROW);
-        // The panel's own pair of fills: `hairline` for the one you are on, `ground` for the
-        // one under the pointer. The same two the panel gives a control and its hover, which
+        let item = Rect::new(page.x + PAD, y, (width - 2.0 * PAD).max(0.0), ROW);
+        // The page's own pair of fills: `hairline` for the one you are on, `ground` for the
+        // one under the pointer. The same two the page gives a control and its hover, which
         // is what makes the rail read as part of the same surface rather than a second thing
         // bolted to its edge.
-        let hovered = input.pointer.is_some_and(|(x, y)| item.contains(x, y));
+        // The section you are on is `hairline` and is drawn on the frame it is chosen, which
+        // is not a hover: it is a fill that says which page this is, and a page that faded in
+        // would be a page that had not decided yet. Only the pointer's own item fades.
         if index == chosen {
             paint.fill(item, palette.hairline);
-        } else if hovered {
-            paint.fill(item, palette.ground);
+        } else {
+            paint.fill_at(item, palette.ground, hover.of(Hit::Section(section.start)));
         }
         let style =
             TextStyle::new(HEADING_SIZE, Weight::MEDIUM, palette.ink).tracking(HEADING_TRACKING);
         let baseline = paint.baseline_in(item, HEADING_SIZE);
-        paint.text(
-            &section.name.unwrap_or_default().to_uppercase(),
-            item.x,
-            baseline,
-            style,
-        );
+        // The caller's own words, neither upper-cased nor otherwise altered: `Appearance` is
+        // how the app spells it, and a case transform here would be the painter disagreeing
+        // with the configuration file about the name of a section.
+        paint.text(section.name.unwrap_or_default(), item.x, baseline, style);
         items.push((section.start, item));
         y += ROW;
     }
-    // The seam between the rail and the page: one pixel, the same hairline the panel's own
+    // The seam between the rail and the page: one pixel, the same hairline the page's own
     // left edge wears, because a seam inside a surface is a depth step and this crate has
     // exactly one way to say that.
     paint.fill(
-        Rect::new(panel.x + width, panel.y, 1.0, panel.height),
+        Rect::new(page.x + width, page.y, 1.0, page.height),
         palette.hairline,
     );
     items
 }
 
-/// How wide the rail is inside a panel of `width`.
+/// How wide the rail is inside a page of `width`.
 ///
-/// Two fifths of the panel at most, which only bites in a window too narrow to be showing the
-/// panel's full width anyway: at that point the rail is the part that gives, because a rail of
+/// Two fifths of the page at most, which only bites in a window too narrow to be showing the
+/// page's full width anyway: at that point the rail is the part that gives, because a rail of
 /// section names is legible truncated and a page of settings values is not.
 fn rail_width(width: f32) -> f32 {
     PANEL_RAIL.min(width * 0.4)
 }
 
-/// Draw the settings panel and answer where it went.
+/// Draw the settings page and answer where it went.
 ///
-/// A 380-pixel panel against the right edge, on `surface-raised`, with a hairline
-/// between it and anything behind it. It does not resize the grid: the terminal stays
-/// visible behind it and keeps updating, which DESIGN.md says is the reason the panel
-/// exists at all rather than a config file alone.
+/// The page occupies the content area — the same rectangle the grid would have had — on
+/// `surface-raised`, with a hairline between it and anything beside it. It is not an overlay
+/// and does not resize anything: the caller does not draw the terminal while this is up, so
+/// what is behind it is the window's own ground rather than a grid this is covering.
 ///
 /// The lines come from the caller. What a setting *is* belongs to the configuration,
 /// which this crate is not given, and a second copy of it living next to the painter is
-/// exactly how a panel and a file start disagreeing — so the panel owns the geometry,
+/// exactly how a page and a file start disagreeing — so the page owns the geometry,
 /// the type, and the hit regions, and the caller owns the words and the values.
 ///
-/// Lines that do not fit are scrolled rather than dropped. A panel that silently stops
-/// listing settings once the window is short is a panel where the user cannot find a
+/// Lines that do not fit are scrolled rather than dropped. A page that silently stops
+/// listing settings once the window is short is a page where the user cannot find a
 /// setting and has no way to tell that it is there.
-pub(crate) fn panel(
+pub(crate) fn page(
     paint: &mut Painter<'_>,
     input: &ChromeInput<'_>,
-    top: f32,
-    bottom: f32,
-    arrival: f32,
-) -> Panel {
+    content: Rect,
+    hover: &Hover,
+) -> Page {
     let palette = *input.palette;
-    // Narrower than the panel means the panel is the window. Letting it hang off the left
-    // edge would put the rail of a section nobody can read off the screen entirely.
-    let width = PANEL_WIDTH.min(input.size.width);
-    // The slide is a translation of the whole panel rather than a widening of it: the
-    // right edge is the window's and stays there, and what arrives is the left edge. The
-    // controls are laid out from the rectangle below, so they travel with it — a panel
-    // whose surface slid in over controls that were already in place would be worse than
-    // no motion at all.
-    let arrived = arrival.clamp(0.0, 1.0);
-    let rect = Rect::new(
-        input.size.width - width * arrived,
-        top,
-        width,
-        (input.size.height - top - bottom).max(0.0),
-    );
+    // The content area, given rather than worked out here: it is the grid's rectangle, and
+    // the chrome already computes it — a second opinion about where the content starts would
+    // be a page that disagreed with the terminal about the same row of pixels.
+    let rect = content;
     paint.fill(rect, palette.surface_raised);
-    paint.fill(
-        Rect::new(rect.x, rect.y, 1.0, rect.height),
-        palette.hairline,
-    );
+    // A hairline on the left edge only when something is there to be separated from: with the
+    // tabs in a rail the page begins beside it and the seam is real, and with the tabs in a row
+    // the page begins at the window's own edge, where a one-pixel line is a line drawn on
+    // nothing.
+    if rect.x > 0.0 {
+        paint.fill(
+            Rect::new(rect.x, rect.y, 1.0, rect.height),
+            palette.hairline,
+        );
+    }
 
     // The rail, and the page beside it. The rail exists only when there is more than one
     // section to choose between and every one of them has a name: a rail with a single item
     // in it is a control that cannot do anything, and a list of rows with no headings at all
     // — which a caller is free to hand over, and which this crate's own tests do — is one
-    // page and no rail, exactly as the panel was before there was a rail.
+    // page and no rail, exactly as the page was before there was a rail.
     let all = sections(input.settings);
     let railed = all.len() > 1 && all.iter().all(|section| section.name.is_some());
     let chosen = resolve(input.settings_section, &all);
@@ -481,7 +485,7 @@ pub(crate) fn panel(
     // The chosen section's rows and not its heading, when there is a rail: the rail says what
     // the section is, and a page repeating the word under the rail item that already says it
     // is a line of nothing. With no rail the page is the whole list, headings and all, which
-    // is what the panel drew before any of this existed.
+    // is what the page drew before any of this existed.
     let lines: Range<usize> = if railed {
         all[chosen].start + 1..all[chosen].end
     } else {
@@ -490,7 +494,7 @@ pub(crate) fn panel(
 
     let mut sections_out = Vec::new();
     if railed {
-        sections_out = draw_rail(paint, input, rect, rail, &all, chosen);
+        sections_out = draw_rail(paint, input, rect, rail, &all, chosen, hover);
     }
 
     // What the page would take, so the scroll can be clamped to the overflow rather than to a
@@ -527,12 +531,12 @@ pub(crate) fn panel(
             if visible(block, page) {
                 let style = TextStyle::new(HEADING_SIZE, Weight::MEDIUM, palette.ink)
                     .tracking(HEADING_TRACKING);
-                // Upper case here rather than in the caller's literal, because DESIGN.md
-                // fixes it as part of what a heading *is* — "12px uppercase with a
-                // hairline under it" — beside the size and the tracking that are already
-                // applied at this line and for the same reason. The app owns the words;
-                // the panel owns how a heading is set.
-                paint.centered(&setting.text.to_uppercase(), heading_box, style);
+                // The caller's own words. DESIGN.md used to fix the case here — "12px
+                // uppercase with a hairline under it" — and sentence case is what the
+                // document says now: a heading is set at 12px with a hairline under it, and
+                // the case is the app's. The app owns the words; the page owns how a heading
+                // is set, and no longer includes shouting among the things it decides.
+                paint.centered(setting.text, heading_box, style);
                 paint.fill(rule, palette.hairline);
             }
             y += height;
@@ -567,7 +571,16 @@ pub(crate) fn panel(
             );
             let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
             paint.centered(setting.text, label_box, style);
-            draw_control(paint, input, control, control_rect, setting.value, focused);
+            draw_control(
+                paint,
+                input,
+                control,
+                control_rect,
+                setting.value,
+                focused,
+                line,
+                hover,
+            );
             for (part, rect) in parts(control, control_rect) {
                 controls.push((line, part, rect));
             }
@@ -575,7 +588,7 @@ pub(crate) fn panel(
         y += height;
     }
 
-    Panel {
+    Page {
         rect,
         controls,
         sections: sections_out,
@@ -586,15 +599,15 @@ pub(crate) fn panel(
 
 /// Something the configuration file got wrong: a message, and how serious it is.
 ///
-/// Nothing is pushed into the panel's controls. There is nothing here to click, and a hit
+/// Nothing is pushed into the page's controls. There is nothing here to click, and a hit
 /// region for it would be a row that answers a click by doing nothing.
 ///
 /// The severity sits where a control's value would, so the word lands in the same column
 /// as the settings below it and the list reads as one table. The message keeps `ink` and
-/// the severity `ink_mid`, which is the panel's own split between what a row says and
+/// the severity `ink_mid`, which is the page's own split between what a row says and
 /// what it is — and no colour is spent on the pair, because `error` and `warning` are two
 /// degrees of the same thing, and a shade that meant "bad" would be claiming a difference
-/// the panel does not know how to draw at the warning end.
+/// the page does not know how to draw at the warning end.
 ///
 /// Culling is the caller's, and so is the row's height: this is handed a box that is
 /// already known to be on screen.
@@ -628,12 +641,12 @@ fn note(
 /// Containment, not intersection. There is no scissor under this — the painter pushes
 /// rectangles and glyphs straight into the frame — so a row that is scrolled half off
 /// the top of the list draws its control, its border and its value over whatever the
-/// chrome put above the panel, which is the tab strip. A row is drawn once all of it is
+/// chrome put above the page, which is the tab strip. A row is drawn once all of it is
 /// on the page, and the page's own padding is wide enough that it slides in over that
 /// rather than over the strip.
 ///
 /// Both axes, since the rail arrived. On the page's left the old answer was "nothing can be
-/// there" — a row is laid out the page's padding in from the panel's own edge — and that is
+/// there" — a row is laid out the page's padding in from the page's own edge — and that is
 /// no longer true: the rail is inside the surface, and a row wide enough to reach it would be
 /// a setting drawn under a section name.
 fn visible(box_: Rect, page: Rect) -> bool {
@@ -644,6 +657,7 @@ fn visible(box_: Rect, page: Rect) -> bool {
 }
 
 /// The eight pixels either side of a control that a hover reads as "on this one".
+#[allow(clippy::too_many_arguments)]
 fn draw_control(
     paint: &mut Painter<'_>,
     input: &ChromeInput<'_>,
@@ -651,39 +665,46 @@ fn draw_control(
     rect: Rect,
     value: &str,
     focused: bool,
+    line: usize,
+    hover: &Hover,
 ) {
     let palette = *input.palette;
     // A control is the ground behind a hairline, which is DESIGN.md's one depth
-    // mechanism applied to something that is not a surface: the panel is raised, so the
+    // mechanism applied to something that is not a surface: the page is raised, so the
     // thing you can press is recessed into it.
     paint.fill(rect, palette.ground);
-    let hovered = input.pointer.is_some_and(|(x, y)| rect.contains(x, y));
-    // The fill follows the click: the region the pointer is over is lit by asking the
-    // same list the click handler is given, so the two cannot disagree about how many
-    // ways a control can be pressed. A stepper answers twice and one half lights; every
-    // other control answers once and all of itself lights, which is what its whole face
-    // being the click target means. Filling the left half of everything said a toggle
-    // was two controls wearing one rectangle, and a click on the right half — which
-    // works — lit a region it was not in.
-    if let Some((_, lit)) = parts(control, rect)
-        .into_iter()
-        .find(|(_, part)| input.pointer.is_some_and(|(x, y)| part.contains(x, y)))
-    {
-        paint.fill(lit, palette.hairline);
+    // The fill follows the click: a half is lit by asking for the hover value of the very
+    // `Hit` the click handler is given, so the two cannot disagree about how many ways a
+    // control can be pressed. A stepper answers twice and one half lights; every other
+    // control answers once and all of itself lights, which is what its whole face being the
+    // click target means. Filling the left half of everything said a toggle was two controls
+    // wearing one rectangle, and a click on the right half — which works — lit a region it
+    // was not in.
+    //
+    // The edge is the *whole* control's, though, which a stepper's two halves do not
+    // describe: so it takes the larger of them, which is the half the pointer is in and zero
+    // when it is in neither.
+    let mut lit = 0.0_f32;
+    for (part, part_rect) in parts(control, rect) {
+        let half = hover.of(Hit::Setting { line, part });
+        lit = lit.max(half);
+        paint.fill_at(part_rect, palette.hairline, half);
     }
     // Three weights of the same hairline, and no fourth: the control you are on is
     // `ink`, the one under the pointer is `hairline-strong`, and the rest are `hairline`.
     // `signal` is the obvious colour for a focus ring and the wrong one — DESIGN.md gives
     // it a 3px by 40px budget and it is the app's one lamp, which a border around a
     // 118-pixel control would spend several times over.
-    let edge = if focused {
-        palette.ink
-    } else if hovered {
-        palette.hairline_strong
+    //
+    // Focus outranks the pointer for the same reason the active tab outranks it: the row the
+    // keyboard is on is where the next keystroke goes, and a row that dimmed to
+    // `hairline-strong` because a mouse happened to cross it would be lying about that.
+    if focused {
+        border(paint, rect, palette.ink, 1.0);
     } else {
-        palette.hairline
-    };
-    border(paint, rect, edge);
+        border(paint, rect, palette.hairline, 1.0 - lit);
+        border(paint, rect, palette.hairline_strong, lit);
+    }
     let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
     paint.centered(value, rect, style);
 }
@@ -713,7 +734,7 @@ fn parts(control: Control, rect: Rect) -> Vec<(SettingPart, Rect)> {
 ///
 /// The scroll the caller asked for and the row the keyboard is on are two answers to one
 /// question, and the second wins: a row the keyboard is on has to be on screen, or the keys
-/// move a highlight nobody can see and the panel looks broken rather than scrolled. A focus
+/// move a highlight nobody can see and the page looks broken rather than scrolled. A focus
 /// that is not in this page is left alone — the caller moves the section and the focus
 /// together, so a mismatch is a frame in flight rather than a row to scroll to.
 ///
@@ -739,7 +760,7 @@ fn page_scroll(input: &ChromeInput<'_>, lines: &Range<usize>, page: Rect) -> f32
 
 /// What one line of the page takes: the gap above it, and its own height.
 ///
-/// The one place the panel's vertical rhythm is written down. The walk in [`panel`] and
+/// The one place the page's vertical rhythm is written down. The walk in [`page`] and
 /// the two measurements below all go through this, so the scroll the caller asked for
 /// can be clamped to what actually overflows rather than to a number it guessed at, and
 /// the three of them cannot drift apart.
@@ -748,7 +769,7 @@ fn page_scroll(input: &ChromeInput<'_>, lines: &Range<usize>, page: Rect) -> f32
 /// before it, so the heading that opens a page is not pushed down by a gap with nothing
 /// above it to separate it from. `first` is the page's first line rather than the list's,
 /// which is the change the rail made: a heading that used to be the fourth line of the
-/// panel is now the first line of a page.
+/// page is now the first line of a page.
 fn block(setting: &SettingLine<'_>, first: bool) -> (f32, f32) {
     match setting.row {
         crate::Row::Heading => (
@@ -827,7 +848,7 @@ pub(crate) fn find_bar(paint: &mut Painter<'_>, input: &ChromeInput<'_>, height:
     // A focused input border is `hairline-strong`, and the field behind it is the
     // ground, so that the one thing on this row that takes typing looks like it.
     paint.fill(field, palette.ground);
-    border(paint, field, palette.hairline_strong);
+    border(paint, field, palette.hairline_strong, 1.0);
 
     let baseline = paint.baseline_in(field, HINT_SIZE);
     let label = TextStyle::new(HINT_SIZE, Weight::NORMAL, palette.ink_dim);
@@ -889,17 +910,24 @@ const fn plus(capped: bool) -> &'static str {
     if capped { "+" } else { "" }
 }
 
-/// A one-pixel outline inside `rect`.
-fn border(paint: &mut Painter<'_>, rect: Rect, color: zet_config::Rgb) {
-    paint.fill(Rect::new(rect.x, rect.y, rect.width, 1.0), color);
-    paint.fill(
+/// A one-pixel outline inside `rect`, at a coverage.
+///
+/// The coverage is what a hover cross-fading a control's edge is made of: the edge it is
+/// leaving and the edge it is arriving at are drawn over each other, each at its share of the
+/// transition. A zero coverage draws nothing at all, which is what makes the resting case
+/// cost exactly what it did before there was a hover.
+fn border(paint: &mut Painter<'_>, rect: Rect, color: zet_config::Rgb, alpha: f32) {
+    paint.fill_at(Rect::new(rect.x, rect.y, rect.width, 1.0), color, alpha);
+    paint.fill_at(
         Rect::new(rect.x, rect.bottom() - 1.0, rect.width, 1.0),
         color,
+        alpha,
     );
-    paint.fill(Rect::new(rect.x, rect.y, 1.0, rect.height), color);
-    paint.fill(
+    paint.fill_at(Rect::new(rect.x, rect.y, 1.0, rect.height), color, alpha);
+    paint.fill_at(
         Rect::new(rect.right() - 1.0, rect.y, 1.0, rect.height),
         color,
+        alpha,
     );
 }
 
@@ -919,15 +947,21 @@ pub(crate) fn scrollbar(
     top: f32,
     bottom: f32,
     scroll: ScrollState,
+    hover: &Hover,
 ) -> Option<(Rect, Rect)> {
     if scroll.visible >= 1.0 {
         return None;
     }
     let palette = *input.palette;
-    let hovered = input
-        .pointer
-        .is_some_and(|(x, _)| x >= input.size.width - SCROLLBAR_HOVER);
-    let width = if hovered { SCROLLBAR_HOVER } else { SCROLLBAR };
+    // The width is the one thing in the chrome that a hover moves rather than colours, so it
+    // is the one place the value is a distance. The band that lights it is wider than the
+    // track it lights — see `Chrome::hover_target`, which is where that is squared with the
+    // key the value is filed under — so the target is one and the drawn width is a lerp of it.
+    let width = lerp(
+        SCROLLBAR,
+        SCROLLBAR_HOVER,
+        hover.of(Hit::Scrollbar(crate::Scrollbar::Thumb)),
+    );
     let track = Rect::new(
         input.size.width - width,
         top,
