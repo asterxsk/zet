@@ -24,8 +24,15 @@
 // and nothing else here casts at all.
 #![allow(clippy::cast_precision_loss)]
 
-use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HWND, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Graphics::Gdi::{COLOR_HIGHLIGHT, GetSysColor};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
+use windows_sys::Win32::System::Console::{
+    ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    SetStdHandle,
+};
 use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
@@ -62,6 +69,79 @@ pub fn alert(title: &str, message: &str) {
             title.as_ptr(),
             MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
         );
+    }
+}
+
+/// Attach to the console zet was launched from, if there is one.
+///
+/// zet is a GUI-subsystem binary so that Windows never gives it a console of its own: a
+/// launch from Explorer makes one window appear and no more. That also means the process
+/// starts with no standard handles, and without them `--help`, `--version`,
+/// `--check-update`, and the configuration diagnostics print into nothing.
+///
+/// Attaching to the parent covers the other launch path. A user who typed `zet` in a shell
+/// has a console already and the output belongs there; Explorer has none, and that failure
+/// is the ordinary GUI launch rather than something to report.
+///
+/// A handle that is already open is left alone. Redirection is the caller saying where the
+/// output goes — a pipe in a test, a file in a script — and a fix for a missing console must
+/// not undo it. Only the nulls, which are what a GUI-subsystem process is born with, are
+/// pointed at the console.
+pub fn attach_console() {
+    // SAFETY: `AttachConsole` takes a process id and either attaches this process to that
+    // process's console or fails. `ATTACH_PARENT_PROCESS` is the documented "whatever
+    // started me" sentinel, and the return value is a boolean that needs no cleanup either
+    // way. Nothing this process owns is invalidated by a failure.
+    //
+    // The result is deliberately not the gate. `AttachConsole` fails both when there is no
+    // console to attach to and when the process already has one, and the second case still
+    // needs its null handles filled in. The devices below decide instead — opening `CONOUT$`
+    // succeeds when a console is there and fails when one is not.
+    let _ = unsafe { AttachConsole(ATTACH_PARENT_PROCESS) };
+
+    // The console's own devices rather than handles Windows handed us: after attaching,
+    // `GetStdHandle` can still answer with what the process was created with, which for a
+    // GUI-subsystem process can be nothing at all.
+    //
+    // Output and error only. Standard input is deliberately left alone: zet never reads it —
+    // keystrokes arrive through the window and go to a session's pty — so there is nothing
+    // to reconnect.
+    for (device, access, standard) in [
+        ("CONOUT$", GENERIC_READ | GENERIC_WRITE, STD_OUTPUT_HANDLE),
+        ("CONOUT$", GENERIC_READ | GENERIC_WRITE, STD_ERROR_HANDLE),
+    ] {
+        // SAFETY: `GetStdHandle` takes one of the three documented constants and returns the
+        // process's current handle, which is null or `INVALID_HANDLE_VALUE` when there is
+        // none. Neither value is dereferenced or closed here.
+        let current = unsafe { GetStdHandle(standard) };
+        if !current.is_null() && current != INVALID_HANDLE_VALUE {
+            continue;
+        }
+        let name = wide(device);
+        // SAFETY: `name` is a null-terminated UTF-16 buffer that outlives the call. A null
+        // security descriptor and template are the documented "default" and "none", and
+        // `OPEN_EXISTING` opens the console device that is already there rather than creating
+        // a file. Share mode is read and write because the console is shared with everything
+        // else attached to it.
+        let handle = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                access,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                0,
+                std::ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            continue;
+        }
+        // SAFETY: `standard` is one of the constants `SetStdHandle` accepts and `handle` is a
+        // live console handle this process owns. The call replaces the process's standard
+        // handle and returns a boolean; the handle stays open for the life of the process,
+        // which is what a standard handle is.
+        unsafe { SetStdHandle(standard, handle) };
     }
 }
 

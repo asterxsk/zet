@@ -9,7 +9,29 @@ counts as a breaking change in a terminal, is in
 
 ## [Unreleased]
 
-Nothing yet. The next release's changes go here.
+### Fixed
+
+- **`zet`** — every launch opened a second, empty console window behind the window zet was
+  drawing.
+  - `zet.exe` was built as a console-subsystem application, so Windows allocated a console
+    for it at startup whether or not anyone had asked for one. On Windows 11 that console is
+    hosted by Windows Terminal rather than by conhost, which is the window a user saw: an
+    empty terminal behind the real one, on every launch, that was no part of zet and had
+    nothing to type into.
+  - The binary is now a GUI-subsystem application — `windows_subsystem = "windows"` in
+    `crates/zet/src/main.rs` — so Windows creates no console for it at all and that window is
+    never allocated, on any machine, whether or not Windows Terminal is installed.
+  - The command line is preserved anyway, because a terminal that cannot be asked `--version`
+    is a terminal whose bug reports cannot name a build. `platform::attach_console`, in
+    `crates/zet/src/platform.rs`, runs at startup and attaches the process to its parent's
+    console when it was launched from a shell, which is what keeps `--help`, `--version`,
+    `--check-update`, `--update`, and the configuration diagnostics `run` prints to stderr
+    reaching the terminal the command was typed in.
+  - Attaching is only half of it: a GUI-subsystem process can still be born with no standard
+    handles, so a null output or error handle is reopened against the attached console with
+    `CONOUT$`. A handle that was redirected, to a pipe or a file, is left exactly as it was:
+    redirection is the caller saying where the output goes, and a fix for a missing console
+    must not undo it.
 
 Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compatibility; see
 [Versioning](README.md#versioning).

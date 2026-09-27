@@ -42,6 +42,12 @@ thiserror.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    # `CreateFileW` plus the access, share and disposition constants, for reopening
+    # `CONOUT$`/`CONIN$` once the parent console is attached.
+    "Win32_Storage_FileSystem",
+    # `AttachConsole`, `GetStdHandle`, `SetStdHandle`, and the `STD_*`/`ATTACH_PARENT_PROCESS`
+    # constants: how a GUI-subsystem launch finds the console it came from.
+    "Win32_System_Console",
     # `OpenClipboard` and the three calls that follow it.
     "Win32_System_DataExchange",
     # `GlobalAlloc`/`GlobalLock`, which is the only way to hand a string to the clipboard.

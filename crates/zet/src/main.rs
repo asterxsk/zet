@@ -10,6 +10,18 @@
 //! window, and the three modules that talk to Win32. [`host`] is the event loop's
 //! callback and the only place the platform and the state machine meet.
 
+// zet is a GUI program, and the PE subsystem is what decides whether Windows gives it a
+// console window of its own. A console-subsystem binary launched from Explorer is handed a
+// console, and on Windows 11 that console is hosted by Windows Terminal — which is the
+// second, empty window that used to open behind the terminal. A GUI-subsystem binary is
+// given no console at all, so there is nothing to appear.
+//
+// The command line is not lost with the console. `main` attaches to the parent console
+// before anything is printed (see `platform::attach_console`), which is what keeps
+// `--help`, `--version`, `--check-update`, `--update`, and the configuration diagnostics
+// reaching the terminal a shell launch came from.
+#![windows_subsystem = "windows"]
+
 // The crate's lints live in `Cargo.toml`, and `unsafe_code` is denied there rather than
 // forbidden — `clipboard`, `platform` and `picture` call Win32 directly and each says so
 // at the top of its own file. Nothing else in the binary contains an `unsafe` block.
@@ -68,6 +80,9 @@ published, and the new version takes effect the next time zet starts rather than
 See PRIVACY.md for what the requests disclose.";
 
 fn main() -> ExitCode {
+    // A GUI-subsystem binary is given no console, so a launch from a shell has to attach to
+    // the one it came from before anything is printed — see `platform::attach_console`.
+    platform::attach_console();
     match parse(std::env::args().skip(1)) {
         Args::Help => {
             println!("{USAGE}");
