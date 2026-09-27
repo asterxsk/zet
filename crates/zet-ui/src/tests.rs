@@ -326,6 +326,17 @@ fn cell_of(chrome: &Chrome, id: TabId) -> Rect {
         .1
 }
 
+/// Where a tab's × went, when it was drawn this frame.
+///
+/// `None` when the mark was not drawn, which is the state that makes it unhittable: the region
+/// and the drawing are one decision, so this answers both.
+fn close_rect(chrome: &Chrome, id: TabId) -> Option<Rect> {
+    chrome.regions().iter().find_map(|region| match region {
+        crate::Region::CloseTab { id: found, rect } if *found == id => Some(*rect),
+        _ => None,
+    })
+}
+
 /// The bar the indicator drew: `signal`, two pixels on the strip's edge.
 fn indicator(frame: &Frame, palette: &Palette) -> Option<Quad> {
     let color = palette.signal.to_linear().map(f32::to_bits);
@@ -874,10 +885,12 @@ fn the_gap_between_the_last_tab_and_the_captions_is_the_drag_region() {
 // ---------------------------------------------------------------------------------
 
 #[test]
-fn a_hovered_tab_gains_a_bar_and_nothing_else() {
+fn a_hovered_tab_gets_a_bar_and_a_mark() {
     // The single most important assertion in this crate. Filling a hovered tab is what
     // DESIGN.md singles out as the way a tab strip starts looking like everyone else's,
-    // and it is a one-line mistake no other test here would notice.
+    // and it is a one-line mistake no other test here would notice. A hover now adds two
+    // things rather than one — the preview bar and the × — so the bar is found by its colour
+    // rather than by being the only rectangle there, and the mark is named.
     let palette = Palette::instrument();
     let mut tabs = tabs(&[1, 2]);
     let mut chrome = chrome();
@@ -888,24 +901,40 @@ fn a_hovered_tab_gains_a_bar_and_nothing_else() {
     tabs[1].hovered = true;
     let hovered = settled(&mut chrome, &input(&palette, &tabs, window()), 0.0);
 
-    let mut extra = quads_only_in(&hovered.frame, &calm.frame);
-    assert_eq!(
-        extra.len(),
-        1,
-        "hovering added {} rectangles, not one: {extra:?}",
-        extra.len()
-    );
-    let bar = extra.remove(0);
-    assert_eq!(
-        bar.color.map(f32::to_bits),
-        color(palette.signal_dim),
-        "what appears is the indicator's preview colour"
-    );
+    let extra = quads_only_in(&hovered.frame, &calm.frame);
+    let signal_dim = color(palette.signal_dim);
+    let ink_mid = palette.ink_mid.to_linear();
+    let bar = extra
+        .iter()
+        .find(|quad| quad.color.map(f32::to_bits) == signal_dim)
+        .expect("what appears is the indicator's preview colour");
     assert!(
         (bar.rect[3] - 2.0).abs() < f32::EPSILON,
         "and it is the bar's row"
     );
     assert!((bar.rect[1] - (ROW_HEIGHT - 2.0)).abs() < f32::EPSILON);
+
+    // The × sits in the cell's right padding, in `ink-mid` at rest.
+    let cell = tab_rect(&chrome, 2);
+    let mark = close_rect(&chrome, TabId::Terminal(2)).expect("the hovered cell's ×");
+    assert_eq!(
+        mark,
+        Rect::new(cell.right() - 12.0, cell.y, 12.0, cell.height),
+        "the × is not the cell's right padding"
+    );
+    assert!(
+        extra.iter().any(|quad| same(stripped(quad.color), ink_mid)),
+        "the × was not drawn in `ink-mid`"
+    );
+    // The bar and the × and nothing else: a hover that reached further would light a control
+    // the pointer is not on.
+    for quad in &extra {
+        assert!(
+            quad.color.map(f32::to_bits) == signal_dim || same(stripped(quad.color), ink_mid),
+            "a hovered tab drew something that is neither the bar nor the ×: {:?}",
+            quad.color
+        );
+    }
     assert!(
         quads_only_in(&calm.frame, &hovered.frame).is_empty(),
         "hovering took something away"
@@ -924,6 +953,161 @@ fn a_hovered_tab_gains_a_bar_and_nothing_else() {
     };
     assert!(index(&hovered.frame, color(palette.ink_mid)));
     assert!(index(&calm.frame, color(palette.ink_dim)));
+}
+
+// ---------------------------------------------------------------------------------
+// The close mark
+// ---------------------------------------------------------------------------------
+
+#[test]
+fn the_run_does_not_move_when_the_pointer_crosses_it() {
+    // The × lives in padding a cell already has, so a pointer arriving on a tab — and leaving
+    // it on the mark — must not move a single cell. The thing this catches is the slot being
+    // made conditional later: the moment a name is fitted around a mark that appears with the
+    // pointer, the run reflows under the pointer and every cell twitches as the mouse crosses.
+    let palette = Palette::instrument();
+    let calm = tabs(&[1, 2]);
+    let mut raised = tabs(&[1, 2]);
+    raised[0].hovered = true;
+
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &calm, window()));
+    let nowhere = tab_rects(&chrome);
+
+    let cell = tab_rect(&chrome, 1);
+    let mut on_tab = input(&palette, &raised, window());
+    on_tab.pointer = Some((cell.x + 4.0, cell.center().1));
+    draw(&mut chrome, &on_tab);
+    let on_the_cell = tab_rects(&chrome);
+
+    let mark = (cell.right() - 6.0, cell.center().1);
+    let mut on_mark = input(&palette, &raised, window());
+    on_mark.pointer = Some(mark);
+    draw(&mut chrome, &on_mark);
+    let on_the_mark = tab_rects(&chrome);
+
+    assert_eq!(nowhere, on_the_cell, "the pointer on a cell moved the run");
+    assert_eq!(nowhere, on_the_mark, "the pointer on a mark moved the run");
+}
+
+#[test]
+fn a_close_mark_sits_in_the_padding_a_cell_already_has() {
+    let palette = Palette::instrument();
+    for position in [TabPosition::Top, TabPosition::Left] {
+        let settings = TabSettings {
+            position,
+            ..TabSettings::default()
+        };
+        let mut chrome = Chrome::new(&settings, &WindowSettings::default());
+        let calm = tabs(&[1, 2]);
+        draw(&mut chrome, &input(&palette, &calm, window()));
+        let width = tab_rect(&chrome, 1).width;
+
+        let mut raised = tabs(&[1, 2]);
+        raised[0].hovered = true;
+        draw(&mut chrome, &input(&palette, &raised, window()));
+        let cell = tab_rect(&chrome, 1);
+        let mark = close_rect(&chrome, TabId::Terminal(1))
+            .unwrap_or_else(|| panic!("no × in {position:?}"));
+        assert_eq!(
+            mark,
+            Rect::new(cell.right() - 12.0, cell.y, 12.0, cell.height),
+            "the × is not the cell's right `TAB_PADDING` in {position:?}"
+        );
+        assert!(
+            (cell.width - width).abs() < f32::EPSILON,
+            "the mark changed a cell's width in {position:?}"
+        );
+    }
+}
+
+#[test]
+fn a_close_mark_is_hit_before_the_tab_it_is_in() {
+    let palette = Palette::instrument();
+    let mut raised = tabs(&[1, 2]);
+    raised[0].hovered = true;
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &raised, window()));
+
+    let cell = tab_rect(&chrome, 1);
+    let mark = close_rect(&chrome, TabId::Terminal(1)).expect("the hovered cell's ×");
+    assert_eq!(
+        chrome.hit(mark.center().0, mark.center().1),
+        Hit::CloseTab(TabId::Terminal(1)),
+        "a point in the mark is not the mark"
+    );
+    assert_eq!(
+        chrome.hit(cell.x + 4.0, cell.center().1),
+        Hit::Tab(TabId::Terminal(1)),
+        "a point on the number is not the tab"
+    );
+}
+
+#[test]
+fn a_close_mark_that_is_not_drawn_is_not_hit() {
+    // A click through an invisible mark would close a tab the user never aimed at, so the mark
+    // is hittable exactly while it is drawn: with the pointer off the strip, the same padding
+    // answers as the tab.
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &tabs, window()));
+
+    let cell = tab_rect(&chrome, 1);
+    assert!(
+        close_rect(&chrome, TabId::Terminal(1)).is_none(),
+        "a mark was published with the pointer nowhere"
+    );
+    assert_eq!(
+        chrome.hit(cell.right() - 6.0, cell.center().1),
+        Hit::Tab(TabId::Terminal(1)),
+        "the right padding did not answer as the tab"
+    );
+}
+
+#[test]
+fn the_settings_cell_has_a_close_mark_of_its_own() {
+    let palette = Palette::instrument();
+    let mut items = terminals_and_settings(&[1]);
+    let last = items.len() - 1;
+    items[last].hovered = true;
+    let mut chrome = chrome();
+    let mut input = input(&palette, &items, window());
+    show_settings(&mut input);
+    draw(&mut chrome, &input);
+
+    let mark = close_rect(&chrome, TabId::Settings).expect("the settings cell's ×");
+    assert_eq!(
+        chrome.hit(mark.center().0, mark.center().1),
+        Hit::CloseTab(TabId::Settings),
+        "the settings tab's mark does not name the settings tab"
+    );
+}
+
+#[test]
+fn a_mark_under_the_pointer_keeps_its_cell_lit() {
+    // The mark is inside the cell, so `hit` answers with the mark while the pointer is on it.
+    // The chrome names the cell as well, or the cell would fade the moment the pointer reached
+    // its own × — fading the × out from under the pointer.
+    let palette = Palette::instrument();
+    let mut items = tabs(&[1, 2]);
+    let mut chrome = chrome();
+    draw(&mut chrome, &input(&palette, &items, window()));
+
+    items[1].hovered = true;
+    let cell = tab_rect(&chrome, 2);
+    let mut input = input(&palette, &items, window());
+    input.pointer = Some((cell.right() - 6.0, cell.center().1));
+    let _ = settled(&mut chrome, &input, 0.0);
+
+    assert!(
+        (chrome.hover.of(Hit::Tab(TabId::Terminal(2))) - 1.0).abs() < 1e-3,
+        "the cell went dark under its own ×"
+    );
+    assert!(
+        (chrome.hover.of(Hit::CloseTab(TabId::Terminal(2))) - 1.0).abs() < 1e-3,
+        "the mark itself is not lit under the pointer"
+    );
 }
 
 #[test]
@@ -3425,7 +3609,9 @@ fn an_open_menu_is_drawn_and_hit_above_everything_else() {
         items: &["Close tab", "Close other tabs"],
         at: close.center(),
     });
-    let drawn = draw(&mut chrome, &with_menu);
+    // The menu arrives over `APPEAR`, so it is drawn at nothing on the frame it opens and is
+    // asked about here once it has landed: this test is about the layering it ends at.
+    let drawn = settled(&mut chrome, &with_menu, 0.0);
 
     let kinds: Vec<BatchKind> = drawn.frame.batches.iter().map(|batch| batch.kind).collect();
     assert_eq!(
@@ -3489,7 +3675,9 @@ fn the_title_under_a_menu_is_not_in_the_batch_the_menu_is() {
         items: &["Close tab"],
         at: cell.center(),
     });
-    let painted = draw(&mut chrome, &with_menu);
+    // Settled past `APPEAR`: on the frame it opens the menu is at nothing, and this test is
+    // about where its text lands once it is up.
+    let painted = settled(&mut chrome, &with_menu, 0.0);
 
     let menu = menu_rect_of(&chrome);
     assert!(
@@ -4598,8 +4786,10 @@ fn a_hovered_active_tab_keeps_its_ink_and_gains_no_bar() {
     // The active tab outranks the pointer, for the same reason focus outranks it in the
     // panel: the tab that is open is where the shell is, and a tab that dimmed to `ink-mid`
     // because a mouse crossed it would be lying about that. Its bar is already there, at
-    // `signal` rather than `signal-dim`, so the hover has nothing left to say and draws
-    // nothing at all.
+    // `signal` rather than `signal-dim`, so the hover draws no preview bar of its own. What
+    // it does add is the ×, which belongs to every cell a pointer is over — the active one
+    // included — because the ink rule the pointer loses to is a rule about *ink*, not about
+    // whether the cell draws its mark.
     let palette = Palette::instrument();
     let mut tabs = tabs(&[1, 2]);
     let mut chrome = chrome();
@@ -4608,9 +4798,16 @@ fn a_hovered_active_tab_keeps_its_ink_and_gains_no_bar() {
     tabs[0].hovered = true;
     let hovered = settled(&mut chrome, &input(&palette, &tabs, window()), 0.0);
 
+    let signal_dim = color(palette.signal_dim);
     assert!(
-        quads_only_in(&hovered.frame, &calm.frame).is_empty(),
-        "hovering the active tab drew something"
+        !quads_only_in(&hovered.frame, &calm.frame)
+            .iter()
+            .any(|quad| quad.color.map(f32::to_bits) == signal_dim),
+        "hovering the active tab drew a preview bar it already has"
+    );
+    assert!(
+        close_rect(&chrome, TabId::Terminal(1)).is_some(),
+        "the hovered active tab drew no ×"
     );
     let x = tab_rect(&chrome, 1).x + 12.0;
     let number = hovered
@@ -4654,4 +4851,186 @@ fn every_hover_is_a_palette_colour_at_a_coverage() {
             assert_palette_only(&palette, &draw(&mut chrome, &input).frame);
         }
     }
+}
+
+// ---------------------------------------------------------------------------------
+// The arrival transition
+// ---------------------------------------------------------------------------------
+
+#[test]
+fn a_tab_that_has_arrived_fades_in_and_one_that_was_here_does_not() {
+    // A window's own first tabs are at full on the frame it opens — there is no frame behind
+    // them for them to arrive after. A tab that appears on a later frame does arrive, and its
+    // ink rises over `APPEAR`; a tab that was already there stays at full throughout.
+    let palette = Palette::instrument();
+    let mut chrome = chrome();
+    let one = tabs(&[1]);
+    chrome.set_time(0.0);
+    draw(&mut chrome, &input(&palette, &one, window()));
+    assert!(
+        (chrome.presence.of(TabId::Terminal(1)) - 1.0).abs() < 1e-3,
+        "a tab on the window's first frame faded in"
+    );
+
+    let two = tabs(&[1, 2]);
+    chrome.set_time(crate::geometry::APPEAR);
+    draw(&mut chrome, &input(&palette, &two, window()));
+    assert!(
+        chrome.presence.of(TabId::Terminal(2)) < 1e-3,
+        "the new tab was already lit on the frame it arrived"
+    );
+    assert!(
+        (chrome.presence.of(TabId::Terminal(1)) - 1.0).abs() < 1e-3,
+        "a tab that was already here faded"
+    );
+
+    chrome.set_time(2.0 * crate::geometry::APPEAR);
+    draw(&mut chrome, &input(&palette, &two, window()));
+    assert!(
+        (chrome.presence.of(TabId::Terminal(2)) - 1.0).abs() < 1e-3,
+        "the new tab never arrived"
+    );
+}
+
+#[test]
+fn an_arriving_surface_fades_and_a_departing_one_is_gone() {
+    let palette = Palette::instrument();
+    let tabs = tabs(&[1]);
+    let items = ["New tab", "New window"];
+    let mut chrome = chrome();
+    let mut input = input(&palette, &tabs, window());
+    chrome.set_time(0.0);
+    draw(&mut chrome, &input);
+
+    input.menu = Some(MenuLine {
+        items: &items,
+        at: (40.0, 60.0),
+    });
+    chrome.set_time(crate::geometry::APPEAR);
+    draw(&mut chrome, &input);
+    assert!(
+        chrome.surfaces.of(crate::Surface::Menu) < 1e-3,
+        "the menu was already lit on the frame it arrived"
+    );
+
+    chrome.set_time(1.5 * crate::geometry::APPEAR);
+    draw(&mut chrome, &input);
+    let risen = chrome.surfaces.of(crate::Surface::Menu);
+    assert!(
+        risen > 0.0 && risen < 1.0,
+        "the menu did not rise across its span: {risen}"
+    );
+
+    chrome.set_time(2.0 * crate::geometry::APPEAR);
+    let open = draw(&mut chrome, &input);
+    assert!(
+        (chrome.surfaces.of(crate::Surface::Menu) - 1.0).abs() < 1e-3,
+        "the menu never arrived"
+    );
+    let rect = menu_rect_of(&chrome);
+    assert!(
+        open.frame.quads.iter().any(|quad| within(quad, rect)),
+        "the menu drew nothing while it was up"
+    );
+
+    // The menu leaves the input, and it is gone: the caller only draws a menu it has, so
+    // nothing is drawn from it on the frame it leaves — nothing leaves gradually on screen —
+    // and one span later its entry, which eases out internally like a hover's, is dropped.
+    input.menu = None;
+    chrome.set_time(3.0 * crate::geometry::APPEAR);
+    let gone = draw(&mut chrome, &input);
+    assert!(
+        !gone.frame.quads.iter().any(|quad| within(quad, rect)),
+        "the menu drew after it left the input"
+    );
+    chrome.set_time(5.0 * crate::geometry::APPEAR);
+    draw(&mut chrome, &input);
+    assert!(
+        chrome.surfaces.of(crate::Surface::Menu) < 1e-3,
+        "the menu's entry outlived the menu"
+    );
+}
+
+#[test]
+fn the_page_is_there_on_the_frame_it_opens() {
+    // The settings page replaces what is on screen rather than arriving over it, so it has no
+    // coverage to raise: it is at full ink on the frame it opens, which is the opposite of the
+    // menu, whose first frame is at nothing. Asserted the same way — a colour read off a glyph.
+    let palette = Palette::instrument();
+    let lines = settings_lines();
+    let (_, drawn) = open_panel(&palette, &lines);
+
+    let heading = drawn
+        .frame
+        .glyphs
+        .iter()
+        .find(|glyph| char::from_u32(glyph.uv[1] as u32) == Some('A'))
+        .expect("the page did not draw its heading");
+    assert!(
+        same(stripped(heading.color), palette.ink.to_linear()),
+        "the page faded in: {:?}",
+        heading.color
+    );
+}
+
+#[test]
+fn the_frame_clock_runs_while_anything_is_arriving() {
+    // What the window's frame clock is built on, for the transition a hover does not own: a
+    // tab that has just arrived has to keep the loop waking until its ink has landed, or the
+    // fade freezes partway with nothing left to finish it.
+    let palette = Palette::instrument();
+    let mut chrome = chrome();
+    let one = tabs(&[1]);
+    chrome.set_time(0.0);
+    draw(&mut chrome, &input(&palette, &one, window()));
+    assert!(
+        !chrome.moving(),
+        "a chrome with nothing arriving is still reported as moving"
+    );
+
+    let two = tabs(&[1, 2]);
+    chrome.set_time(crate::geometry::APPEAR / 2.0);
+    draw(&mut chrome, &input(&palette, &two, window()));
+    assert!(
+        chrome.moving(),
+        "a tab arriving did not wake the frame clock"
+    );
+
+    // A whole span past the arrival rather than exactly one: `APPEAR / 2.0 + APPEAR` does not
+    // round back to the span the new tab was started a half span into, and the point here is
+    // the clock stopping rather than an end that floats a few ulps short of its own span.
+    chrome.set_time(2.0 * crate::geometry::APPEAR);
+    draw(&mut chrome, &input(&palette, &two, window()));
+    assert!(
+        !chrome.moving(),
+        "the clock is still running once every fade has landed"
+    );
+}
+
+#[test]
+fn nothing_fades_when_motion_is_reduced() {
+    // DESIGN.md's rule reaching the arrival too: with reduce motion the new tab is at full on
+    // the frame it appears rather than rising over a span it should not spend.
+    let palette = Palette::instrument();
+    let mut chrome = chrome();
+    let one = tabs(&[1]);
+    let mut calm = input(&palette, &one, window());
+    calm.reduce_motion = true;
+    chrome.set_time(0.0);
+    draw(&mut chrome, &calm);
+
+    let two = tabs(&[1, 2]);
+    let mut arriving = input(&palette, &two, window());
+    arriving.reduce_motion = true;
+    chrome.set_time(crate::geometry::APPEAR / 2.0);
+    draw(&mut chrome, &arriving);
+
+    assert!(
+        (chrome.presence.of(TabId::Terminal(2)) - 1.0).abs() < 1e-3,
+        "an arriving tab faded under reduce motion"
+    );
+    assert!(
+        !chrome.moving(),
+        "reduce motion started a transition it will not finish"
+    );
 }

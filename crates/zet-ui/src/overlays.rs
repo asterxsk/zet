@@ -115,6 +115,7 @@ pub(crate) struct Popover {
 /// Rows that do not fit are scrolled to rather than dropped, and the row the question is
 /// on is scrolled into view first: a list that runs off the bottom of the window is a
 /// shell the user can select and cannot see.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn profile_picker(
     paint: &mut Painter<'_>,
     input: &ChromeInput<'_>,
@@ -123,6 +124,7 @@ pub(crate) fn profile_picker(
     top: f32,
     bottom: f32,
     hover: &Hover,
+    alpha: f32,
 ) -> Popover {
     let palette = *input.palette;
     let width = PICKER_WIDTH.min((input.size.width - left - 2.0 * PAD).max(0.0));
@@ -153,8 +155,8 @@ pub(crate) fn profile_picker(
         width,
         PAD + HEADING_BOX + (last - first) as f32 * ROW + PAD,
     );
-    paint.fill(rect, palette.surface_raised);
-    border(paint, rect, palette.hairline, 1.0);
+    paint.fill_at(rect, palette.surface_raised, alpha);
+    border(paint, rect, palette.hairline, alpha);
 
     let caption = Rect::new(
         rect.x + PAD,
@@ -162,7 +164,7 @@ pub(crate) fn profile_picker(
         (rect.width - 2.0 * PAD).max(0.0),
         HEADING_BOX,
     );
-    let label = TextStyle::new(HINT_SIZE, Weight::NORMAL, palette.ink_dim);
+    let label = TextStyle::new(HINT_SIZE, Weight::NORMAL, palette.ink_dim).faded(alpha);
     paint.text(
         PICKER_LABEL,
         caption.x,
@@ -181,11 +183,12 @@ pub(crate) fn profile_picker(
         // a click is about to do. The lamp is the other question — which row is *chosen* —
         // and the two are drawn together without competing, because one is two pixels at the
         // edge and the other is the row behind it.
-        paint.fill_at(row, palette.hairline, hovered);
+        paint.fill_at(row, palette.hairline, hovered * alpha);
         if lit {
-            paint.fill(
+            paint.fill_at(
                 Rect::new(row.x, row.y, PICKER_LAMP, row.height),
                 palette.signal,
+                alpha,
             );
         }
         // The name is given the rest of the row, less the lamp and the padding on both
@@ -200,7 +203,8 @@ pub(crate) fn profile_picker(
             LABEL_SIZE,
             Weight::NORMAL,
             if lit { palette.ink } else { palette.ink_mid },
-        );
+        )
+        .faded(alpha);
         paint.centered(name, text, style);
         rows.push((at, row));
         y += ROW;
@@ -239,19 +243,20 @@ pub(crate) fn context_menu(
     input: &ChromeInput<'_>,
     menu: &crate::MenuLine<'_>,
     hover: &Hover,
+    alpha: f32,
 ) -> Menu {
     let palette = *input.palette;
     let width =
         crate::geometry::menu_width(menu.items, |item| paint.width(item, item_style(&palette)));
     let rect = crate::geometry::menu_rect(menu.at, width, menu.items.len(), input.size);
-    paint.fill(rect, palette.surface_raised);
-    border(paint, rect, palette.hairline, 1.0);
+    paint.fill_at(rect, palette.surface_raised, alpha);
+    border(paint, rect, palette.hairline, alpha);
 
     let mut rows = Vec::with_capacity(menu.items.len());
     let mut y = rect.y + MENU_PAD;
     for (at, item) in menu.items.iter().enumerate() {
         let row = Rect::new(rect.x, y, rect.width, MENU_ROW);
-        paint.fill_at(row, palette.hairline, hover.of(Hit::MenuItem(at)));
+        paint.fill_at(row, palette.hairline, hover.of(Hit::MenuItem(at)) * alpha);
         // The label is given the menu less its padding, so a long item is cut by the
         // painter rather than running under the hairline — which cannot happen while the
         // width is measured from the items, and is what keeps it true if it ever is not.
@@ -261,7 +266,7 @@ pub(crate) fn context_menu(
             (row.width - 2.0 * MENU_PAD).max(0.0),
             row.height,
         );
-        paint.centered(item, text, item_style(&palette));
+        paint.centered(item, text, item_style(&palette).faded(alpha));
         rows.push((at, row));
         y += MENU_ROW;
     }
@@ -833,11 +838,20 @@ fn content_top(lines: &[SettingLine<'_>], page: &Range<usize>, index: usize) -> 
 /// The caret does not blink. DESIGN.md allows one authored moment in this app and it is
 /// the tab indicator's travel; a second thing moving on screen is a second thing to look
 /// at, and the caret is already the brightest hairline in the row.
-pub(crate) fn find_bar(paint: &mut Painter<'_>, input: &ChromeInput<'_>, height: f32) -> Rect {
+pub(crate) fn find_bar(
+    paint: &mut Painter<'_>,
+    input: &ChromeInput<'_>,
+    height: f32,
+    alpha: f32,
+) -> Rect {
     let palette = *input.palette;
     let rect = Rect::new(0.0, input.size.height - height, input.size.width, height);
-    paint.fill(rect, palette.surface_raised);
-    paint.fill(Rect::new(0.0, rect.y, rect.width, 1.0), palette.hairline);
+    paint.fill_at(rect, palette.surface_raised, alpha);
+    paint.fill_at(
+        Rect::new(0.0, rect.y, rect.width, 1.0),
+        palette.hairline,
+        alpha,
+    );
 
     let field = Rect::new(
         FIND_PAD,
@@ -847,23 +861,23 @@ pub(crate) fn find_bar(paint: &mut Painter<'_>, input: &ChromeInput<'_>, height:
     );
     // A focused input border is `hairline-strong`, and the field behind it is the
     // ground, so that the one thing on this row that takes typing looks like it.
-    paint.fill(field, palette.ground);
-    border(paint, field, palette.hairline_strong, 1.0);
+    paint.fill_at(field, palette.ground, alpha);
+    border(paint, field, palette.hairline_strong, alpha);
 
     let baseline = paint.baseline_in(field, HINT_SIZE);
-    let label = TextStyle::new(HINT_SIZE, Weight::NORMAL, palette.ink_dim);
+    let label = TextStyle::new(HINT_SIZE, Weight::NORMAL, palette.ink_dim).faded(alpha);
     paint.text(FIND_LABEL, field.x + FIND_PAD, baseline, label);
 
     let Some(find) = input.find.as_ref() else {
         return rect;
     };
-    let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink);
+    let style = TextStyle::new(LABEL_SIZE, Weight::NORMAL, palette.ink).faded(alpha);
     let left = field.x + FIND_PAD + paint.width(FIND_LABEL, label) + FIND_GAP;
     let room = (field.right() - FIND_PAD - left - CARET_WIDTH).max(0.0);
     let query = tail_that_fits(paint, find.query, style, room);
     let typed = paint.width(query, style);
     paint.text(query, left, baseline, style);
-    paint.fill(
+    paint.fill_at(
         Rect::new(
             left + typed + CARET_WIDTH,
             field.y + CARET_INSET,
@@ -871,6 +885,7 @@ pub(crate) fn find_bar(paint: &mut Painter<'_>, input: &ChromeInput<'_>, height:
             field.height - 2.0 * CARET_INSET,
         ),
         palette.ink,
+        alpha,
     );
 
     let (count, color) = match find.position {
@@ -882,7 +897,7 @@ pub(crate) fn find_bar(paint: &mut Painter<'_>, input: &ChromeInput<'_>, height:
         None => ("No results".to_owned(), palette.ink_dim),
     };
     if !count.is_empty() {
-        let style = TextStyle::new(HINT_SIZE, Weight::NORMAL, color);
+        let style = TextStyle::new(HINT_SIZE, Weight::NORMAL, color).faded(alpha);
         paint.text(&count, field.right() + FIND_GAP * 2.0, baseline, style);
     }
     rect

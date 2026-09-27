@@ -359,6 +359,16 @@ pub struct Host {
     /// by remembering the chord that opened it. Cleared whenever focus is taken again,
     /// by the chord or by a click.
     settings_left: bool,
+
+    /// Whether the window is on its way out.
+    ///
+    /// Set where the loop is told to stop, and read by [`Host::redraw`], which returns
+    /// without drawing while it is true. An event that ends the loop can have asked for a
+    /// frame before it reached the end — the close chord does, at the top of [`Host::key`] —
+    /// and the last frame a window draws should be a frame with something in it. A strip with
+    /// no tabs in it is the state `DESIGN.md` calls unreachable, and this is what keeps it
+    /// unreachable now that a window can outlive its last shell.
+    closing: bool,
 }
 
 /// Where the settings tab is.
@@ -459,6 +469,7 @@ impl Host {
             capturing: None,
             settings_focus: None,
             settings_left: false,
+            closing: false,
         }
     }
 
@@ -733,6 +744,13 @@ impl Host {
     /// the same function with worse names.
     #[allow(clippy::too_many_lines)]
     fn redraw(&mut self) {
+        // A frame asked for by the event that ended the loop is not drawn. The close chord
+        // asks for one before it hands the command over, so without this the strip would be
+        // drawn once with the last tab already gone from it — the state `DESIGN.md` says no
+        // user can reach, drawn on the way out.
+        if self.closing {
+            return;
+        }
         // Before the renderer is borrowed: `reconcile` may reload a face, and it needs
         // the whole host to do it.
         self.reconcile();
@@ -987,12 +1005,10 @@ impl Host {
     /// behind a terminal. It is a tab that exists, so it is in the strip whether or not it is
     /// the one being looked at, and the close gesture that works on any other cell works on it.
     fn tabs(&self) -> Vec<TabInfo> {
+        // The pointer's answer, which counts the × on a cell as the cell.
         let hovered = self
             .pointer
-            .and_then(|(x, y)| match self.chrome.hit(x as f32, y as f32) {
-                Hit::Tab(id) => Some(id),
-                _ => None,
-            });
+            .and_then(|(x, y)| hovered_tab(self.chrome.hit(x as f32, y as f32)));
         let mut tabs: Vec<TabInfo> = self
             .app
             .tab_numbers()
@@ -1126,7 +1142,21 @@ impl Host {
                         let _ = std::process::Command::new(executable).spawn();
                     }
                 }
-                Command::Quit => loop_.exit(),
+                // The user asked for the window to close, and it closes: nothing about the
+                // tabs is consulted, because closing a window is not closing a tab and a
+                // window that refused because a page was still open would be a quit chord
+                // that did not quit.
+                Command::Quit => self.finish(loop_),
+                // The app's last tab went, which is not the same thing. The settings page is
+                // a tab of the window rather than a shell of the app, so the app cannot know
+                // whether anything is left in the window — this is the whole of why the
+                // command exists rather than the app quitting by itself.
+                Command::LastTabClosed => {
+                    self.bring_the_page_forward();
+                    if self.nothing_left() {
+                        self.finish(loop_);
+                    }
+                }
             }
         }
     }
@@ -1160,6 +1190,14 @@ impl Host {
         // so their keys are read here rather than left to the app. Everything about that is in
         // `page_key`; what this line is for is that a key it takes goes no further.
         if self.page_key(&translated) {
+            // The page can be the last thing in the window: `Escape` and the close chord both
+            // close it, and a window with no shells in it and no page is a window with nothing
+            // left to show. Asked here rather than inside `page_key`, which is a rule about keys
+            // — it answers true for an arrow key that moved a highlight, and only one of the
+            // things it takes can empty the window.
+            if self.nothing_left() {
+                self.finish(loop_);
+            }
             return;
         }
 
@@ -1474,6 +1512,72 @@ impl Host {
         self.capturing = None;
     }
 
+    /// Nothing is left in the window: no terminal, and no settings tab either.
+    ///
+    /// The one question the window's ending is a function of. Closing the last tab used to be
+    /// closing the window, which was true while every tab was a shell: `close-tab` on the last
+    /// one ended the process, and a window with no terminals in it was a window already on its
+    /// way out. The settings tab is a tab that outlives the last shell, so the window does too,
+    /// and what the ending asks is not "is there a tab" but "is there anything at all".
+    ///
+    /// A predicate rather than a decision, because the four doors that can empty the window are
+    /// not the same code: three of them close a shell and one of them closes the page.
+    fn nothing_left(&self) -> bool {
+        self.app.sessions().is_empty() && !self.settings_tab.open()
+    }
+
+    /// Bring the settings page to the front when it is now the only tab in the window.
+    ///
+    /// `Behind` means "the tab is in the strip and a terminal is the tab on screen", so a page
+    /// behind the last shell is a page the user cannot see on a window that is still in front of
+    /// them — and the strip it is in says it is open. The last terminal closing hands the screen
+    /// to the page rather than leaving the user looking at a frame of a terminal that no longer
+    /// exists.
+    ///
+    /// Nothing happens while a terminal is left, which is why the doors that close a tab can
+    /// call it unconditionally: it is the answer to "what is on screen now that one has gone",
+    /// and the answer is usually "the shell that was already there".
+    fn bring_the_page_forward(&mut self) {
+        if self.app.sessions().is_empty() && self.settings_tab.open() {
+            self.settings_tab = SettingsTab::Shown;
+            self.redraw();
+        }
+    }
+
+    /// Close the tab a gesture on the strip was aimed at.
+    ///
+    /// The × on a cell and a middle click on one are the same act, and they are the two
+    /// gestures this window has ever offered for one: close *that* tab, which is not always the
+    /// tab on screen — a user aiming at a tab's × has aimed at the tab, not at what is in front
+    /// of them — and then say what is on screen now that it has gone.
+    ///
+    /// A settings cell closes the page instead of a shell, because that is what its tab is. The
+    /// shell behind the page is not the tab the user closed and is not touched.
+    ///
+    /// Whether the window has anything left is not answered here but asked at each door, because
+    /// the doors are of two kinds: this one closes a tab the user pointed at, and the chord
+    /// closes the tab on screen. Both end in the same question and it is the same question.
+    fn close_from_strip(&mut self, id: TabId) {
+        match id {
+            TabId::Terminal(number) => {
+                let _ = self.app.close_tab(number);
+            }
+            TabId::Settings => self.close_settings(),
+        }
+        self.bring_the_page_forward();
+    }
+
+    /// End the window, and stop drawing it.
+    ///
+    /// Every way out of the loop goes through here rather than through `loop_.exit()`, because
+    /// telling the loop to stop and telling the window not to draw again are one decision: the
+    /// redraw that [`Host::redraw`] refuses is one asked for by the very event that ended the
+    /// loop, and a window that drew it would draw the strip with nothing in it.
+    fn finish(&mut self, loop_: &ActiveEventLoop) {
+        self.closing = true;
+        loop_.exit();
+    }
+
     /// Write the configuration back, and say so when it could not be.
     ///
     /// A terminal that silently discards a setting the user just chose is worse than one
@@ -1650,6 +1754,14 @@ impl Host {
                         return;
                     }
                     if self.chrome_press(x, y, titlebar, loop_) {
+                        // Every control the chrome has that can end the window ends it the same
+                        // way: the × on a tab, the settings mark, and the settings mark again
+                        // when it closes the page while no shell is left. Asked here rather than
+                        // in each arm, because the arms do not know what is left in the window
+                        // and this is the caller that has just changed it.
+                        if self.nothing_left() {
+                            self.finish(loop_);
+                        }
                         return;
                     }
                     if let Some(at) = self.grid_cell(x, y) {
@@ -1697,28 +1809,22 @@ impl Host {
                     }
                 }
                 WinitButton::Middle => {
-                    // Closing is a keyboard action, and DESIGN.md's strip has no close
-                    // affordance on a tab — but a middle click on one is what every
-                    // other terminal on this platform does, and a user who tries it
-                    // should not be told no.
-                    if let Hit::Tab(id) = self.chrome.hit(x as f32, y as f32) {
-                        // The settings tab answers it the same way a shell does, and closes
-                        // itself rather than the window: it is the one tab here that is not the
-                        // last shell, so there is nothing behind it to end.
-                        let TabId::Terminal(number) = id else {
-                            self.close_settings();
+                    // The chord and the × are the strip's two deliberate ways to close a tab;
+                    // this is the one a user arrives at by habit, because it is what every other
+                    // terminal on this platform does. Both cells answer it, and the cell's × is
+                    // one of the things it lands on: the mark sits inside its own cell, so a
+                    // middle click on it is a middle click on the tab.
+                    if let Hit::Tab(id) | Hit::CloseTab(id) = self.chrome.hit(x as f32, y as f32) {
+                        self.close_from_strip(id);
+                        // Closing the last tab is closing the window, unless the settings page is
+                        // open — a page is not a shell, and a shell's departure is not the
+                        // window's. Dropping this left a window with no terminal in it: the shell
+                        // was gone, the last frame was still painted, and nothing was listening
+                        // for the exit that ends the loop.
+                        if self.nothing_left() {
+                            self.finish(loop_);
+                        } else {
                             window.request_redraw();
-                            return;
-                        };
-                        // Closing the last tab is closing the window, which is what the
-                        // bound `close-tab` action does with the same answer. Dropping it
-                        // left a window with no terminal in it: the shell was gone, the
-                        // last frame was still painted, and nothing was listening for the
-                        // exit that ends the loop.
-                        match self.app.close_tab(number) {
-                            Ok(true) => loop_.exit(),
-                            Ok(false) => window.request_redraw(),
-                            Err(_) => {}
                         }
                         return;
                     }
@@ -1813,7 +1919,7 @@ impl Host {
                     // Closing the window, not the tab. A caption button that closed one
                     // terminal and left the window up would be a button that lies about
                     // what it does; `close-tab` is the key for that.
-                    Caption::Close => loop_.exit(),
+                    Caption::Close => self.finish(loop_),
                 }
                 true
             }
@@ -1866,8 +1972,11 @@ impl Host {
                 }
                 true
             }
-            Hit::CloseTab(number) => {
-                let _ = self.app.close_tab(number);
+            Hit::CloseTab(id) => {
+                // The mark is only published while it is drawn, so the user has aimed at it. It
+                // closes its own tab rather than the tab on screen, and a settings cell closes
+                // the page — the shell behind a page is not the tab the user pointed at.
+                self.close_from_strip(id);
                 true
             }
             Hit::Profile(row) => {
@@ -2257,6 +2366,22 @@ fn next_focus(rows: usize, here: Option<usize>, forward: bool) -> Option<usize> 
     }
 }
 
+/// Which tab the pointer is hovering, given what it hit.
+///
+/// A pointer on a cell's × is a pointer on that cell. The mark is a control inside the tab it
+/// closes, so the two answers are one answer, and a strip that took the pointer off the tab the
+/// moment it reached the tab's own × would fade the mark out from under the user as they went
+/// for it.
+///
+/// A free function rather than a match inside `Host::tabs`, because that is what makes the rule
+/// assertable: `tabs` reads a layout the chrome only produces with a window behind it.
+fn hovered_tab(hit: Hit) -> Option<TabId> {
+    match hit {
+        Hit::Tab(id) | Hit::CloseTab(id) => Some(id),
+        _ => None,
+    }
+}
+
 /// The text scale the chrome and the grid are drawn at.
 ///
 /// Windows' own text-size slider and the panel's row answer the same question, and the
@@ -2343,13 +2468,13 @@ pub enum StartupError {
 impl ApplicationHandler<Wake> for Host {
     /// The one place every way out of the loop passes through.
     ///
-    /// `loop_.exit()` is called from five places — the quit action, the caption's close
-    /// button, the last tab's shell exiting, the window's own close request, and a failed
-    /// start — and a position written down at each of them would be a position written
-    /// down at four of them the day a sixth is added. This is winit's own last call, and
-    /// it happens after the loop has stopped rather than during the event that stopped
-    /// it, which is also the first moment the window's position is certainly its final
-    /// one.
+    /// `loop_.exit()` is called from [`Host::finish`] and nowhere else — the quit action, the
+    /// caption's close button, the last tab's shell exiting, the window's own close request,
+    /// and a failed start all go through it — and a position written down at each of them
+    /// would be a position written down at four of them the day a sixth is added. This is
+    /// winit's own last call, and it happens after the loop has stopped rather than during the
+    /// event that stopped it, which is also the first moment the window's position is
+    /// certainly its final one.
     fn exiting(&mut self, loop_: &ActiveEventLoop) {
         self.remember(loop_);
     }
@@ -2362,7 +2487,7 @@ impl ApplicationHandler<Wake> for Host {
         }
         if let Err(error) = self.attach(loop_) {
             startup_failed(&error);
-            loop_.exit();
+            self.finish(loop_);
             return;
         }
         // A terminal that opens with no terminal in it is a rectangle. The first tab is
@@ -2371,7 +2496,7 @@ impl ApplicationHandler<Wake> for Host {
         let (cols, rows) = self.grid_size();
         if let Err(error) = self.app.open_tab(cols.max(1), rows.max(1)) {
             startup_failed(&error.into());
-            loop_.exit();
+            self.finish(loop_);
             return;
         }
         if let Some(window) = self.window() {
@@ -2400,16 +2525,18 @@ impl ApplicationHandler<Wake> for Host {
         // cheaper than tracking which one moved.
         self.app.pump();
 
-        // A tab whose shell exited is closed by the app, and the last one closing is
-        // what ends the window — the same decision `Command::Quit` carries, made in the
-        // same place, for a tab the user never touched.
+        // A tab whose shell exited is closed by the app, and the last one closing is what ends
+        // the window — the same decision the close chord carries, made in the same place, for a
+        // tab the user never touched. The settings page, again, is not a shell: a program
+        // exiting is not the window's decision to make while there is still a page in it.
         let closed = self.app.reap();
         if closed.is_empty() {
             self.draw_when_due();
             return;
         }
-        if self.app.sessions().is_empty() {
-            loop_.exit();
+        self.bring_the_page_forward();
+        if self.nothing_left() {
+            self.finish(loop_);
         } else {
             self.draw_when_due();
         }
@@ -2417,7 +2544,7 @@ impl ApplicationHandler<Wake> for Host {
 
     fn window_event(&mut self, loop_: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => loop_.exit(),
+            WindowEvent::CloseRequested => self.finish(loop_),
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Resized(_) => self.resized(),
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
@@ -3028,6 +3155,171 @@ mod tests {
             host.mouse_reaches_the_shell(),
             "a closed page kept the mouse"
         );
+    }
+
+    #[test]
+    fn a_window_that_outlives_its_last_shell_is_a_window_with_a_page_in_it() {
+        // The whole of the change, in three lines. Closing the last shell used to be closing the
+        // window, which was the same thing while every tab was a shell. The settings page is a tab
+        // of the window rather than a shell of the app, so the two came apart: the question the
+        // ending asks is not "is there a tab" but "is there anything at all".
+        let mut host = Host::new(app());
+        let _ = host.app.open_tab(80, 24).expect("this machine has a shell");
+        host.settings_tab = SettingsTab::Shown;
+
+        let _ = host.app.close_tab(1);
+        assert!(host.app.sessions().is_empty(), "the shell did not go");
+        assert!(
+            !host.nothing_left(),
+            "the last terminal ended a window that still had a page in it"
+        );
+    }
+
+    #[test]
+    fn the_page_comes_to_the_front_when_the_last_terminal_goes() {
+        // `Behind` means "a terminal is the tab on screen", so this is the state a terminal's
+        // departure can leave behind without the user opening anything — a shell exiting is the
+        // door nobody asked for, and the close chord is the door someone did. Both end in these
+        // two calls. A page behind a terminal that is gone is a page the user cannot see on a
+        // window that is still in front of them.
+        let mut host = Host::new(app());
+        let _ = host.app.open_tab(80, 24).expect("this machine has a shell");
+        host.settings_tab = SettingsTab::Behind;
+
+        let _ = host.app.close_tab(1);
+        host.bring_the_page_forward();
+        assert_eq!(
+            host.settings_tab,
+            SettingsTab::Shown,
+            "the page stayed behind a terminal that is gone"
+        );
+        assert!(!host.nothing_left(), "the page went with the shell");
+    }
+
+    #[test]
+    fn closing_the_last_terminal_with_no_page_ends_the_window() {
+        // The ending the app always had, which is still the ending: with no page there is
+        // nothing to hold the window open, and this is the one state that used to be the only
+        // thing a last tab could do.
+        let mut host = Host::new(app());
+        let _ = host.app.open_tab(80, 24).expect("this machine has a shell");
+        assert_eq!(host.settings_tab, SettingsTab::Shut);
+
+        let _ = host.app.close_tab(1);
+        assert!(
+            host.nothing_left(),
+            "a window with no shells and no page stayed up"
+        );
+    }
+
+    #[test]
+    fn closing_the_page_with_no_terminals_ends_the_window() {
+        // The same ending from the other side, and the one that makes the settings tab a tab
+        // rather than a way out of the rule: a page with no shell behind it is the only thing
+        // left in the window, and closing it is closing the window. What the user is left with
+        // otherwise is a strip with nothing in it, which is the state DESIGN.md says nobody can
+        // reach.
+        let mut host = Host::new(app());
+        let _ = host.app.open_tab(80, 24).expect("this machine has a shell");
+        host.settings_tab = SettingsTab::Shown;
+        let _ = host.app.close_tab(1);
+
+        host.close_from_strip(TabId::Settings);
+        assert_eq!(host.settings_tab, SettingsTab::Shut, "the page did not go");
+        assert!(
+            host.nothing_left(),
+            "the window outlived the last tab it had"
+        );
+    }
+
+    #[test]
+    fn closing_the_page_with_a_terminal_behind_it_leaves_the_window() {
+        // The other answer to the same two acts, and the reason the ending is a question about
+        // both kinds of tab rather than about the page: closing the page of a window with a
+        // shell in it is closing one tab, and the shell behind it was never touched.
+        let mut host = Host::new(app());
+        let only = host.app.open_tab(80, 24).expect("this machine has a shell");
+        host.settings_tab = SettingsTab::Shown;
+
+        host.close_from_strip(TabId::Settings);
+        assert_eq!(host.settings_tab, SettingsTab::Shut, "the page did not go");
+        assert!(
+            host.app.sessions().get(only).is_some(),
+            "the shell behind the page went with it"
+        );
+        assert!(!host.nothing_left(), "a window with a shell in it ended");
+    }
+
+    #[test]
+    fn the_strip_closes_the_tab_it_is_given_and_not_the_active_one() {
+        // What the × and the middle click both mean, and it is the whole reason they are one
+        // method: a user aiming at a tab's × has aimed at *that* tab, which is not always the tab
+        // on screen. Closing the tab on screen instead would kill the shell the user was looking
+        // at and leave the one they pointed at.
+        let mut host = Host::new(app());
+        let first = host.app.open_tab(80, 24).expect("this machine has a shell");
+        let second = host.app.open_tab(80, 24).expect("this machine has a shell");
+        assert_ne!(first, second, "two tabs are two numbers");
+        host.app.activate(first);
+
+        host.close_from_strip(TabId::Terminal(second));
+        assert!(
+            host.app.sessions().get(second).is_none(),
+            "the tab that was aimed at is still open"
+        );
+        assert!(
+            host.app.sessions().get(first).is_some(),
+            "the active tab was closed instead of the one that was aimed at"
+        );
+        assert!(
+            !host.nothing_left(),
+            "closing one of two tabs ended the window"
+        );
+    }
+
+    #[test]
+    fn the_strip_closes_the_page_when_the_page_is_the_tab() {
+        // The settings cell's × is the page's own way out, which is the same function the mark
+        // and the chord go through — and the shell behind the page is not the tab that was
+        // pointed at, so it is a shell that was never touched.
+        let mut host = Host::new(app());
+        let only = host.app.open_tab(80, 24).expect("this machine has a shell");
+        host.settings_tab = SettingsTab::Shown;
+
+        host.close_from_strip(TabId::Settings);
+        assert_eq!(
+            host.settings_tab,
+            SettingsTab::Shut,
+            "the page survived its own mark"
+        );
+        assert!(
+            host.app.sessions().get(only).is_some(),
+            "the shell behind the page was closed with it"
+        );
+    }
+
+    #[test]
+    fn a_pointer_on_a_close_mark_hovers_the_tab_it_closes() {
+        // One hit answers for both, because the mark is a control inside the cell it closes. A
+        // strip that took the pointer off the tab the moment it reached the tab's × would fade
+        // the mark out from under the user as they went for it, and the preview bar under the
+        // tab would go out with it.
+        assert_eq!(
+            hovered_tab(Hit::Tab(TabId::Terminal(2))),
+            Some(TabId::Terminal(2))
+        );
+        assert_eq!(
+            hovered_tab(Hit::CloseTab(TabId::Terminal(2))),
+            Some(TabId::Terminal(2)),
+            "a pointer on a mark was not a pointer on its tab"
+        );
+        assert_eq!(
+            hovered_tab(Hit::CloseTab(TabId::Settings)),
+            Some(TabId::Settings),
+            "the settings cell's mark is the settings cell"
+        );
+        assert_eq!(hovered_tab(Hit::Drag), None);
+        assert_eq!(hovered_tab(Hit::None), None);
     }
 
     #[test]

@@ -176,6 +176,18 @@ right now.
   open outranks the pointer.
 - New tab: a `+` at the end of the run, the footprint of a tab with no name,
   `ink-dim`.
+- Every cell carries a × when the pointer is on it, in the right padding the cell
+  already leaves empty: a mark ten pixels wide inside a `TAB_PADDING` of twelve, so no
+  cell's width, no name's fit, and no floor in the cap changes for it. It is drawn only
+  while the pointer is on the cell, so a strip with no pointer on it is the strip it
+  always was, and the × cannot be reached for without the cell it belongs to lighting
+  first. Its ink is `ink-mid` anywhere in the cell and `danger` inside the mark itself —
+  the caption's close button spends the same colour for the same reason. That last step
+  is the one hover in the chrome that is not a fade: the mark does not exist until the
+  pointer is already inside its own cell, so the two are one control seen at two
+  distances rather than two controls the pointer crosses between. The settings cell has
+  one too: it is a tab like the others, and a tab that cannot be closed the way it is
+  closed is a tab that teaches the wrong gesture.
 - The OS window title is the active tab's name and then `zet`, so the taskbar and
   Alt-Tab distinguish two zet windows. The drawn strip keeps `zet` in its own
   slot: the names are already on the tabs.
@@ -193,7 +205,9 @@ right now.
 +------+--------------------------------------------------------+
 ```
 
-- Rail width 48px, cells 36px tall, index centered.
+- Rail width 48px, cells 36px tall, index centred in what the × leaves — the rail
+  reserves the same right `TAB_PADDING` a horizontal cell does, so both positions carry
+  the mark in the same place.
 - The rail carries numbers and no names. It is 48px wide and the whole reason to
   choose it is that it gives the grid the rest, so a name in it would be a name in
   the space the tabs were moved aside to free. This is the one position where a tab
@@ -215,9 +229,14 @@ brief's requirement and it should feel like the app got lighter, not like someth
 is missing.
 
 A centered line naming the two chords was the plan, and it is not there, because the
-state it would appear in is unreachable: `close-tab` quits when the last tab closes,
-so a window with no terminals is a window that is on its way out. An empty state for
-a state nobody can reach is a line nobody reads.
+state it would appear in is unreachable. A window with no terminals left closes, and the
+one thing that used to be able to hold it open — a settings page with nothing behind it —
+is a page rather than an empty strip: the page is the whole content area, so what the
+user sees is the settings and not a strip with a gap in it. The window that closes does
+so without drawing the strip it no longer needs, which is a fact about the host rather
+than a hope about the order of two calls: the redraw returns before it plans a frame once
+the loop has been told to stop. An empty state for a state nobody can reach is a line
+nobody reads.
 
 ### The tab menu
 
@@ -267,8 +286,10 @@ program owns most of the pixels, and the strip is the part that is ours.
   A menu whose surface shares the chrome's rectangle batch is a menu with a tab's title
   legible through it, which is what it was before this.
 - The next press anywhere else — on another tab, on the terminal, on a caption button —
-  is what dismisses it. No timeout, no click-to-toggle, no fade. A menu that faded
-  would be a menu where the click during the fade lands on the window underneath.
+  is what dismisses it. No timeout, no click-to-toggle, and no fade *out*: the fade is
+  the menu's arrival, over the same 120ms as the other two surfaces drawn over the
+  window, and a dismissal is a cut. A menu that faded on its way out would be a menu
+  where the press during the fade lands on the window underneath.
 - `Escape` closes it and is the menu's key for as long as it is open. It is the one
   key the menu takes: everything else still goes to the shell, for the reason a page in
   front of it gives none of them.
@@ -326,7 +347,8 @@ Windows Terminal.
   no number on it. It is a view of the app rather than a program in a shell, so numbering
   it would either break the run from `#1` or leave a gap where a shell used to be. The mark
   and the cell answer differently on purpose: the cell is the tab, the mark is the button
-  that opens it and closes it, and a press has to land on the one the user pointed at.
+  that opens it and closes it, and a press has to land on the one the user pointed at. The
+  cell carries a × like every other cell, and the mark is not a substitute for it.
 - The drag region is any horizontal gap between the last of those controls and the
   caption buttons. Double-click maximizes, and restores a window that is already
   maximized.
@@ -358,26 +380,55 @@ changes — a hover moves a coverage, and one width — so the frame it lands on
 frame it starts on are the same frame with different numbers in it. What the fade buys
 is that a pointer crossing a row of tabs is one movement rather than a row of hard cuts.
 
+**A surface appears.** Over 120ms, on the same curve, from nothing to everything. The
+three surfaces in the chrome that are drawn *over* what is on screen — the tab menu, the
+picker, the find bar — and one thing besides: a tab that has just arrived. All four are
+the same question, "how much of this is there", and they are one piece of arithmetic with
+a key apiece. A menu that appears over a terminal, a find bar that appears over the grid:
+what the fade buys is that the arrangement underneath stays legible through the arrival,
+so a press on something is a press on a thing that was already there rather than on a
+thing that appeared between the press and the release.
+
+**A departure is a cut.** A surface that goes is gone on the frame it goes. What fades in
+is the frame's worth of ink that a dismissal would otherwise take with it, and a
+dismissal is the user's own act — the pointer has already moved to what is revealed, and
+holding the dismissed surface over it for another 120ms is the interface disagreeing with
+its own hand.
+
+So the rule, and it is the whole of it: *a surface that appears over what is on screen
+fades in; a surface that replaces what is on screen is there on the frame it opens.* The
+settings page is the second kind. It is the grid's own rectangle with the grid not drawn
+in it, so there is nothing to fade *against* — it would be a crossfade between a thing
+and the absence of that thing, which is a lie about what a tab is. A tab is a change of
+what is on screen, not a change of place, and a page that animated into existence would
+delay the controls inside it by exactly as long as the animation.
+
 Everything else is instant:
 
 - Theme changes apply in one frame with no crossfade. A crossfade would show an
   intermediate theme, which is a worse lie than a hard cut.
-- The settings tab opening and closing. It is there on the frame the app stops
-  considering it open and gone on the frame it does. The tab replaced a panel that slid
-  in from the right edge, and the slide went with it: a tab is a change of what is on
-  screen rather than a change of place, and one that animates into existence would delay
-  the actions inside it by exactly as long as the animation.
+- The settings tab opening and closing. The tab replaced a panel that slid in from the
+  right edge, and the slide went with it: it opens and closes by replacing the grid, and
+  what replaces is there on the frame it opens.
 - Tab open and close: the new tab appears already at full size. No scale-in, no
-  slide. A tab that animates into existence delays input by exactly as long as the
-  animation, which in a terminal is a real cost.
+  slide. A tab that animated into existence delays input by exactly as long as the
+  animation, which in a terminal is a real cost. What a new tab does get is the ink of
+  everything drawn in it, over the same 120ms as a surface — the tab's own width is
+  settled from its first frame, so the strip never reflows underneath it.
+- Nothing that moves the layout is animated, and the grid is never animated. The strip
+  and the page are divided by the same arithmetic on every frame, and a terminal that
+  eased into its new size would be a terminal printing into a rectangle it does not own.
 - Reduce motion, read live from the system: the indicator jumps, a hover is lit on the
-  frame the pointer arrives, cursor blink stops. Everything still works, nothing moves.
+  frame the pointer arrives, a surface is at full on the frame it opens, cursor blink
+  stops. Everything still works, nothing moves.
 
 The bar travels because that motion carries the answer to "where am I now" — an answer
 about space. The hover fades because a pointer arriving and a pointer leaving are worth
 telling apart — an instant hover is a flicker at the speed a mouse moves — and that is an
-answer about attention. No other transition in the app is load-bearing, so no other
-transition exists.
+answer about attention. A surface arrives by rising because a menu that appears in one
+frame is a menu the user reads before they have decided to look at it, and because the
+thing under it was there first. No other transition in the app is load-bearing, so no
+other transition exists.
 
 ## Settings
 
@@ -400,8 +451,26 @@ shells would say otherwise. It is opened and closed by the settings mark in the 
 by a chord, and both go through the same toggle, because a button and a binding that
 disagreed would be one of them wrong. The tab stays open while a terminal is in front of
 it: it is still in the strip, the mark stays lit, and a press on its cell brings it back
-where it was left. It is closed by the mark, by `Escape`, by the close-tab chord, and by a
-middle-click on its cell, and there is no × on it — the strip's tabs have never had one.
+where it was left. It is closed by the mark, by `Escape`, by the close-tab chord, by the ×
+on its cell while the pointer is there, and by a middle-click on the cell — five doors
+onto one function, because a control and a binding that disagreed would be one of them
+wrong. Closing it leaves the shell behind it exactly as it was: it is the page that goes,
+not the terminal the page was covering.
+
+The page is why the window has an ending to state. When every tab was a shell, "the last
+tab closed" and "there is nothing left" were the same sentence, and closing the last one
+quit. They are two sentences now, so the window asks the second: it closes when there is
+no terminal and no page, and not before. A shell exiting under a page puts the page in
+front of the window rather than taking the window with it, because a page that was behind
+a terminal that is gone is a page the user cannot see on a window still in front of them.
+The window that does close accepts no more frames — it is not an empty window on its way
+out, it is the loop stopping, and the strip's empty state stays a state nobody reaches.
+
+Quitting is a different question and has a different answer. The close button, the
+system's close, and `Alt-F4` end the window whatever is in it: the user has said what
+they want, and weighing that against the tab count would be the interface arguing with
+them. Only the tab-level doors — the ×, the chord, the middle click, the menu's `Close
+tab` — consult what is left.
 
 The terminal is not visible behind it, because there is no behind: the settings tab and a
 shell are two tabs, and the shell is a tab that stopped being the one on screen. It is

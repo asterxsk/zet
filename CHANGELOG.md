@@ -43,17 +43,52 @@ counts as a breaking change in a terminal, is in
     the next, which brings that section to the page with it. No key was invented for the rail, and
     none was taken from the shell. Clicking a section name switches the page and puts the keyboard
     back where it was.
-  - The tab is closed by the settings mark, by `Escape`, by the `close-tab` chord, and by a
-    middle-click on its cell. The chord is intercepted while the page is on screen rather than
-    handed to the app: `close-tab` means "close the tab I am looking at", the app's active tab is
-    still the shell it was, and a chord that reached the app would kill a shell the user cannot see
-    and leave the page up.
+  - The tab is closed by the settings mark, by `Escape`, by the `close-tab` chord, by the × on its
+    cell, and by a middle-click on that cell. The chord is intercepted while the page is on screen
+    rather than handed to the app: `close-tab` means "close the tab I am looking at", the app's
+    active tab is still the shell it was, and a chord that reached the app would kill a shell the
+    user cannot see and leave the page up.
   - Unbound keys do not reach the shell while the page is up. The panel let a letter through because
     the shell was on screen beside it and typing into it was the point; a page has no prompt behind
     it, so a letter typed there would reach a shell the user cannot see with the answer arriving on
     a screen that is not being shown. Chords still go through, because a chord is the user asking
     zet itself for something. The mouse is held back for the same reason: a program in reporting
     mode would be told about a click at a coordinate on a screen it is not on.
+- **`zet-ui`, `zet`** — a tab has a close mark: an × at the right of its cell, drawn while the pointer
+  is on the cell, and the settings cell has one too.
+  - It goes in the right `TAB_PADDING` a cell already leaves empty — a ten-pixel mark inside twelve
+    pixels — so no cell's width, no name's fit, and no floor in `tab_cap` changes for it. There is no
+    reserved slot and no new measurement.
+  - `Hit::CloseTab` carries a `TabId` rather than a tab number, so the mark closes the tab it is
+    drawn on rather than the tab the app happens to have active. A user aiming at a cell's × has
+    aimed at that cell, which is not always the cell on screen.
+  - Its ink is `ink-mid` while the pointer is anywhere in the cell and `danger` once it is inside the
+    mark itself — the caption's close button spends the same colour for the same reason. That last
+    step is a plain rectangle comparison rather than a fade, and it is the one hover in the chrome
+    that is not one: the mark does not exist until the pointer is already inside its own cell, so the
+    two states are one control at two distances rather than two the pointer crosses between.
+  - The pointer stays on the tab while it is on the tab's ×. `Hit::CloseTab(id)` and `Hit::Tab(id)`
+    are one place seen at two distances, so the cell keeps its hover and its previewed bar while the
+    pointer is over the mark — a strip that took the hover off would fade the mark out from under
+    the hand reaching for it.
+  - In the rail the mark is in the same place, which means the centred index is half a padding left of
+    centre rather than centred: the price of the strip reading the same in both positions.
+- **`zet`** — the window closes when there is nothing left in it, rather than when its last tab closes.
+  - A window whose last terminal goes while the settings page is up keeps both the window and the
+    page. The page comes to the front in the same breath: a page behind a terminal that is gone is a
+    page the user cannot see on a window still in front of them. A shell exiting under the page is
+    the door nobody asked for, and it ends here like the chord does.
+  - Closing the page is what ends that window, and it is the only thing left to close. The strip
+    never draws a frame with no tabs in it, because the redraw returns before it plans one once the
+    loop has been told to stop — the empty state stays a state nobody reaches.
+  - The question is asked of a tab-level door only. The close button, the system's close and `Alt-F4`
+    end the window whatever is in it: the user has said what they want, and weighing that against the
+    tab count would be the interface arguing with them.
+  - `Command::LastTabClosed` is what a tab-level door produces, and `Command::Quit` stays what the
+    user's own quit produces. One command doing both was how the last tab got to decide for the
+    window in the first place.
+  - Zero terminals is a state the app is now in for a frame or more, so it stops blinking the cursor
+    on it: blinking is a claim that a shell is somewhere on this screen.
 
 ### Changed
 
@@ -70,6 +105,26 @@ counts as a breaking change in a terminal, is in
 - **`zet-ui`** — the settings panel's 180ms slide in from the right edge is gone with the panel.
   A tab is a change of what is on screen rather than a change of place, and one that animated into
   existence would delay the actions inside it by the length of the animation.
+- **`zet-ui`** — a surface drawn over the window arrives by rising rather than appearing in one
+  frame. The tab menu, the profile picker, the find bar, and a tab that has just been opened are
+  drawn from nothing to everything over 120ms on the ease-out curve the indicator and the hover
+  already use.
+  - The four are one piece of arithmetic with a key apiece. `Hover` becomes one case of
+    `Fades<K>` — the hover's own transition, generalised over its key and its span — so there is one
+    `step`, one set of entries, and one rule about an entry that has landed at nothing being dropped.
+    A wrapper for the same type would have been a second definition of the same transition.
+  - A departure is a cut. What fades in is the frame's worth of ink a dismissal would take with it,
+    and a dismissal is the user's own act: the pointer has moved on to what is revealed, and holding
+    the dismissed surface over it for another 120ms is the interface disagreeing with its own hand.
+  - The settings page did not gain a fade, and this is the line between the two: a surface that
+    appears *over* what is on screen fades in, and a surface that *replaces* what is on screen is
+    there on the frame it opens. The page is the grid's own rectangle with the grid not drawn in it,
+    so fading it would be a crossfade between a thing and the absence of that thing.
+  - `Painter::fill` has no alpha, so everything drawn at partial coverage — the menu's border and
+    rows, the find bar's hairline, field, field border and caret, the marks — draws through
+    `fill_at`, which takes the coverage the old `fill` had no room for.
+  - Reduce motion lights a surface on the frame it opens, exactly as it lights a hover on the frame
+    the pointer arrives.
 
 ### Fixed
 

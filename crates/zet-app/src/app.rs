@@ -59,7 +59,20 @@ pub enum Command {
     OpenUrl(String),
     /// Tell the user this, because nothing else can.
     Report(String),
-    /// The last tab closed. The host decides whether that closes the window.
+    /// The app's last tab closed. The host decides whether that closes the window.
+    ///
+    /// This is not [`Quit`](Command::Quit), which is the user asking for the window to
+    /// close and which the host does without asking anything. This one means the tab that
+    /// went was the last one, and only the host can answer whether the window is still
+    /// holding something — a settings tab outlives the last shell, so the app cannot say
+    /// for itself. Folding the two into one command would leave the user's own quit chord
+    /// gated on that same question, and a quit chord pressed with a terminal open has to
+    /// close the window rather than be weighed against what is still on screen.
+    LastTabClosed,
+    /// The user asked for the window to close, and the host closes it.
+    ///
+    /// The half that is the user's request rather than the app's state: nothing about the
+    /// tabs is consulted, and nothing about them should be.
     Quit,
 }
 
@@ -369,9 +382,14 @@ impl App {
     }
 
     /// Whether the cursor should blink at all, which reduce-motion turns off.
+    ///
+    /// A window with no terminals has no cursor to blink. The window can now outlive its
+    /// last shell — the settings tab is a tab and keeps the window up — and the host
+    /// schedules a redraw every 530ms while this is true, so a page on its own would ask
+    /// for frames for a cursor that does not exist.
     #[must_use]
     pub fn blinks(&self) -> bool {
-        self.config.cursor.blink && !self.reduce_motion()
+        self.sessions.active().is_some() && self.config.cursor.blink && !self.reduce_motion()
     }
 
     /// Whether the system has asked for as little movement as possible.
@@ -615,7 +633,7 @@ impl App {
             menu::Action::Close => match self.close_tab(open.tab) {
                 // The tab the menu was about was the last one, which is the window's last
                 // tab: the same answer `close-tab` gives, for the same reason.
-                Ok(true) => vec![Command::Quit],
+                Ok(true) => vec![Command::LastTabClosed],
                 _ => Vec::new(),
             },
             menu::Action::CloseOthers => {
@@ -939,7 +957,7 @@ impl App {
                     return Vec::new();
                 };
                 match self.close_tab(number) {
-                    Ok(true) => vec![Command::Quit],
+                    Ok(true) => vec![Command::LastTabClosed],
                     _ => Vec::new(),
                 }
             }
@@ -1982,7 +2000,7 @@ mod tests {
         let mut app = app();
         let _ = app.open_tab(80, 24).expect("a shell starts");
         let commands = app.key(&key(Key::Char('W'), Modifiers::CTRL | Modifiers::SHIFT));
-        assert_eq!(commands, vec![Command::Quit]);
+        assert_eq!(commands, vec![Command::LastTabClosed]);
         assert!(app.sessions().is_empty());
     }
 
@@ -2173,6 +2191,7 @@ mod tests {
     #[test]
     fn reduce_motion_turns_the_blink_off_without_touching_the_setting() {
         let mut app = app();
+        let _ = app.open_tab(80, 24).expect("a shell starts");
         assert!(app.blinks());
         app.reduce_motion = true;
         assert!(!app.blinks());
@@ -2180,6 +2199,26 @@ mod tests {
             app.config().cursor.blink,
             "the setting is the user's, not ours"
         );
+    }
+
+    /// A window with no terminals has no cursor, so it does not blink.
+    ///
+    /// The window can outlive its last shell now — a settings tab keeps it up — and the
+    /// host schedules a redraw every half-blink while `blinks()` is true. With no session
+    /// there is no cursor for that redraw to serve, so the setting alone must not turn it
+    /// on.
+    #[test]
+    fn a_window_with_no_terminals_does_not_blink() {
+        let mut app = app();
+        app.config.cursor.blink = true;
+        assert!(app.sessions().is_empty());
+        assert!(
+            !app.blinks(),
+            "no session, so no cursor, whatever the setting"
+        );
+
+        let _ = app.open_tab(80, 24).expect("a shell starts");
+        assert!(app.blinks(), "a terminal brings the cursor back");
     }
 
     #[test]
@@ -2602,7 +2641,7 @@ mod tests {
 
         let commands = app.tab_menu_choose(at);
 
-        assert_eq!(commands, vec![Command::Quit]);
+        assert_eq!(commands, vec![Command::LastTabClosed]);
         assert!(app.sessions().is_empty());
     }
 

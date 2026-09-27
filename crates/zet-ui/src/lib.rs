@@ -78,8 +78,8 @@ use std::mem;
 use zet_config::{TabPosition, TabSettings, WindowSettings};
 use zet_render::{GlyphQuad, Quad};
 
-use crate::geometry::SCROLLBAR_HOVER;
-use crate::hover::Hover;
+use crate::geometry::{APPEAR, SCROLLBAR_HOVER};
+use crate::hover::{Fades, Hover};
 
 pub use crate::fonts::GlyphSource;
 pub use crate::geometry::{Rect, Size};
@@ -375,16 +375,19 @@ pub enum Hit {
     Tab(TabId),
     /// The new-tab mark.
     NewTab,
-    /// A tab's close affordance.
+    /// The × on a tab.
     ///
-    /// Never returned by this version. DESIGN.md's strip is a number, a bar, and nothing
-    /// else, and its hover rule is exhaustive — the index moves to `ink-mid` and the bar
-    /// previews, and nothing else happens — so a close mark on a tab would be an
-    /// invention this crate is not entitled to make. Closing is a keyboard action
-    /// (`close-tab`, which the default keymap binds) and, by convention, a middle click
-    /// on [`Hit::Tab`]. The variant stays because a caller matching on `Hit` should not
-    /// have to be rewritten when that convention becomes an affordance.
-    CloseTab(u32),
+    /// The mark in a cell's right `TAB_PADDING`, at full height, in both positions of the strip
+    /// — the horizontal row and the rail. Named by the [`TabId`] it would close rather than by a
+    /// number, because the settings tab has no number and this is the control it uses.
+    ///
+    /// Published only while it is *drawn*: the mark appears when the pointer is over its cell, so
+    /// its region exists only for a cell the pointer is over. A point in that padding of a cell
+    /// the pointer is not over answers [`Hit::Tab`] exactly as it always has, which is what keeps
+    /// a click through an invisible mark from closing a tab the user never aimed at. The region
+    /// is published before the cell's own, so the mark takes the pixels it occupies and the cell
+    /// keeps every other pixel of itself.
+    CloseTab(TabId),
     /// A caption button.
     Caption(Caption),
     /// The draggable region between the last tab and the caption buttons.
@@ -509,8 +512,32 @@ impl Default for ScrollState {
     }
 }
 
+/// Which overlay that fades a surface is, as the key for its arrival.
+///
+/// One variant per surface that appears *over* the screen — the context menu, the profile
+/// picker, and the find bar — and deliberately not the settings page: a surface that replaces
+/// what is on screen is there on the frame it opens, so it has no arrival to key and no variant
+/// here. A variant for the page would be a fade the page must not have.
+///
+/// Its own key type rather than [`Hit`], because neither popover has a stable hit region:
+/// [`Hit::Menu`] and [`Hit::Picker`] carry rectangles that move with the pointer, and a fade
+/// keyed by a rectangle would restart every time the popover was re-placed against an edge.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Surface {
+    /// The context menu.
+    Menu,
+    /// The profile picker.
+    Picker,
+    /// The find bar.
+    Find,
+}
+
 /// What the chrome remembered from one frame to the next.
 enum Region {
+    CloseTab {
+        id: TabId,
+        rect: Rect,
+    },
     Tab {
         id: TabId,
         rect: Rect,
@@ -552,6 +579,7 @@ impl Region {
     /// Whether the point is in this region, and what it is if so.
     fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         match self {
+            Self::CloseTab { id, rect } if rect.contains(x, y) => Some(Hit::CloseTab(*id)),
             Self::Tab { id, rect } if rect.contains(x, y) => Some(Hit::Tab(*id)),
             Self::NewTab(rect) if rect.contains(x, y) => Some(Hit::NewTab),
             Self::SettingsButton(rect) if rect.contains(x, y) => Some(Hit::SettingsButton),
@@ -654,6 +682,27 @@ pub struct Chrome {
     /// asks this for a number instead of comparing a rectangle against the pointer, which is
     /// what turns ten hard cuts in the chrome into one mechanism.
     hover: Hover,
+    /// What the pointer is over this frame, as a set rather than one [`Hit`].
+    ///
+    /// A set because the × on a tab sits *inside* its cell: a pointer on the mark is over the
+    /// cell as well, so the chrome names both and the set is sometimes two. Rebuilt each frame
+    /// from the regions the last frame published, and reused across frames rather than
+    /// reallocated, for the reason the two arrays are.
+    hover_targets: Vec<Hit>,
+    /// Each tab's arrival, keyed by its id: the coverage a cell's ink fades in at.
+    presence: Fades<TabId>,
+    /// Each surface's arrival, keyed by which overlay it is.
+    surfaces: Fades<Surface>,
+    /// The ids present this frame, and the surfaces, filled by [`Chrome::plan`] and handed to
+    /// the two arrival transitions. Reused for the reason `hover_targets` is.
+    present_ids: Vec<TabId>,
+    present_surfaces: Vec<Surface>,
+    /// Whether a frame has been laid out yet.
+    ///
+    /// The window's first frame has no frame behind it, so nothing on it *arrived*: a window's
+    /// own first tabs and first surface are at full the moment the window opens, and only what
+    /// comes later fades in. See `plan`, which is where that is decided.
+    started: bool,
 }
 
 /// Everything one frame drew over the terminal, in the order it was drawn.
@@ -696,6 +745,12 @@ impl Chrome {
             // Both totals: with nothing drawn yet and no menu, the tail is empty.
             menu_split: (0, 0),
             hover: Hover::default(),
+            hover_targets: Vec::new(),
+            presence: Fades::new(APPEAR),
+            surfaces: Fades::new(APPEAR),
+            present_ids: Vec::new(),
+            present_surfaces: Vec::new(),
+            started: false,
         }
     }
 
@@ -736,9 +791,10 @@ impl Chrome {
         glyphs.clear();
         // The pointer's answer comes out of the regions the *last* frame published, so it is
         // read here, before they are cleared to be built again. Everything else about the
-        // hover is settled in `plan`, alongside the other two transitions.
-        let target = self.hover_target(input);
-        self.hover.step(self.now, target, input.reduce_motion);
+        // hover is settled in `plan`, alongside the two arrival transitions.
+        self.hover_target(input);
+        self.hover
+            .step(self.now, &self.hover_targets, input.reduce_motion);
         self.regions.clear();
 
         let layout = {
@@ -789,19 +845,20 @@ impl Chrome {
         &self.layout
     }
 
-    /// Whether a control is still lighting up or fading out.
+    /// Whether anything in the chrome is still fading in: a hover, a tab's arrival, or a
+    /// surface's.
     ///
-    /// The one question a window has to ask between frames. A hover is the third thing in
-    /// this crate that moves and the only one that begins on a pointer move rather than on a
-    /// change the caller knows about, so whoever owns the loop has nothing else to go on: it
-    /// is true while a fade is in flight and false once every one of them has landed, which
-    /// is what makes a loop that redraws while it is true come to rest.
+    /// The one question a window has to ask between frames. A hover and an arrival both move
+    /// on a change the caller may not know about, so whoever owns the loop has nothing else to
+    /// go on: it is true while any fade is in flight and false once every one of them has
+    /// landed, which is what makes a loop that redraws while it is true come to rest.
     ///
-    /// False for a machine that has asked for reduced motion, because there the transition is
-    /// over on the frame it starts.
+    /// All three, because the frame clock drives what moves and a fade left out of this would
+    /// be a fade the loop stops halfway. False for a machine that has asked for reduced motion,
+    /// because there every transition is over on the frame it starts.
     #[must_use]
     pub fn moving(&self) -> bool {
-        self.hover.moving()
+        self.hover.moving() || self.presence.moving() || self.surfaces.moving()
     }
 
     /// The scrollbar's track and thumb as of the most recent [`Chrome::layout`] call.
@@ -828,6 +885,32 @@ impl Chrome {
     /// Draw one frame, and say what the chrome took.
     fn plan(&mut self, input: &ChromeInput<'_>, paint: &mut paint::Painter<'_>) -> Layout {
         let size = input.size;
+
+        // The two arrival transitions, driven from what is on screen this frame: a tab by its
+        // id, a surface by which overlay it is. The hover was settled by the caller one frame's
+        // worth of `set_time` ago, because the pointer's answer comes from the regions the last
+        // frame published; these two need no such delay, so they are settled here.
+        self.present_ids.clear();
+        self.present_ids.extend(input.tabs.iter().map(|tab| tab.id));
+        self.present_surfaces.clear();
+        if input.menu.is_some() {
+            self.present_surfaces.push(Surface::Menu);
+        }
+        if input.picker.is_some() {
+            self.present_surfaces.push(Surface::Picker);
+        }
+        if input.find.is_some() {
+            self.present_surfaces.push(Surface::Find);
+        }
+        // The window's first frame has nothing behind it, so what is on it did not arrive: it
+        // is at full from the start, and only what comes on a later frame fades in. Reduce
+        // motion collapses every transition the same way, which is the same argument.
+        let instant = input.reduce_motion || !self.started;
+        self.started = true;
+        self.presence.step(self.now, &self.present_ids, instant);
+        self.surfaces
+            .step(self.now, &self.present_surfaces, instant);
+
         let strip_plan = strip::plan(paint, input, self.position);
         let top = if strip_plan.row { ROW_HEIGHT } else { 0.0 };
         let left = if strip_plan.row && self.position == TabPosition::Left {
@@ -857,8 +940,10 @@ impl Chrome {
         // the planner can keep borrowing itself mutably while the painters hold it — the same
         // trade the two arrays make, made for the same reason.
         let hover = mem::take(&mut self.hover);
+        let presence = mem::take(&mut self.presence);
+        let surfaces = mem::take(&mut self.surfaces);
 
-        strip::draw(paint, &strip_plan, input, fade, &hover);
+        strip::draw(paint, &strip_plan, input, fade, &hover, &presence);
         if let Some((rect, color)) =
             strip::indicator(&strip_plan, input, self.travel.as_ref(), self.now)
         {
@@ -873,7 +958,16 @@ impl Chrome {
             paint.fill_at(rect, input.palette.signal_dim, lit);
         }
 
-        let over = self.overdraw(input, paint, &strip_plan, left, top, bottom, &hover);
+        let over = self.overdraw(
+            input,
+            paint,
+            &strip_plan,
+            left,
+            top,
+            bottom,
+            &hover,
+            &surfaces,
+        );
         let settings_scroll = over.page.as_ref().map_or(0.0, |page| page.scroll);
         let settings_section = over.page.as_ref().and_then(|page| page.shown);
 
@@ -889,6 +983,8 @@ impl Chrome {
             settings_section,
         };
         self.hover = hover;
+        self.presence = presence;
+        self.surfaces = surfaces;
         self.layout
     }
 
@@ -911,6 +1007,7 @@ impl Chrome {
         top: f32,
         bottom: f32,
         hover: &Hover,
+        surfaces: &Fades<Surface>,
     ) -> Overdrawn {
         // The page is the content area, so it is given the content area's rect — the same
         // rectangle `plan` hands back as `Layout::grid`. A tab is one thing on screen at a
@@ -920,16 +1017,24 @@ impl Chrome {
         let page = (input.active == Some(TabId::Settings))
             .then(|| overlays::page(paint, input, content, hover));
         if bottom > 0.0 {
-            overlays::find_bar(paint, input, bottom);
+            overlays::find_bar(paint, input, bottom, surfaces.of(Surface::Find));
         }
         // After the panel, because a question about a new tab is the thing the user is
         // answering and the panel is a view they left open. The two do not overlap in
         // practice — one is against the right edge and this is against the left — and the
         // order is written down so that it does not become a coin toss if they ever do.
-        let popover = input
-            .picker
-            .as_ref()
-            .map(|picker| overlays::profile_picker(paint, input, picker, left, top, bottom, hover));
+        let popover = input.picker.as_ref().map(|picker| {
+            overlays::profile_picker(
+                paint,
+                input,
+                picker,
+                left,
+                top,
+                bottom,
+                hover,
+                surfaces.of(Surface::Picker),
+            )
+        });
         let scroll = overlays::scrollbar(paint, input, top, bottom, self.scroll, hover);
 
         // The settings control, still drawn here rather than with the rest of the strip. It
@@ -959,10 +1064,9 @@ impl Chrome {
         // sit over the menu, the chrome needs the ordered list of layers rather than a single
         // boundary, and this comment is the note that says so.
         let split = (paint.quads(), paint.glyphs());
-        let menu = input
-            .menu
-            .as_ref()
-            .map(|menu| overlays::context_menu(paint, input, menu, hover));
+        let menu = input.menu.as_ref().map(|menu| {
+            overlays::context_menu(paint, input, menu, hover, surfaces.of(Surface::Menu))
+        });
         self.menu_split = split;
 
         Overdrawn {
@@ -1009,6 +1113,13 @@ impl Chrome {
             });
         }
         for cell in &strip_plan.tabs {
+            // The mark first, so `hit` answers with it before the cell it is in: the mark takes
+            // the pixels it occupies and the cell keeps every other pixel of itself, the rest of
+            // its right padding included. A cell with no mark published — the pointer is not
+            // over it — pushes nothing here, which is what makes an invisible mark unhittable.
+            if let Some(rect) = cell.close {
+                self.regions.push(Region::CloseTab { id: cell.id, rect });
+            }
             self.regions.push(Region::Tab {
                 id: cell.id,
                 rect: cell.rect,
@@ -1065,11 +1176,12 @@ impl Chrome {
         }
     }
 
-    /// What the pointer is over, as the one control a hover lights.
+    /// What the pointer is over, as the set of controls a hover lights.
     ///
     /// Answered from the *previous* frame's regions, because that is the only answer there is
-    /// before this frame is planned, and the regions move only when the layout does. Two
-    /// things are not simply `hit`:
+    /// before this frame is planned, and the regions move only when the layout does. Fills
+    /// [`Chrome::hover_targets`], which is cleared first and is the empty set for a pointer over
+    /// nothing — `Hit::None` never enters it. Two things are not simply `hit`:
     ///
     /// - The scrollbar lights a ten-pixel band down the right edge and publishes the
     ///   eight-pixel track it draws, so a point in the outer two pixels is over the bar and
@@ -1080,23 +1192,35 @@ impl Chrome {
     /// - A tab's own hover arrives from the caller as [`TabInfo::hovered`], which is what the
     ///   window's own `hit` call already answered. It is used only when nothing else is under
     ///   the pointer, so the two cannot disagree about a tab behind an open menu.
-    fn hover_target(&self, input: &ChromeInput<'_>) -> Hit {
+    ///
+    /// And one thing is *two* controls rather than one. The × sits inside its cell, so a pointer
+    /// on the mark is over the cell as well: `Hit::CloseTab(id)` is arrived at from the tab's own
+    /// cell, and naming the cell with `Hit::Tab(id)` is what keeps that cell lit — and its mark
+    /// published, and therefore drawn — for as long as the pointer is on the mark. Without it the
+    /// cell would fade the moment the pointer reached its own ×, fading the × out from under it.
+    fn hover_target(&mut self, input: &ChromeInput<'_>) {
+        self.hover_targets.clear();
         if let Some((track, _)) = self.scrollbar
             && let Some((x, y)) = input.pointer
             && x >= input.size.width - SCROLLBAR_HOVER
             && y >= track.y
             && y < track.bottom()
         {
-            return Hit::Scrollbar(Scrollbar::Thumb);
+            self.hover_targets.push(Hit::Scrollbar(Scrollbar::Thumb));
+            return;
         }
         match input.pointer.map_or(Hit::None, |(x, y)| self.hit(x, y)) {
-            Hit::None => input
-                .tabs
-                .iter()
-                .find(|tab| tab.hovered)
-                .map_or(Hit::None, |tab| Hit::Tab(tab.id)),
-            Hit::Scrollbar(_) => Hit::Scrollbar(Scrollbar::Thumb),
-            hit => hit,
+            Hit::None => {
+                if let Some(tab) = input.tabs.iter().find(|tab| tab.hovered) {
+                    self.hover_targets.push(Hit::Tab(tab.id));
+                }
+            }
+            Hit::Scrollbar(_) => self.hover_targets.push(Hit::Scrollbar(Scrollbar::Thumb)),
+            Hit::CloseTab(id) => {
+                self.hover_targets.push(Hit::Tab(id));
+                self.hover_targets.push(Hit::CloseTab(id));
+            }
+            hit => self.hover_targets.push(hit),
         }
     }
 

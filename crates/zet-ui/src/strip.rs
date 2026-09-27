@@ -20,7 +20,7 @@ use crate::geometry::{
     RAIL_CELL, RAIL_CELL_FLOOR, RAIL_WIDTH, ROW_HEIGHT, Rect, SETTINGS_CELL, Size, TAB_GAP,
     TAB_MAX_WIDTH, TAB_PADDING, TAB_SIZE, TRAVEL,
 };
-use crate::hover::Hover;
+use crate::hover::{Fades, Hover};
 use crate::marks::{self, Mark};
 use crate::paint::{Painter, TextStyle};
 
@@ -51,6 +51,14 @@ pub(crate) struct TabCell {
     /// Zero on a cell with no room for a name, which is every cell in the rail and every
     /// cell in a run that has been squeezed down to its numbers.
     pub title: usize,
+    /// The ×, in the cell's right padding, when the pointer is over the cell.
+    ///
+    /// `Some` exactly when [`TabInfo::hovered`] is, and its rectangle is the right `TAB_PADDING`
+    /// of the cell at full height. That padding is already there and already empty — a name is
+    /// fitted to end `TAB_PADDING` short of the cell — so the mark overlaps nothing and moves
+    /// nothing, which is what lets it appear under the pointer without the run reflowing
+    /// beneath it. `None` is the mark that is not drawn and therefore is not hit.
+    pub close: Option<Rect>,
 }
 
 /// Where the strip's parts are.
@@ -202,10 +210,12 @@ fn horizontal(
             break;
         }
         let room = width - number_cell(paint, tab.id) - number_gap(tab.id);
+        let rect = Rect::new(cursor, 0.0, width, ROW_HEIGHT);
         tabs.push(TabCell {
             id: tab.id,
-            rect: Rect::new(cursor, 0.0, width, ROW_HEIGHT),
+            rect,
             title: title_fit(paint, &tab.title, room),
+            close: close_box(rect, tab.hovered),
         });
         cursor += width;
     }
@@ -279,10 +289,12 @@ fn vertical(
         // The rail carries numbers and no names. It is forty-eight pixels wide and the
         // whole reason to choose it is that it gives the grid the rest, so a name in it
         // would be a name in the space the tabs were moved aside to free.
+        let rect = Rect::new(0.0, y, RAIL_WIDTH, cell);
         tabs.push(TabCell {
             id: tab.id,
-            rect: Rect::new(0.0, y, RAIL_WIDTH, cell),
+            rect,
             title: 0,
+            close: close_box(rect, tab.hovered),
         });
         y += cell;
     }
@@ -416,6 +428,16 @@ fn tab_width(paint: &mut Painter<'_>, tab: &TabInfo, cap: f32) -> f32 {
     natural.min(cap).max(floor)
 }
 
+/// Where a cell's × goes, or `None` when the pointer is not over the cell.
+///
+/// No new measurement and no reserved slot: a mark is ten pixels and the cell's right
+/// `TAB_PADDING` is already twelve and already empty, because that is where the name is fitted
+/// to stop. The mark is drawn centred in that padding, in both positions of the strip, so a
+/// cell's width, its name's fit, and `tab_cap`'s floor are all exactly what they were.
+fn close_box(cell: Rect, hovered: bool) -> Option<Rect> {
+    hovered.then(|| Rect::new(cell.right() - TAB_PADDING, cell.y, TAB_PADDING, cell.height))
+}
+
 /// How wide a tab's cell may be, given how many there are and how much run they share.
 ///
 /// Tabs share the strip. When they all fit at their natural width nothing is capped —
@@ -499,6 +521,7 @@ pub(crate) fn draw(
     input: &ChromeInput<'_>,
     fade: Option<(TabId, f32)>,
     hover: &Hover,
+    presence: &Fades<TabId>,
 ) {
     let palette = *input.palette;
 
@@ -566,17 +589,27 @@ pub(crate) fn draw(
             _ => 0.0,
         };
 
+        // A cell that has just arrived fades in, and the pointer's own hover multiplies that
+        // arrival: this is the only place in the crate where two coverages multiply, so a tab
+        // that opens under the pointer reads `ink_dim`→`ink_mid`→`ink` through one product.
+        let arrival = presence.of(cell.id);
+
         let x = if strip.position == TabPosition::Left {
+            // The number is centred in what the mark leaves rather than in the whole cell: the
+            // rail reserves the same right `TAB_PADDING` a horizontal cell does, so both
+            // positions carry the × in the same place. The number moves half a padding left of
+            // centre, permanently, which is the price of the strip being the same in both.
             let width = number_cell(paint, cell.id) - 2.0 * TAB_PADDING;
-            cell.rect.x + (cell.rect.width - width) / 2.0
+            cell.rect.x + (cell.rect.width - TAB_PADDING - width) / 2.0
         } else {
             cell.rect.x + TAB_PADDING
         };
         let baseline = paint.baseline_in(cell.rect, TAB_SIZE);
 
         if heavy > 0.002 {
-            let number = TextStyle::new(TAB_SIZE, Weight::MEDIUM, palette.ink).faded(heavy);
-            let name = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink).faded(heavy);
+            let number =
+                TextStyle::new(TAB_SIZE, Weight::MEDIUM, palette.ink).faded(heavy * arrival);
+            let name = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink).faded(heavy * arrival);
             let start = tab_number(paint, x, baseline, info, number);
             tab_name(paint, start, baseline, info, cell.title, name);
         }
@@ -585,7 +618,7 @@ pub(crate) fn draw(
             // name is `ink-mid` whichever of them the number is on, so it is drawn once —
             // once per pass would be the same glyphs laid down twice, which is a name that
             // gets brighter as the number fades across.
-            let light = 1.0 - heavy;
+            let light = (1.0 - heavy) * arrival;
             let name = TextStyle::new(TAB_SIZE, Weight::NORMAL, palette.ink_mid).faded(light);
             let mut start = None;
             if lit < 0.998 {
@@ -601,6 +634,10 @@ pub(crate) fn draw(
             if let Some(start) = start {
                 tab_name(paint, start, baseline, info, cell.title, name);
             }
+        }
+
+        if let Some(rect) = cell.close {
+            close_mark(paint, rect, input, hover, cell.id, arrival);
         }
     }
 
@@ -620,6 +657,38 @@ pub(crate) fn draw(
             paint.centered("+", plus, style);
         }
     }
+}
+
+/// The × on a tab, in the padding the cell already leaves empty.
+///
+/// Its appearance is the tab's own hover and the tab's own arrival multiplied together, and for
+/// the active tab too: the `lit` the cell's ink is drawn at is forced to zero for the active
+/// tab, but that is a rule about *ink*, not about the pointer, so the cell the pointer is over
+/// is the cell that draws its ×. The ink is `ink-mid` while the pointer is anywhere in the cell
+/// and `danger` once it is inside the mark itself — the colour the caption's close button spends,
+/// for the same reason: it is the control that takes something away.
+///
+/// That last step is a plain rectangle comparison rather than a transition, and it is the one
+/// place in the chrome where a hover is not a fade. The mark does not exist until the pointer is
+/// already inside its own cell, so the two states are one control seen from two distances rather
+/// than two controls the pointer crosses between — there is no moment between them to fade
+/// through, and the ink is asked for directly.
+fn close_mark(
+    paint: &mut Painter<'_>,
+    rect: Rect,
+    input: &ChromeInput<'_>,
+    hover: &Hover,
+    id: TabId,
+    arrival: f32,
+) {
+    let coverage = hover.of(Hit::Tab(id)) * arrival;
+    let armed = input.pointer.is_some_and(|(x, y)| rect.contains(x, y));
+    let ink = if armed {
+        input.palette.danger
+    } else {
+        input.palette.ink_mid
+    };
+    marks::draw(paint, Mark::Close, rect, ink, coverage, input.scale);
 }
 
 /// A tab's number: the `#` at seventy percent, then its digits.

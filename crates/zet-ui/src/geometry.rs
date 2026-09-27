@@ -208,6 +208,16 @@ pub const HOVER_MS: f32 = 110.0;
 /// The same span in the seconds [`Chrome::set_time`](crate::Chrome::set_time) counts in.
 pub const HOVER: f32 = HOVER_MS / 1000.0;
 
+/// How long a surface that appears over the screen takes to arrive.
+///
+/// Between the hover's 110 and the indicator's 140: a surface is bigger than a control and
+/// smaller than a journey, and a window with two of them arriving at once should not read as
+/// a slow window.
+pub const APPEAR_MS: f32 = 120.0;
+
+/// The same span in the seconds [`Chrome::set_time`](crate::Chrome::set_time) counts in.
+pub const APPEAR: f32 = APPEAR_MS / 1000.0;
+
 /// The height of a row of a menu.
 pub const MENU_ROW: f32 = 28.0;
 
