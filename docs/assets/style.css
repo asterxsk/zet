@@ -518,6 +518,25 @@ td.num {
   border-left-color: var(--danger);
 }
 
+/* ---------------------------------------------------------------- hero */
+
+/* Overview only: the intro and the status are one band, so the router below
+ * starts where the taller column ends instead of after a full-width stack. The
+ * status takes the wider column — it is the long text of the two. */
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 20px 32px;
+  align-items: start;
+}
+
+/* Both columns sit in one row: a trailing margin here would be counted once per
+ * column rather than once for the band. */
+.hero .lede,
+.hero .callout {
+  margin-bottom: 0;
+}
+
 /* ---------------------------------------------------------------- cards */
 
 .grid {
@@ -633,6 +652,11 @@ td.num {
 
   .main {
     padding: 28px 20px 60px;
+  }
+
+  /* Side by side needs the room the sidebar gives back. */
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   h1 {

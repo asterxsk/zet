@@ -80,21 +80,25 @@
 
   <main id="main" class="main">
     <article class="doc">
-      <p class="eyebrow">Start</p>
-      <h1>zet</h1>
-      <p class="lede">A terminal multiplexer for Windows, written in Rust, with its own VT engine
-      and a GPU renderer.</p>
+      <div class="hero">
+        <div class="hero__intro">
+          <p class="eyebrow">Start</p>
+          <h1>zet</h1>
+          <p class="lede">A terminal multiplexer for Windows, written in Rust, with its own VT engine
+          and a GPU renderer.</p>
+        </div>
 
-      <div class="callout">
-        <span class="callout__label">Status — pre-alpha</span>
-        <p>zet builds and runs: it opens a window, starts a shell, and draws it with its own VT
-        engine and its own GPU renderer. It speaks the kitty keyboard protocol in both directions —
-        the flag stack, the query, the <code>CSI u</code> encoding, and all five flags including
-        <code>Report alternate keys</code>. What is missing is the depth around that:
-        the update check exists as <code>zet --check-update</code> and <code>zet --update</code>,
-        and never runs on launch — nothing is planned to change that.
-        It installs and runs as a daily driver for the person who wrote it, and pre-alpha is the
-        honest label for what that is worth to anyone else.</p>
+        <div class="callout">
+          <span class="callout__label">Status — pre-alpha</span>
+          <p>zet builds and runs: it opens a window, starts a shell, and draws it with its own VT
+          engine and its own GPU renderer. It speaks the kitty keyboard protocol in both directions —
+          the flag stack, the query, the <code>CSI u</code> encoding, and all five flags including
+          <code>Report alternate keys</code>. What is missing is the depth around that:
+          the update check exists as <code>zet --check-update</code> and <code>zet --update</code>,
+          and never runs on launch — nothing is planned to change that.
+          It installs and runs as a daily driver for the person who wrote it, and pre-alpha is the
+          honest label for what that is worth to anyone else.</p>
+        </div>
       </div>
 
       <h2>Every page</h2>
