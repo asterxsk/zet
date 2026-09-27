@@ -36,6 +36,8 @@
     clippy::cast_sign_loss
 )]
 
+use std::time::{Duration, Instant};
+
 use winit::event::{ElementState, MouseButton as WinitButton, MouseScrollDelta};
 use winit::window::ResizeDirection;
 use zet_font::Metrics;
@@ -50,6 +52,53 @@ use zet_vt::Pos;
 /// resize is recoverable by trying again and a click that never reached the shell is
 /// invisible.
 pub const BORDER: f64 = 6.0;
+
+/// How long two presses may be apart and still be one gesture.
+///
+/// Windows' own default, and the value [`double_click`] is handed rather than reads, so
+/// that a caller who wants `GetDoubleClickTime()` can supply it without moving this
+/// number or making anything here untestable.
+pub const DOUBLE_CLICK: Duration = Duration::from_millis(500);
+
+/// How far apart two presses may land and still be one gesture, in logical pixels.
+///
+/// Windows' own `SM_CXDOUBLECLK`, for the same reason and with the same escape hatch.
+/// Generous on purpose: the press that precedes a double-click also starts a drag, so a
+/// hand that shakes during the first press has already moved the window, and a slop tight
+/// enough to reject that would reject the gesture instead.
+pub const DOUBLE_CLICK_SLOP: f64 = 4.0;
+
+/// Whether this press completes a double-click with the one before it.
+///
+/// The pair is remembered by the caller, because the platform does not remember it for
+/// us — see the test of the same name for why Windows never sends the event. `previous`
+/// is the last press and where it landed; `None` means there is nothing to pair with,
+/// which is what the first press of a gesture sees.
+///
+/// Both bounds are inclusive. A user who lands exactly on the system's configured
+/// interval has asked for a double-click, and refusing by a microsecond is the kind of
+/// off-by-one that reads as the feature not working at all.
+///
+/// Time is compared with [`Instant::checked_duration_since`] rather than the saturating
+/// [`Instant::duration_since`], because the two differ in exactly the case that matters:
+/// a `now` earlier than `previous` is not a zero-length interval, and reading it as one
+/// would make a stale pair fire on every press.
+#[must_use]
+pub fn double_click(
+    previous: Option<(Instant, (f64, f64))>,
+    now: Instant,
+    at: (f64, f64),
+    window: Duration,
+    slop: f64,
+) -> bool {
+    let Some((then, (x, y))) = previous else {
+        return false;
+    };
+    let in_time = now
+        .checked_duration_since(then)
+        .is_some_and(|elapsed| elapsed <= window);
+    in_time && (at.0 - x).abs() <= slop && (at.1 - y).abs() <= slop
+}
 
 /// Which cell a point in the window falls in, or [`None`] when it is outside the grid.
 ///
@@ -573,5 +622,108 @@ mod tests {
         // so the scrollback and the program can never disagree about which way is up.
         assert_eq!(wheel_button(1.0), MouseButton::WheelUp);
         assert_eq!(wheel_button(-1.0), MouseButton::WheelDown);
+    }
+
+    /// Two presses on the titlebar, close together in time and place, are a double-click.
+    ///
+    /// The platform does not send one. `winit` registers its window class without
+    /// `CS_DBLCLKS`, and for a `decorations(false)` window it expands the client area over
+    /// the whole window in `WM_NCCALCSIZE`, so there is no non-client area for Windows to
+    /// send `WM_NCLBUTTONDBLCLK` about. Nothing else in zet tracks a press pair, so
+    /// without this the second press just starts a second drag and DESIGN.md's
+    /// "Double-click maximizes" is a promise nothing keeps.
+    #[test]
+    fn two_presses_within_the_window_and_the_slop_are_a_double_click() {
+        let start = Instant::now();
+        let first = Some((start, (100.0, 12.0)));
+        assert!(double_click(
+            first,
+            start + Duration::from_millis(120),
+            (102.0, 14.0),
+            DOUBLE_CLICK,
+            DOUBLE_CLICK_SLOP
+        ));
+    }
+
+    #[test]
+    fn a_press_after_the_window_is_not_a_double_click() {
+        let start = Instant::now();
+        let first = Some((start, (100.0, 12.0)));
+        // The boundary itself is a double-click: a user who lands exactly on the system's
+        // own setting has asked for one, and `<` would refuse them by a microsecond.
+        assert!(double_click(
+            first,
+            start + DOUBLE_CLICK,
+            (100.0, 12.0),
+            DOUBLE_CLICK,
+            DOUBLE_CLICK_SLOP
+        ));
+        assert!(!double_click(
+            first,
+            start + DOUBLE_CLICK + Duration::from_millis(1),
+            (100.0, 12.0),
+            DOUBLE_CLICK,
+            DOUBLE_CLICK_SLOP
+        ));
+    }
+
+    #[test]
+    fn two_presses_at_once_but_far_apart_are_not_a_double_click() {
+        let start = Instant::now();
+        let first = Some((start, (100.0, 12.0)));
+        let now = start + Duration::from_millis(10);
+        // Two clicks on the titlebar at opposite ends of the window are two clicks.
+        assert!(!double_click(
+            first,
+            now,
+            (900.0, 12.0),
+            DOUBLE_CLICK,
+            DOUBLE_CLICK_SLOP
+        ));
+        // And the slop is a box, not a radius: a point inside it on both axes counts even
+        // though it is further away than the slop along the diagonal.
+        assert!(double_click(
+            first,
+            now,
+            (103.9, 15.9),
+            DOUBLE_CLICK,
+            DOUBLE_CLICK_SLOP
+        ));
+        assert!(!double_click(
+            first,
+            now,
+            (104.1, 12.0),
+            DOUBLE_CLICK,
+            DOUBLE_CLICK_SLOP
+        ));
+    }
+
+    #[test]
+    fn a_first_press_is_never_a_double_click() {
+        assert!(!double_click(
+            None,
+            Instant::now(),
+            (100.0, 12.0),
+            DOUBLE_CLICK,
+            DOUBLE_CLICK_SLOP
+        ));
+    }
+
+    #[test]
+    fn a_clock_that_went_backwards_is_not_a_double_click() {
+        // A monotonic clock does not go backwards, but the remembered instant comes from
+        // whichever event stored it and nothing here can prove the two are ordered. A
+        // saturating `duration_since` reads a negative interval as zero elapsed, which is
+        // the *most* recent possible press and therefore the most eager possible
+        // double-click — a stuck pair that fires on everything.
+        let start = Instant::now();
+        let later = Some((start + Duration::from_secs(60), (100.0, 12.0)));
+        assert!(!double_click(
+            later,
+            start,
+            (100.0, 12.0),
+            DOUBLE_CLICK,
+            DOUBLE_CLICK_SLOP
+        ));
     }
 }

@@ -223,6 +223,17 @@ pub struct Host {
     /// grab point is the place the user took hold of, and it stays under the pointer for
     /// the whole drag, which is what every scrollbar does.
     scroll_grab: Option<f32>,
+    /// The last press on the tab row's drag region, and where it landed.
+    ///
+    /// Read by the next press on that region to tell a double-click from two clicks, which
+    /// the platform never does for us: winit registers its window class without
+    /// `CS_DBLCLKS`, and a `decorations(false)` window has no non-client area for Windows
+    /// to send `WM_NCLBUTTONDBLCLK` about. DESIGN.md's "the drag region is any horizontal
+    /// gap between the last tab and the caption buttons. Double-click maximizes" is kept
+    /// here or nowhere. Cleared by every press anywhere in the window, because the pair is
+    /// two presses on the same few pixels: a click on a tab between them is not part of
+    /// one. See [`mouse::double_click`], which is the whole of the rule.
+    titlebar_press: Option<(Instant, (f64, f64))>,
     /// Scrolling sub-line remainders, accumulated so a trackpad's fractions are not
     /// dropped one event at a time.
     partial: f64,
@@ -358,6 +369,7 @@ impl Host {
             mouse_held: None,
             focused: true,
             scroll_grab: None,
+            titlebar_press: None,
             partial: 0.0,
             blink_at: now,
             hold_until: None,
@@ -1254,6 +1266,12 @@ impl Host {
     fn end_drags(&mut self) {
         self.scroll_grab = None;
         self.pressed_at = None;
+        // And the double-click pair, which is not a hold but is the same kind of loose end: a
+        // press on the drag region, a pointer taken out of the window, and a press back in
+        // within the interval and the slop would maximize a window on two presses with a
+        // journey between them. The window losing focus is the other way in here, and it is
+        // the same argument.
+        self.titlebar_press = None;
     }
 
     /// The pointer moved, in the physical pixels the event carried.
@@ -1333,6 +1351,12 @@ impl Host {
         }
 
         if state == ElementState::Pressed {
+            // Taken here, before any of the paths below can decide anything, because every
+            // press is the reason the pair from the last one no longer counts: a press on a
+            // caption button, on the window's own edge, on a tab, or in the terminal is not
+            // the second half of a double-click on the drag region, and only the arm that
+            // answers a press on the drag region puts one back.
+            let titlebar = self.titlebar_press.take();
             let (width, height) = self.logical_size();
             // The window's own edge wins over everything else: a user reaching for the
             // border is not aiming at a tab that happens to be under it.
@@ -1357,7 +1381,7 @@ impl Host {
                         window.request_redraw();
                         return;
                     }
-                    if self.chrome_press(x, y, loop_) {
+                    if self.chrome_press(x, y, titlebar, loop_) {
                         return;
                     }
                     if let Some(at) = self.grid_cell(x, y) {
@@ -1443,7 +1467,18 @@ impl Host {
     }
 
     /// Hand a press to the chrome, and report whether it was the chrome's.
-    fn chrome_press(&mut self, x: f64, y: f64, loop_: &ActiveEventLoop) -> bool {
+    ///
+    /// `titlebar` is the last press on the strip's drag region, taken off the host before
+    /// this was called, and it is handed back only by the arm that answers a press on that
+    /// region — so the host is left holding a pair exactly when the two presses are two
+    /// presses on the thing that pairs them.
+    fn chrome_press(
+        &mut self,
+        x: f64,
+        y: f64,
+        titlebar: Option<(Instant, (f64, f64))>,
+        loop_: &ActiveEventLoop,
+    ) -> bool {
         let Some(window) = self.window.clone() else {
             return false;
         };
@@ -1470,7 +1505,32 @@ impl Host {
                 true
             }
             Hit::Drag => {
-                let _ = window.drag_window();
+                // The drag region, which is where DESIGN.md puts the promise: the gap
+                // between the last thing the strip drew and the caption buttons maximizes
+                // on a double-click. The interval and the slop are Windows' own, handed in
+                // rather than read inside the test, so the rule stays a function of its
+                // arguments and `mouse::double_click` stays unit-testable.
+                let at = (x, y);
+                let now = Instant::now();
+                if mouse::double_click(
+                    titlebar,
+                    now,
+                    at,
+                    mouse::DOUBLE_CLICK,
+                    mouse::DOUBLE_CLICK_SLOP,
+                ) {
+                    // A maximized window restores, which is what the same gesture does to
+                    // every other window on the platform, and what a user who maximized by
+                    // accident will reach for.
+                    window.set_maximized(!window.is_maximized());
+                } else {
+                    // Nothing drags on the press that completed the gesture: the window has
+                    // just changed size under the pointer, and a drag asked for from a
+                    // point that only exists in the new layout drops the window where the
+                    // user never aimed.
+                    self.titlebar_press = Some((now, at));
+                    let _ = window.drag_window();
+                }
                 true
             }
             Hit::Scrollbar(place) => {

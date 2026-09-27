@@ -33,6 +33,22 @@ counts as a breaking change in a terminal, is in
     redirection is the caller saying where the output goes, and a fix for a missing console
     must not undo it.
 
+- **`zet`** — double-clicking the tab row's drag region did nothing, though DESIGN.md has
+  promised since the strip was first drawn that it maximizes the window.
+  - The platform never sends the event. `winit` registers its window class without
+    `CS_DBLCLKS`, and a `decorations(false)` window has no non-client area for Windows to
+    send `WM_NCLBUTTONDBLCLK` about — so the second press arrived as an ordinary press and
+    started a second window drag instead.
+  - `mouse::double_click` is the rule — 500ms and 4 logical pixels, Windows' own figures —
+    and the drag region remembers where and when the last press on it landed. A second press
+    inside both bounds maximizes a restored window and restores a maximized one.
+  - Every other press clears that memory, so two clicks with a click on a tab between them
+    stay two clicks: a pair is two presses on the same few pixels, and a gesture assembled
+    from unrelated presses would maximize a window nobody asked to maximize.
+  - Nothing drags on the press that completes the gesture. The window has just changed size
+    under the pointer, and a drag asked for from a point that exists only in the old layout
+    lands the window somewhere the user never aimed at.
+
 Until 1.0.0 ships, each release is a `0.x` minor and any of them may break compatibility; see
 [Versioning](README.md#versioning).
 
